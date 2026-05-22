@@ -15,7 +15,7 @@ docker compose -f docker-compose-dev.yml --env-file .env.docker.example up --bui
 ## Levantar en produccion
 
 1. Copia `.env.docker.example` a `.env.docker`.
-2. Cambia `POSTGRES_PASSWORD` y `QR_DYNAMIC_SECRET`.
+2. Cambia `POSTGRES_PASSWORD`, `QR_DYNAMIC_SECRET` y las variables de Cloudinary.
 3. Si el frontend y backend estaran bajo un dominio, define `BACKEND_BASE_URL`.
 
 ```bash
@@ -24,6 +24,19 @@ docker compose -f docker-compose-prod.yml --env-file .env.docker up --build -d
 
 El frontend queda en `http://localhost:8080` y el backend en `http://localhost:3000`.
 En desarrollo, PostgreSQL se expone al host en `localhost:5433`; en produccion queda solo dentro de la red Docker.
+
+## Variables de entorno
+
+Para ejecutar el backend sin Docker se usa `backend/.env`.
+
+Ejemplos disponibles:
+
+- `backend/.env.example`: plantilla general del backend.
+- `backend/.env.development.example`: plantilla para desarrollo local.
+- `backend/.env.production.example`: plantilla para produccion.
+- `.env.docker.example`: plantilla para Docker Compose y Jenkins.
+
+No subas archivos `.env` reales al repositorio. En el servidor crea `.env.docker` con valores reales.
 
 ## Jenkins
 

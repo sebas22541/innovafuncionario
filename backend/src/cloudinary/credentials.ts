@@ -1,5 +1,5 @@
 export const CLOUDINARY = {
-  cloud_name: "dur4micvm",
-  api_key: "659978473177295",
-  api_secret: "pIpnrWK88rjDaVhs0By6qGlhs7w",
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 };
