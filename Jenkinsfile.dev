@@ -21,7 +21,7 @@ pipeline {
             steps {
                 // Detiene y elimina los contenedores, redes y volúmenes definidos en docker-compose-dev.yml
                 // Usamos --rmi all para eliminar también las imágenes
-                sh "docker-compose -f ${env.DOCKER_COMPOSE_FILE} down --rmi all --volumes"
+                sh "docker-compose --env-file backend/.env.dev -f ${env.DOCKER_COMPOSE_FILE} down --rmi all --volumes"
                 // Limpia el sistema Docker, eliminando contenedores, redes, volúmenes e imágenes sin usar
                 sh 'docker system prune -af'
             }
@@ -31,8 +31,7 @@ pipeline {
             steps {
                 // Copia los archivos de entorno para configuración de backend y frontend
                 sh '''
-                    cp backend/.env.dev backend/.env
-                    cp frontend/.env.dev frontend/.env
+                    echo "Using backend/.env.dev"
                 '''
             }
         }
@@ -40,7 +39,7 @@ pipeline {
         stage('Build') {
             steps {
                 // Construye y ejecuta los contenedores en segundo plano
-                sh "docker-compose -f ${env.DOCKER_COMPOSE_FILE} up -d --build"
+                sh "docker-compose --env-file backend/.env.dev -f ${env.DOCKER_COMPOSE_FILE} up -d --build"
             }
         }
     }
