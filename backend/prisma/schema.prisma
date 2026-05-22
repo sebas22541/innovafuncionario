@@ -1,0 +1,206 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model asistencias {
+  id                Int               @id @default(autoincrement())
+  evento_id         Int
+  persona_id        Int
+  nombre_snapshot   String            @db.VarChar(150)
+  estado            estado_asistencia @default(ASISTIO)
+  qr_leido          String?
+  datos_qr_snapshot Json?
+  observacion       String?
+  registrado_por_id Int?
+  registrado_en     DateTime          @default(now()) @db.Timestamptz(6)
+  asistencia_controles asistencia_controles[]
+  eventos           eventos           @relation(fields: [evento_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  personas          personas          @relation(fields: [persona_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  usuarios          usuarios?         @relation(fields: [registrado_por_id], references: [id], onUpdate: NoAction)
+
+  @@unique([evento_id, persona_id])
+  @@index([datos_qr_snapshot], map: "idx_asistencias_datos_qr_snapshot", type: Gin)
+  @@index([estado], map: "idx_asistencias_estado")
+  @@index([evento_id], map: "idx_asistencias_evento_id")
+  @@index([persona_id], map: "idx_asistencias_persona_id")
+}
+
+model departamentos {
+  id                   Int                    @id @default(autoincrement())
+  nombre               String                 @unique @db.VarChar(120)
+  descripcion          String?
+  activo               Boolean                @default(true)
+  created_at           DateTime               @default(now()) @db.Timestamptz(6)
+  evento_departamentos evento_departamentos[]
+  personas             personas[]
+}
+
+model evento_departamentos {
+  evento_id       Int
+  departamento_id Int
+  departamentos   departamentos @relation(fields: [departamento_id], references: [id], onUpdate: NoAction)
+  eventos         eventos       @relation(fields: [evento_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([evento_id, departamento_id])
+  @@index([departamento_id], map: "idx_evento_departamentos_departamento_id")
+}
+
+model eventos {
+  id                   Int                    @id @default(autoincrement())
+  nombre               String                 @db.VarChar(150)
+  fecha_evento         DateTime               @db.Timestamptz(6)
+  descripcion          String?
+  direccion            String?                @db.VarChar(255)
+  latitud              Float?                 @db.DoublePrecision
+  longitud             Float?                 @db.DoublePrecision
+  oficina_ids_excluidos Int[]                 @default([])
+  estado               estado_evento          @default(ACTIVO)
+  creado_por_id        Int
+  created_at           DateTime               @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime               @default(now()) @db.Timestamptz(6)
+  asistencias          asistencias[]
+  evento_controles     evento_controles[]
+  evento_departamentos evento_departamentos[]
+  evento_oficinas      evento_oficinas[]
+  usuarios             usuarios               @relation(fields: [creado_por_id], references: [id], onUpdate: NoAction)
+
+  @@index([fecha_evento], map: "idx_eventos_fecha_evento")
+}
+
+model oficinas {
+  id              Int               @id
+  oficina         String            @db.VarChar(150)
+  cod             String            @db.VarChar(50)
+  nivel           Int
+  evento_oficinas evento_oficinas[]
+  usuarios        usuarios[]
+
+  @@index([cod], map: "idx_oficinas_cod")
+  @@index([nivel], map: "idx_oficinas_nivel")
+}
+
+model cargos {
+  codigo   String     @id @db.VarChar(50)
+  cargo    String     @db.VarChar(150)
+  usuarios usuarios[]
+
+  @@index([cargo], map: "idx_cargos_cargo")
+}
+
+model evento_oficinas {
+  evento_id         Int
+  oficina_id        Int
+  seleccion_directa Boolean  @default(false)
+  eventos           eventos  @relation(fields: [evento_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  oficinas          oficinas @relation(fields: [oficina_id], references: [id], onUpdate: NoAction)
+
+  @@id([evento_id, oficina_id])
+  @@index([oficina_id], map: "idx_evento_oficinas_oficina_id")
+}
+
+model evento_controles {
+  id                   Int                   @id @default(autoincrement())
+  evento_id             Int
+  nombre                String                @db.VarChar(120)
+  orden                 Int
+  created_at            DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime              @default(now()) @db.Timestamptz(6)
+  asistencia_controles  asistencia_controles[]
+  eventos               eventos               @relation(fields: [evento_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([evento_id, orden])
+  @@index([evento_id], map: "idx_evento_controles_evento_id")
+}
+
+model asistencia_controles {
+  id                Int               @id @default(autoincrement())
+  asistencia_id     Int
+  control_id        Int
+  estado            estado_asistencia @default(ASISTIO)
+  observacion       String?
+  registrado_por_id Int?
+  registrado_en     DateTime          @default(now()) @db.Timestamptz(6)
+  latitud_registro  Float?            @db.DoublePrecision
+  longitud_registro Float?            @db.DoublePrecision
+  accuracy_registro Float?            @db.DoublePrecision
+  asistencias       asistencias       @relation(fields: [asistencia_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  evento_controles  evento_controles  @relation(fields: [control_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  usuarios          usuarios?         @relation(fields: [registrado_por_id], references: [id], onUpdate: NoAction)
+
+  @@unique([asistencia_id, control_id])
+  @@index([control_id], map: "idx_asistencia_controles_control_id")
+  @@index([registrado_por_id], map: "idx_asistencia_controles_registrado_por_id")
+}
+
+model personas {
+  id              Int            @id @default(autoincrement())
+  nombre_completo String         @db.VarChar(150)
+  ci              String?        @db.VarChar(30)
+  codigo_qr       String?        @unique @db.VarChar(255)
+  datos_qr        Json?
+  departamento_id Int?
+  usuario_id      Int?           @unique
+  activo          Boolean        @default(true)
+  created_at      DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime       @default(now()) @db.Timestamptz(6)
+  asistencias     asistencias[]
+  departamentos   departamentos? @relation(fields: [departamento_id], references: [id], onUpdate: NoAction)
+  usuario         usuarios?      @relation(fields: [usuario_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([datos_qr], map: "idx_personas_datos_qr", type: Gin)
+  @@index([departamento_id], map: "idx_personas_departamento_id")
+}
+
+model usuarios {
+  id               Int           @id @default(autoincrement())
+  nombre_completo  String        @db.VarChar(150)
+  nombres          String?       @db.VarChar(150)
+  primer_apellido  String?       @db.VarChar(80)
+  segundo_apellido String?       @db.VarChar(80)
+  tercer_apellido  String?       @db.VarChar(80)
+  ci               String?       @db.VarChar(30)
+  tipo_vinculo     String?       @db.VarChar(30)
+  unidad           String?       @db.VarChar(120)
+  oficina_id       Int?
+  cargo_codigo     String?       @db.VarChar(50)
+  cargo            String?       @db.VarChar(120)
+  numero_item      String?       @db.VarChar(50)
+  foto_url         String?       @db.Text
+  email            String        @unique @db.VarChar(150)
+  password_hash    String
+  rol              rol_usuario   @default(OPERADOR)
+  activo           Boolean       @default(true)
+  created_at       DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime      @default(now()) @db.Timestamptz(6)
+  asistencias      asistencias[]
+  asistencia_controles asistencia_controles[]
+  cargos           cargos?       @relation(fields: [cargo_codigo], references: [codigo], onUpdate: NoAction)
+  eventos          eventos[]
+  oficinas         oficinas?     @relation(fields: [oficina_id], references: [id], onUpdate: NoAction)
+  persona          personas?
+
+  @@index([cargo_codigo], map: "idx_usuarios_cargo_codigo")
+  @@index([oficina_id], map: "idx_usuarios_oficina_id")
+}
+
+enum estado_asistencia {
+  ASISTIO
+  OBSERVADO
+}
+
+enum estado_evento {
+  ACTIVO
+  CERRADO
+  CANCELADO
+}
+
+enum rol_usuario {
+  ADMIN
+  CONTROL
+  OPERADOR
+}
