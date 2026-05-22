@@ -26,10 +26,10 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/asistenciasQR?schema=public
       PORT: 3000
-      QR_DYNAMIC_SECRET: ${QR_DYNAMIC_SECRET:-secreto-local-qr}
-      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME}
-      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY}
-      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET}
+      QR_DYNAMIC_SECRET: secreto-local-qr
+      CLOUDINARY_CLOUD_NAME: dur4micvm
+      CLOUDINARY_API_KEY: 659978473177295
+      CLOUDINARY_API_SECRET: pIpnrWK88rjDaVhs0By6qGlhs7w
       TZ: America/La_Paz
     ports:
       - "4015:3000"
