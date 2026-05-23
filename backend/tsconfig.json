@@ -10,5 +10,5 @@
     "noEmit": true,
     "types": ["node", "express", "multer"]
   },
-  "include": ["src/**/*.ts", "prisma.config.ts"]
+  "include": ["src/**/*.ts", "prisma/**/*.ts", "prisma.config.ts"]
 }
