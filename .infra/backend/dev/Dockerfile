@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 FROM node:22-alpine
 
 WORKDIR /app
@@ -8,7 +9,7 @@ ENV TZ=America/La_Paz
 ENV DATABASE_URL=postgresql://postgres:postgres@db:5432/asistenciasQR?schema=public
 
 COPY backend/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY backend/ ./
 RUN npx prisma generate

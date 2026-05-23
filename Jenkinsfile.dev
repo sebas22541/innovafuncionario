@@ -1,53 +1,51 @@
 pipeline {
     agent { label 'server_104.64' }
 
+    options {
+        skipDefaultCheckout(true)
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
     environment {
-        // Definir variables de entorno para evitar la repetición de valores
         DOCKER_COMPOSE_FILE = 'docker-compose-dev.yml'
         GIT_URL = 'https://github.com/alcaldiacochabamba/innovafuncionario.cochabamba.bo.git'
         GIT_CREDENTIALS = 'github-https'
         GIT_BRANCH = 'dev'
+        DOCKER_BUILDKIT = '1'
+        COMPOSE_DOCKER_CLI_BUILD = '1'
+        BUILDKIT_PROGRESS = 'plain'
     }
 
     stages {
-        stage('Cloning') {
+        stage('Checkout') {
             steps {
-                // Clona el repositorio desde GitHub usando la rama 'production'
                 git branch: env.GIT_BRANCH, credentialsId: env.GIT_CREDENTIALS, url: env.GIT_URL
             }
         }
 
-        stage('Clean') {
+        stage('Stop old containers') {
             steps {
-                // Detiene y elimina los contenedores, redes y volúmenes definidos en docker-compose-dev.yml
-                // Usamos --rmi all para eliminar también las imágenes
-                sh "docker-compose --env-file backend/.env.dev -f ${env.DOCKER_COMPOSE_FILE} down --rmi all --volumes"
-                // Limpia el sistema Docker, eliminando contenedores, redes, volúmenes e imágenes sin usar
-                sh 'docker system prune -af'
-            }
-        }
-
-        stage('Copy .env files') {
-            steps {
-                // Copia los archivos de entorno para configuración de backend y frontend
-                sh '''
-                    echo "Using backend/.env.dev"
-                '''
+                sh "docker-compose --env-file backend/.env.dev -f ${env.DOCKER_COMPOSE_FILE} down --remove-orphans"
             }
         }
 
         stage('Build') {
             steps {
-                // Construye y ejecuta los contenedores en segundo plano
-                sh "docker-compose --env-file backend/.env.dev -f ${env.DOCKER_COMPOSE_FILE} up -d --build"
+                sh "docker-compose --env-file backend/.env.dev -f ${env.DOCKER_COMPOSE_FILE} build --parallel"
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sh "docker-compose --env-file backend/.env.dev -f ${env.DOCKER_COMPOSE_FILE} up -d --remove-orphans"
             }
         }
     }
 
     post {
-        always {
-            // Limpieza adicional en caso de fallo o éxito
-            sh 'docker system prune -af'
+        failure {
+            sh "docker-compose --env-file backend/.env.dev -f ${env.DOCKER_COMPOSE_FILE} ps"
         }
     }
 }

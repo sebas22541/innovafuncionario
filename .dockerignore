@@ -1,6 +1,8 @@
+**/.git
 **/node_modules
 **/.dart_tool
 **/build
+**/coverage
 **/.idea
 **/.vscode
 **/*.log
@@ -9,6 +11,11 @@
 !**/.env.example
 !**/.env.docker.example
 **/android/.gradle
+frontend/android
+frontend/ios
+frontend/linux
+frontend/macos
+frontend/windows
 **/ios/Pods
 **/linux/flutter/ephemeral
 **/macos/Flutter/ephemeral

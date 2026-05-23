@@ -1,13 +1,15 @@
+# syntax=docker/dockerfile:1.4
 FROM ghcr.io/cirruslabs/flutter:stable AS build
 
 USER root
 WORKDIR /app
 
 COPY frontend/pubspec.yaml frontend/pubspec.lock ./
-RUN flutter pub get
+RUN --mount=type=cache,target=/root/.pub-cache flutter pub get
 
-COPY frontend/ ./
-RUN flutter clean && flutter pub get
+COPY frontend/lib ./lib
+COPY frontend/assets ./assets
+COPY frontend/web ./web
 
 ARG BACKEND_BASE_URL=
 RUN if [ -n "$BACKEND_BASE_URL" ]; then \
