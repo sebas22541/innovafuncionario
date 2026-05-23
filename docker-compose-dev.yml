@@ -36,7 +36,6 @@ services:
       args:
         BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://192.168.104.64:4015}
     restart: unless-stopped
-    depends_on:
-      - backend
+    
     ports:
       - "4016:80"

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-FROM ghcr.io/cirruslabs/flutter:stable AS build
+FROM ghcr.io/cirruslabs/flutter:3.38.5 AS build
 
 USER root
 WORKDIR /app
@@ -13,9 +13,9 @@ COPY frontend/web ./web
 
 ARG BACKEND_BASE_URL=
 RUN if [ -n "$BACKEND_BASE_URL" ]; then \
-      flutter build web --release --dart-define=BACKEND_BASE_URL=$BACKEND_BASE_URL; \
+      flutter build web --release --no-wasm-dry-run --dart-define=BACKEND_BASE_URL="$BACKEND_BASE_URL"; \
     else \
-      flutter build web --release; \
+      flutter build web --release --no-wasm-dry-run; \
     fi
 
 FROM nginx:alpine
