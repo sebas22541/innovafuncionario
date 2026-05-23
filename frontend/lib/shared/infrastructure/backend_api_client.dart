@@ -1,7 +1,8 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
+import '../../core/config/app_environment.dart';
 
 class BackendApiException implements Exception {
   const BackendApiException({required this.message, required this.statusCode});
@@ -109,24 +110,6 @@ class BackendApiClient {
   }
 
   static String _resolveBaseUrl() {
-    const configuredBaseUrl = String.fromEnvironment('BACKEND_BASE_URL');
-
-    if (configuredBaseUrl.isNotEmpty) {
-      return configuredBaseUrl;
-    }
-
-    if (!kIsWeb) {
-      if (defaultTargetPlatform == TargetPlatform.android) {
-        return 'http://10.0.2.2:3000';
-      }
-
-      return 'http://localhost:3000';
-    }
-
-    final currentUri = Uri.base;
-    final host = currentUri.host.isEmpty ? 'localhost' : currentUri.host;
-    final scheme = currentUri.scheme == 'https' ? 'https' : 'http';
-
-    return '$scheme://$host:3000';
+    return AppEnvironment.resolveBackendBaseUrl();
   }
 }
