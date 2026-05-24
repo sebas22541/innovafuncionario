@@ -5,12 +5,18 @@
   "main": "src/index.ts",
   "scripts": {
     "dev": "node --watch --no-warnings=ExperimentalWarning --loader ts-node/esm src/index.ts",
+    "dev:local": "node --env-file=.env.local --watch --no-warnings=ExperimentalWarning --loader ts-node/esm src/index.ts",
     "start": "node --no-warnings=ExperimentalWarning --loader ts-node/esm src/index.ts",
+    "start:local": "node --env-file=.env.local --no-warnings=ExperimentalWarning --loader ts-node/esm src/index.ts",
     "check": "tsc -p tsconfig.json",
     "prisma:generate": "prisma generate",
+    "prisma:migrate:local": "node --env-file=.env.local ./node_modules/prisma/build/index.js migrate deploy",
     "prisma:seed": "node --no-warnings=ExperimentalWarning --loader ts-node/esm prisma/seed.ts",
+    "prisma:seed:local": "node --env-file=.env.local --no-warnings=ExperimentalWarning --loader ts-node/esm prisma/seed.ts",
     "prisma:studio": "prisma studio",
+    "prisma:studio:local": "node --env-file=.env.local ./node_modules/prisma/build/index.js studio",
     "seed": "node --no-warnings=ExperimentalWarning --loader ts-node/esm prisma/seed.ts",
+    "seed:local": "node --env-file=.env.local --no-warnings=ExperimentalWarning --loader ts-node/esm prisma/seed.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "prisma": {
@@ -25,12 +31,15 @@
     "@prisma/client": "^7.8.0",
     "cloudinary": "^2.10.0",
     "dotenv": "^17.4.2",
-    "pg": "^8.20.0"
+    "pdf-lib": "^1.17.1",
+    "pg": "^8.20.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/multer": "^2.1.0",
     "@types/node": "^25.6.2",
+    "@types/qrcode": "^1.5.6",
     "prisma": "^7.8.0",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"

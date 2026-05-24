@@ -1,8 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
@@ -40,6 +39,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final ImagePicker _imagePicker = ImagePicker();
   bool _isSavingProfile = false;
   bool _isSavingPhoto = false;
+  bool _isDownloadingCredential = false;
 
   Future<AppUser> _updateProfile({
     required String nombreCompleto,
@@ -191,6 +191,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<void> _downloadCredentialDirectly() async {
+    if (_isDownloadingCredential) {
+      return;
+    }
+
+    setState(() {
+      _isDownloadingCredential = true;
+    });
+
+    try {
+      final pdfBytes = await dependencies.authApiService.downloadCredentialPdf(
+        email: widget.currentUser.email,
+      );
+
+      await Printing.sharePdf(
+        bytes: pdfBytes,
+        filename: _buildCredentialFilename(widget.currentUser),
+      );
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible descargar la credencial.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDownloadingCredential = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentUser = widget.currentUser;
@@ -289,6 +320,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                         icon: const Icon(Icons.qr_code_2_rounded),
                         label: const Text('Mi QR'),
+                      ),
+                      ElevatedButton.icon(
+                        onPressed: _isDownloadingCredential
+                            ? null
+                            : _downloadCredentialDirectly,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppPalette.night,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                        ),
+                        icon: _isDownloadingCredential
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.download_rounded),
+                        label: Text(
+                          _isDownloadingCredential
+                              ? 'Descargando...'
+                              : 'Credencial',
+                        ),
                       ),
                     ],
                   ),
@@ -399,6 +455,252 @@ class _MyQrDialog extends StatefulWidget {
 
   @override
   State<_MyQrDialog> createState() => _MyQrDialogState();
+}
+
+class _CredentialDialog extends StatefulWidget {
+  const _CredentialDialog({required this.currentUser});
+
+  final AppUser currentUser;
+
+  @override
+  State<_CredentialDialog> createState() => _CredentialDialogState();
+}
+
+class _CredentialDialogState extends State<_CredentialDialog> {
+  UserCredential? _credential;
+  bool _isGenerating = true;
+  bool _isDownloading = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _generateCredential();
+  }
+
+  Future<void> _generateCredential() async {
+    setState(() {
+      _isGenerating = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final credential = await dependencies.authApiService.generateCredential(
+        email: widget.currentUser.email,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _credential = credential;
+        _isGenerating = false;
+      });
+    } on BackendApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isGenerating = false;
+        _errorMessage = error.message;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isGenerating = false;
+        _errorMessage = 'No fue posible generar tu credencial.';
+      });
+    }
+  }
+
+  Future<void> _downloadCredentialPdf() async {
+    final credential = _credential;
+
+    if (credential == null || _isDownloading) {
+      return;
+    }
+
+    setState(() {
+      _isDownloading = true;
+    });
+
+    try {
+      final pdfBytes = await dependencies.authApiService.downloadCredentialPdf(
+        email: widget.currentUser.email,
+      );
+
+      await Printing.sharePdf(
+        bytes: pdfBytes,
+        filename: _buildCredentialFilename(widget.currentUser),
+      );
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible descargar la credencial.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDownloading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _copyCredentialLink() async {
+    final link = _credential?.frontImageUrl;
+
+    if (link == null || link.trim().isEmpty) {
+      return;
+    }
+
+    await Clipboard.setData(ClipboardData(text: link));
+
+    if (mounted) {
+      AppAlert.showSuccess(context, 'Enlace de credencial copiado.');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final credential = _credential;
+
+    return AlertDialog(
+      title: const Text('Mi credencial'),
+      content: SizedBox(
+        width: 560,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          child: _isGenerating
+              ? const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 46),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              : _errorMessage != null
+              ? _CredentialErrorView(
+                  message: _errorMessage!,
+                  onRetry: _generateCredential,
+                )
+              : _CredentialPreview(credential: credential!),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cerrar'),
+        ),
+        if (credential != null) ...[
+          OutlinedButton.icon(
+            onPressed: _copyCredentialLink,
+            icon: const Icon(Icons.link_rounded),
+            label: const Text('Copiar enlace'),
+          ),
+          ElevatedButton.icon(
+            onPressed: _isDownloading ? null : _downloadCredentialPdf,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppPalette.orange,
+              foregroundColor: Colors.white,
+              elevation: 0,
+            ),
+            icon: _isDownloading
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.download_rounded),
+            label: Text(_isDownloading ? 'Descargando...' : 'Descargar PDF'),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _CredentialPreview extends StatelessWidget {
+  const _CredentialPreview({required this.credential});
+
+  final UserCredential credential;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: AspectRatio(
+            aspectRatio: 860 / 540,
+            child: Image.network(
+              credential.frontImageUrl,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return Container(
+                  color: AppPalette.surfaceSoft,
+                  alignment: Alignment.center,
+                  child: const Text('Vista previa no disponible.'),
+                );
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        SelectableText(
+          credential.frontImageUrl,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
+    );
+  }
+}
+
+class _CredentialErrorView extends StatelessWidget {
+  const _CredentialErrorView({
+    required this.message,
+    required this.onRetry,
+  });
+
+  final String message;
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.error_outline_rounded,
+            color: Color(0xFFD94841),
+            size: 42,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: const Color(0xFFD94841),
+            ),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Reintentar'),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _MyQrDialogState extends State<_MyQrDialog> {
@@ -1417,6 +1719,20 @@ String _buildProfileQrFilename(AppUser currentUser) {
       ? ci
       : (fallbackName.isEmpty ? 'usuario' : fallbackName);
   return 'qr-perfil-$safeId.pdf';
+}
+
+String _buildCredentialFilename(AppUser currentUser) {
+  final ci = currentUser.ci.trim();
+  final fallbackName = currentUser.firstName
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+  final safeId = ci.isNotEmpty
+      ? ci
+      : (fallbackName.isEmpty ? 'usuario' : fallbackName);
+
+  return 'credencial-$safeId.pdf';
 }
 
 Future<Uint8List?> _resolvePhotoBytes(String? photoSource) async {

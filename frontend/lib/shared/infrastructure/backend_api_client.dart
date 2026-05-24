@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -43,6 +44,28 @@ class BackendApiClient {
       );
 
       return _decodeResponse(response);
+    } catch (error) {
+      throw _mapRequestError(error);
+    }
+  }
+
+  Future<Uint8List> postBytes(String path, Map<String, dynamic> body) async {
+    try {
+      final response = await _client.post(
+        _buildUri(path),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
+      );
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return response.bodyBytes;
+      }
+
+      _decodeResponse(response);
+      throw const BackendApiException(
+        message: 'No fue posible completar la solicitud.',
+        statusCode: 0,
+      );
     } catch (error) {
       throw _mapRequestError(error);
     }

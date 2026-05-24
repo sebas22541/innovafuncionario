@@ -27,14 +27,14 @@ services:
     environment:
       TZ: America/La_Paz
     ports:
-      - "4015:${PORT:-3000}"
+      - "4015:4000"
 
   frontend:
     build:
       context: .
       dockerfile: ./.infra/frontend/prod/Dockerfile
       args:
-        BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://192.168.104.64:4015}
+        BACKEND_BASE_URL: ${BACKEND_BASE_URL:-https://innovafuncionarioapidev.cochabamba.bo}
     restart: unless-stopped
     
     ports:

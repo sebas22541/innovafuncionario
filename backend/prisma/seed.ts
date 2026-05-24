@@ -17,7 +17,7 @@ const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
 const adminEmail = normalizeEmail(
-  process.env.SEED_ADMIN_EMAIL ?? "admin@gmail.com",
+  process.env.SEED_ADMIN_EMAIL ?? "admin@admin.com",
 );
 const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? "admin123";
 const adminNames = process.env.SEED_ADMIN_NAMES ?? "Administrador";

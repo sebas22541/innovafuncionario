@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../../domain/entities/cargo_option.dart';
 import '../../domain/entities/office_option.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
@@ -93,6 +95,20 @@ class AuthApiService {
     }
 
     return DynamicQrSession.fromJson(_readMap(data, 'qrDinamicoActivo'));
+  }
+
+  Future<UserCredential> generateCredential({required String email}) async {
+    final payload = await _apiClient.postJson('/api/auth/credential', {
+      'email': email,
+    });
+
+    return UserCredential.fromJson(_readMap(payload['data'], 'credencial'));
+  }
+
+  Future<Uint8List> downloadCredentialPdf({required String email}) {
+    return _apiClient.postBytes('/api/auth/credential/pdf', {
+      'email': email,
+    });
   }
 
   Future<AppUser> register({
@@ -316,6 +332,31 @@ class DynamicQrLocationSnapshot {
       latitude: _readDouble(source['latitud'], 'latitud'),
       longitude: _readDouble(source['longitud'], 'longitud'),
       accuracy: _readNullableDouble(source['accuracy']),
+    );
+  }
+}
+
+class UserCredential {
+  const UserCredential({
+    required this.frontImageUrl,
+    required this.pdfUrl,
+    required this.qrPayload,
+    required this.generatedAt,
+  });
+
+  final String frontImageUrl;
+  final String pdfUrl;
+  final String qrPayload;
+  final DateTime generatedAt;
+
+  factory UserCredential.fromJson(Map<String, dynamic> source) {
+    return UserCredential(
+      frontImageUrl: _readString(source['frontImageUrl'], 'frontImageUrl'),
+      pdfUrl: _readString(source['pdfUrl'], 'pdfUrl'),
+      qrPayload: _readString(source['qrPayload'], 'qrPayload'),
+      generatedAt: DateTime.parse(
+        _readString(source['generatedAt'], 'generatedAt'),
+      ).toLocal(),
     );
   }
 }

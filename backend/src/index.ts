@@ -14,7 +14,11 @@ import { URL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
-import { storeUserProfilePhoto } from "./cloudinary/index.ts";
+import {
+  generateAndStoreUserCredential,
+  generateUserCredentialPdf,
+  storeUserProfilePhoto,
+} from "./cloudinary/index.ts";
 import { PrismaClient, type Prisma } from "./generated/prisma/client.ts";
 import { estado_asistencia, rol_usuario } from "./generated/prisma/enums.ts";
 import { HttpError } from "./http-error.ts";
@@ -169,6 +173,8 @@ const server = http.createServer(async (request, response) => {
           "/api/auth/register",
           "/api/auth/profile",
           "/api/auth/qr/dynamic",
+          "/api/auth/credential",
+          "/api/auth/credential/pdf",
           "/api/usuarios",
           "/api/usuarios/:id",
           "/api/departamentos",
@@ -411,6 +417,63 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, {
         data: activeDynamicQr,
       });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/auth/credential") {
+      const email = readQueryEmailFromBody(await readJsonBody(request));
+      const user = await prisma.usuarios.findUnique({
+        where: { email },
+        include: userWithOfficeInclude,
+      });
+
+      if (!user) {
+        throw new HttpError(404, "No se encontro el usuario seleccionado.");
+      }
+
+      if (user.activo !== true) {
+        throw new HttpError(
+          403,
+          "Tu usuario se encuentra inactivo. Solicita su activacion.",
+        );
+      }
+
+      const person = await ensurePersonIdentityForUser(prisma, user);
+      const credential = await generateAndStoreUserCredential(user, person);
+
+      sendJson(response, 200, {
+        data: credential,
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/auth/credential/pdf") {
+      const email = readQueryEmailFromBody(await readJsonBody(request));
+      const user = await prisma.usuarios.findUnique({
+        where: { email },
+        include: userWithOfficeInclude,
+      });
+
+      if (!user) {
+        throw new HttpError(404, "No se encontro el usuario seleccionado.");
+      }
+
+      if (user.activo !== true) {
+        throw new HttpError(
+          403,
+          "Tu usuario se encuentra inactivo. Solicita su activacion.",
+        );
+      }
+
+      const person = await ensurePersonIdentityForUser(prisma, user);
+      const pdfBytes = await generateUserCredentialPdf(user, person);
+
+      sendPdf(
+        response,
+        200,
+        Buffer.from(pdfBytes),
+        buildCredentialPdfFilename(user),
+      );
       return;
     }
 
@@ -1598,6 +1661,37 @@ function sendJson(
   response.end(JSON.stringify(payload, null, 2));
 }
 
+function sendPdf(
+  response: ServerResponse,
+  statusCode: number,
+  payload: Buffer,
+  filename: string,
+) {
+  response.setHeader("Content-Type", "application/pdf");
+  response.setHeader("Content-Length", payload.length);
+  response.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${filename.replace(/"/g, "")}"`,
+  );
+  response.writeHead(statusCode);
+  response.end(payload);
+}
+
+function buildCredentialPdfFilename(user: {
+  ci?: string | null;
+  email?: string | null;
+  id: number;
+}) {
+  const safeId = normalizeOptionalText(user.ci) ??
+    normalizeOptionalText(user.email)
+      ?.toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") ??
+    `id-${user.id}`;
+
+  return `credencial-${safeId}.pdf`;
+}
+
 function parsePort(portValue: string | undefined) {
   const parsedPort = Number.parseInt(portValue ?? `${DEFAULT_PORT}`, 10);
 
@@ -2059,6 +2153,11 @@ function parseLoginInput(payload: unknown): LoginInput {
     email: readRequiredEmail(body, "email"),
     password: readRequiredString(body, "password", 6, 200),
   };
+}
+
+function readQueryEmailFromBody(payload: unknown) {
+  const body = expectRecord(payload);
+  return readRequiredEmail(body, "email");
 }
 
 function readOptionalPhotoData(body: JsonRecord): string | null {

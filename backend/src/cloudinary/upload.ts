@@ -9,6 +9,15 @@ type UploadUserProfilePhotoInput = {
   userId?: number | null;
 };
 
+type UploadBufferInput = {
+  buffer: Buffer;
+  folder: string;
+  publicId: string;
+  resourceType: "image" | "raw" | "auto";
+  filename: string;
+  mimetype: string;
+};
+
 export const uploadClaudinary = async (
   dto: ParamUploadClaudinary,
 ): Promise<ResponseUploadClaudinary> => {
@@ -81,6 +90,33 @@ export const uploadUserProfilePhoto = async ({
     overwrite: true,
     invalidate: true,
     resource_type: "image",
+    use_filename: false,
+    unique_filename: false,
+  });
+
+  return uploadResult.secure_url;
+};
+
+export const uploadBufferToCloudinary = async ({
+  buffer,
+  folder,
+  publicId,
+  resourceType,
+  filename,
+  mimetype,
+}: UploadBufferInput): Promise<string> => {
+  const uploadResult = await uploadClaudinary({
+    file: {
+      buffer,
+      size: buffer.length,
+      mimetype,
+      originalname: filename,
+    } as Express.Multer.File,
+    folder,
+    public_id: publicId,
+    overwrite: true,
+    invalidate: true,
+    resource_type: resourceType,
     use_filename: false,
     unique_filename: false,
   });
