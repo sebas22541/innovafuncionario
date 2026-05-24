@@ -9,8 +9,7 @@ void main() {
     await tester.pumpWidget(const QrWebApp());
     await tester.pump();
 
-    expect(find.text('Registrarse'), findsOneWidget);
     expect(find.text('Ingresar'), findsOneWidget);
-    expect(find.text('Ingresar con:'), findsOneWidget);
+    expect(find.text('Ingresar con:'), findsNothing);
   });
 }

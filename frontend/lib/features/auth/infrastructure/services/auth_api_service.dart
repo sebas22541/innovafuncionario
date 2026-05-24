@@ -72,11 +72,12 @@ class AuthApiService {
     required double longitude,
     double? accuracy,
   }) async {
+    final safeAccuracy = _sanitizeOptionalAccuracy(accuracy);
     final payload = await _apiClient.postJson('/api/auth/qr/dynamic', {
       'email': email,
       'latitud': latitude,
       'longitud': longitude,
-      'accuracy': accuracy,
+      if (safeAccuracy != null) 'accuracy': safeAccuracy,
     });
 
     return DynamicQrSession.fromJson(_readMap(payload['data'], 'qrDinamico'));
@@ -421,4 +422,12 @@ double? _readNullableDouble(dynamic value) {
   }
 
   throw StateError('Se esperaba un valor numerico.');
+}
+
+double? _sanitizeOptionalAccuracy(double? value) {
+  if (value == null || !value.isFinite || value < 0 || value > 10000) {
+    return null;
+  }
+
+  return value;
 }

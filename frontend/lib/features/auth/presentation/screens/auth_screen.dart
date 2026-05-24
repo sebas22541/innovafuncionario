@@ -393,13 +393,6 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
-  void _showSocialLoginMessage(String provider) {
-    AppAlert.showWarning(
-      context,
-      'El ingreso con $provider todavia no esta disponible.',
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final viewInsets = MediaQuery.viewInsetsOf(context);
@@ -425,8 +418,6 @@ class _AuthScreenState extends State<AuthScreen> {
                   _AuthStage.welcome => _AuthWelcomeScreen(
                     onRegister: () => _setStage(_AuthStage.register),
                     onLogin: () => _setStage(_AuthStage.login),
-                    onGoogleLogin: () => _showSocialLoginMessage('Google'),
-                    onInnovaLogin: () => _showSocialLoginMessage('Innova'),
                   ),
                   _AuthStage.login || _AuthStage.register => _AuthFormCard(
                     formKey: _formKey,
@@ -518,14 +509,10 @@ class _AuthWelcomeScreen extends StatelessWidget {
   const _AuthWelcomeScreen({
     required this.onRegister,
     required this.onLogin,
-    required this.onGoogleLogin,
-    required this.onInnovaLogin,
   });
 
   final VoidCallback onRegister;
   final VoidCallback onLogin;
-  final VoidCallback onGoogleLogin;
-  final VoidCallback onInnovaLogin;
 
   @override
   Widget build(BuildContext context) {
@@ -559,17 +546,6 @@ class _AuthWelcomeScreen extends StatelessWidget {
                 label: 'Ingresar',
                 color: AppPalette.night,
                 onTap: onLogin,
-              ),
-              const SizedBox(height: 18),
-              const _AuthDividerLabel(label: 'Ingresar con:'),
-              const SizedBox(height: 18),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _SocialLoginButton.google(onTap: onGoogleLogin),
-                  const SizedBox(width: 14),
-                  _SocialLoginButton.innova(onTap: onInnovaLogin),
-                ],
               ),
             ],
           ),
@@ -1475,88 +1451,6 @@ class _AuthBrandLogo extends StatelessWidget {
       'assets/images/inlogplo.png',
       height: height,
       fit: BoxFit.contain,
-    );
-  }
-}
-
-class _AuthDividerLabel extends StatelessWidget {
-  const _AuthDividerLabel({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        const Expanded(child: Divider(color: AppPalette.line, thickness: 1.2)),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Text(
-            label,
-            style: const TextStyle(fontSize: 14, color: Colors.black87),
-          ),
-        ),
-        const Expanded(child: Divider(color: AppPalette.line, thickness: 1.2)),
-      ],
-    );
-  }
-}
-
-class _SocialLoginButton extends StatelessWidget {
-  const _SocialLoginButton._({required this.child, required this.onTap});
-
-  factory _SocialLoginButton.google({required VoidCallback onTap}) {
-    return _SocialLoginButton._(
-      onTap: onTap,
-      child: const Text(
-        'G',
-        style: TextStyle(
-          fontSize: 30,
-          fontWeight: FontWeight.w700,
-          color: Color(0xFF4285F4),
-        ),
-      ),
-    );
-  }
-
-  factory _SocialLoginButton.innova({required VoidCallback onTap}) {
-    return _SocialLoginButton._(
-      onTap: onTap,
-      child: const Icon(
-        Icons.fingerprint_rounded,
-        color: AppPalette.night,
-        size: 28,
-      ),
-    );
-  }
-
-  final Widget child;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Ink(
-          width: 76,
-          height: 76,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x16000000),
-                blurRadius: 12,
-                offset: Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Center(child: child),
-        ),
-      ),
     );
   }
 }

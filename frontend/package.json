@@ -1,0 +1,8 @@
+{
+  "name": "qr_asistencia_app_frontend",
+  "private": true,
+  "scripts": {
+    "dev:local": "flutter run -d chrome --dart-define=BACKEND_BASE_URL=http://localhost:3000",
+    "build:local": "flutter build web --debug --dart-define=BACKEND_BASE_URL=http://localhost:3000"
+  }
+}

@@ -45,6 +45,9 @@ const DYNAMIC_QR_SIGNATURE_LENGTH = 16;
 const REFERENCE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DASHBOARD_CACHE_TTL_MS = 30 * 1000;
 const EVENT_SUMMARY_CACHE_TTL_MS = 15 * 1000;
+const SEED_ADMIN_EMAIL = normalizeEmailValue(
+  process.env.SEED_ADMIN_EMAIL ?? "admin@admin.com",
+);
 const DYNAMIC_QR_SIGNING_SECRET =
   process.env.QR_DYNAMIC_SECRET ??
   createHash("sha256").update(`${DATABASE_URL}:dynamic-qr`).digest("hex");
@@ -510,6 +513,11 @@ const server = http.createServer(async (request, response) => {
         "Solo un administrador puede gestionar usuarios.",
       );
       const usuarios = await prisma.usuarios.findMany({
+        where: {
+          email: {
+            not: SEED_ADMIN_EMAIL,
+          },
+        },
         orderBy: [
           { rol: "asc" },
           { activo: "desc" },
@@ -2196,7 +2204,7 @@ function parseGenerateDynamicQrInput(payload: unknown): GenerateDynamicQrInput {
     email: readRequiredEmail(body, "email"),
     latitud: readRequiredFloat(body, "latitud", -90, 90),
     longitud: readRequiredFloat(body, "longitud", -180, 180),
-    accuracy: readOptionalFloat(body, "accuracy", 0, 10_000),
+    accuracy: readOptionalFloatOrNull(body, "accuracy", 0, 10_000),
   };
 }
 
@@ -2388,7 +2396,7 @@ function readOptionalString(
 }
 
 function readRequiredEmail(source: JsonRecord, key: string) {
-  const value = readRequiredString(source, key, 5, 150).toLowerCase();
+  const value = normalizeEmailValue(readRequiredString(source, key, 5, 150));
 
   if (!value.includes("@")) {
     throw new HttpError(400, `El campo ${key} no tiene un correo valido.`);
@@ -2405,6 +2413,10 @@ function readQueryEmail(url: URL, key: string) {
   }
 
   return value;
+}
+
+function normalizeEmailValue(value: string) {
+  return value.trim().toLowerCase();
 }
 
 function readOptionalQueryInt(url: URL, key: string) {
@@ -2638,6 +2650,32 @@ function readOptionalFloat(
 
   if (!Number.isFinite(numericValue) || numericValue < min || numericValue > max) {
     throw new HttpError(400, `El campo ${key} no tiene un valor valido.`);
+  }
+
+  return numericValue;
+}
+
+function readOptionalFloatOrNull(
+  source: JsonRecord,
+  key: string,
+  min: number,
+  max: number,
+) {
+  const value = source[key];
+
+  if (value == null || value === "") {
+    return null;
+  }
+
+  const numericValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseFloat(value)
+        : Number.NaN;
+
+  if (!Number.isFinite(numericValue) || numericValue < min || numericValue > max) {
+    return null;
   }
 
   return numericValue;
@@ -2922,6 +2960,14 @@ async function findPersonByScannedValue(
     }
   }
 
+  for (const candidate of candidates) {
+    const personByCi = await findPersonByCi(candidate);
+
+    if (personByCi) {
+      return personByCi;
+    }
+  }
+
   const dynamicQr = tryParseDynamicQrPayload(scannedValue);
 
   if (dynamicQr != null && !isDynamicQrExpired(dynamicQr)) {
@@ -3126,7 +3172,7 @@ function extractLookupCode(scannedValue: string) {
     return trimmedValue.toUpperCase();
   }
 
-  const lookupKeys = ["code", "id", "qr", "slug", "token"];
+  const lookupKeys = ["qr", "codigoQr", "codigo_qr", "code", "id", "slug", "token", "ci"];
 
   for (const key of lookupKeys) {
     const value = uri.searchParams.get(key)?.trim();

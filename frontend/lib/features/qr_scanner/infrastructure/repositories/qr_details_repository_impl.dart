@@ -69,7 +69,15 @@ class QrDetailsRepositoryImpl implements QrDetailsRepository {
       return trimmedValue.toUpperCase();
     }
 
-    const lookupKeys = ['code', 'id', 'qr', 'slug', 'token'];
+    const lookupKeys = [
+      'qr',
+      'codigoQr',
+      'codigo_qr',
+      'code',
+      'id',
+      'slug',
+      'token',
+    ];
 
     for (final key in lookupKeys) {
       final value = uri.queryParameters[key]?.trim();
@@ -77,6 +85,12 @@ class QrDetailsRepositoryImpl implements QrDetailsRepository {
       if (value != null && value.isNotEmpty) {
         return value.toUpperCase();
       }
+    }
+
+    final credentialCi = _extractCredentialCiFromCloudinaryUrl(uri);
+
+    if (credentialCi != null) {
+      return credentialCi;
     }
 
     if (uri.pathSegments.isNotEmpty) {
@@ -99,6 +113,36 @@ class QrDetailsRepositoryImpl implements QrDetailsRepository {
       }
     } catch (_) {
       return null;
+    }
+
+    return null;
+  }
+
+  String? _extractCredentialCiFromCloudinaryUrl(Uri uri) {
+    final host = uri.host.toLowerCase();
+
+    if (!host.endsWith('cloudinary.com')) {
+      return null;
+    }
+
+    for (final segment in uri.pathSegments.reversed) {
+      final decodedSegment = Uri.decodeComponent(segment);
+      final match = RegExp(
+        r'^credencial-frente-pdf-(.+)\.(?:jpg|jpeg|png|webp)$',
+        caseSensitive: false,
+      ).firstMatch(decodedSegment);
+
+      if (match == null) {
+        continue;
+      }
+
+      final token = match.group(1)?.trim();
+
+      if (token == null || token.isEmpty || token.startsWith('id-')) {
+        return null;
+      }
+
+      return token.toUpperCase();
     }
 
     return null;

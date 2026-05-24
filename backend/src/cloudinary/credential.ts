@@ -73,7 +73,7 @@ export async function generateAndStoreUserCredential(
     folder: "imagenes/credenciales",
     publicId: frontPdfImagePublicId,
   });
-  const qrPayload = frontPdfImageUrl;
+  const qrPayload = buildCredentialQrPayload(frontPdfImageUrl, user, person);
   const qrPng = await QRCode.toBuffer(qrPayload, {
     type: "png",
     errorCorrectionLevel: "M",
@@ -135,7 +135,8 @@ export async function generateUserCredentialPdf(
     folder: "imagenes/credenciales",
     publicId: frontPdfImagePublicId,
   });
-  const qrPng = await QRCode.toBuffer(frontImageUrl, {
+  const qrPayload = buildCredentialQrPayload(frontImageUrl, user, person);
+  const qrPng = await QRCode.toBuffer(qrPayload, {
     type: "png",
     errorCorrectionLevel: "M",
     margin: 2,
@@ -146,12 +147,23 @@ export async function generateUserCredentialPdf(
     },
   });
 
-  return buildCredentialPdf({
+  const pdfBytes = await buildCredentialPdf({
     user,
     qrPng,
-    qrPayload: frontImageUrl,
+    qrPayload,
     frontImageUrl,
   });
+
+  await uploadBufferToCloudinary({
+    buffer: Buffer.from(pdfBytes),
+    folder: "imagenes/credenciales",
+    publicId: frontPdfImagePublicId,
+    resourceType: "image",
+    filename: `${frontPdfImagePublicId}.pdf`,
+    mimetype: "application/pdf",
+  });
+
+  return pdfBytes;
 }
 
 async function buildCredentialPdf(input: {
@@ -204,15 +216,17 @@ function drawFrontPageData(page: any, input: {
   const { width, height } = page.getSize();
   const ink = rgb(0.08, 0.09, 0.12);
   const blue = rgb(0.00, 0.64, 0.82);
+  const photoBorderBlue = rgb(0.00, 0.68, 0.86);
   const muted = rgb(0.13, 0.18, 0.26);
   const fieldX = width * 0.065;
   const fieldWidth = width * 0.86;
   const fieldGap = height * 0.052;
-  const officeY = height * 0.145;
+  const textBlockRaise = height * 0.035;
+  const officeY = (height * 0.145) + textBlockRaise;
   const cargoY = officeY + fieldGap;
   const ciY = cargoY + fieldGap;
   const surnameY = ciY + fieldGap;
-  const nameY = surnameY + (height * 0.040);
+  const nameY = surnameY + (height * 0.058);
 
   if (input.photoImage) {
     const photoFrame = {
@@ -222,14 +236,14 @@ function drawFrontPageData(page: any, input: {
       height: height * 0.492,
     };
 
-    drawFramedPhoto(page, input.photoImage, photoFrame, blue);
+    drawFramedPhoto(page, input.photoImage, photoFrame, photoBorderBlue);
   }
 
   drawWrappedText(page, buildGivenNames(input.user), {
     x: fieldX,
     y: nameY,
     maxWidth: fieldWidth,
-    size: 11,
+    size: 13,
     font: input.boldFont,
     color: ink,
     lineGap: 1,
@@ -239,7 +253,7 @@ function drawFrontPageData(page: any, input: {
     x: fieldX,
     y: surnameY,
     maxWidth: fieldWidth,
-    size: 11,
+    size: 13,
     font: input.boldFont,
     color: ink,
     lineGap: 1,
@@ -297,7 +311,7 @@ function drawFramedPhoto(
   page.pushOperators(popGraphicsState());
   page.drawSvgPath(path, {
     borderColor,
-    borderWidth: 1.6,
+    borderWidth: 2.4,
   });
 }
 
@@ -563,7 +577,28 @@ function buildCloudinaryPdfPageImageUrl(input: {
     .map(encodeURIComponent)
     .join("/");
 
-  return `https://res.cloudinary.com/${encodeURIComponent(input.cloudName)}/image/upload/pg_1,f_jpg/${pathParts}.jpg`;
+  return `https://res.cloudinary.com/${encodeURIComponent(input.cloudName)}/image/upload/pg_1,dn_400,w_1200,f_jpg,q_auto:best/${pathParts}.jpg`;
+}
+
+function buildCredentialQrPayload(
+  frontImageUrl: string,
+  user: CredentialUser,
+  person: CredentialPerson,
+) {
+  const lookupCode = normalizeText(person?.codigo_qr) ?? null;
+  const publicUrl = new URL(frontImageUrl);
+
+  if (lookupCode) {
+    publicUrl.searchParams.set("qr", lookupCode);
+  }
+
+  const ci = normalizeText(user.ci);
+
+  if (ci) {
+    publicUrl.searchParams.set("ci", ci);
+  }
+
+  return publicUrl.toString();
 }
 
 function stripVersionFromCloudinaryUrl(url: string) {
