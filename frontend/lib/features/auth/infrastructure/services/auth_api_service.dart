@@ -28,7 +28,9 @@ class AuthApiService {
     }
 
     final payload = await _apiClient.getJson('/api/inicio/resumen');
-    final summary = DashboardSummary.fromJson(_readMap(payload['data'], 'resumen'));
+    final summary = DashboardSummary.fromJson(
+      _readMap(payload['data'], 'resumen'),
+    );
     _dashboardSummaryCache = summary;
     _dashboardSummaryCacheAt = DateTime.now();
     return summary;
@@ -77,7 +79,7 @@ class AuthApiService {
       'email': email,
       'latitud': latitude,
       'longitud': longitude,
-      if (safeAccuracy != null) 'accuracy': safeAccuracy,
+      'accuracy': ?safeAccuracy,
     });
 
     return DynamicQrSession.fromJson(_readMap(payload['data'], 'qrDinamico'));
@@ -107,9 +109,7 @@ class AuthApiService {
   }
 
   Future<Uint8List> downloadCredentialPdf({required String email}) {
-    return _apiClient.postBytes('/api/auth/credential/pdf', {
-      'email': email,
-    });
+    return _apiClient.postBytes('/api/auth/credential/pdf', {'email': email});
   }
 
   Future<AppUser> register({

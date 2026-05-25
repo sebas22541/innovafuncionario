@@ -6,6 +6,7 @@ import '../../core/theme/app_palette.dart';
 import '../../features/events/domain/entities/event_record.dart';
 import '../../features/events/presentation/screens/events_screen.dart';
 import '../../features/events/presentation/screens/user_events_screen.dart';
+import '../../features/credentials/presentation/screens/credentials_screen.dart';
 import '../../features/home/presentation/screens/home_screen.dart';
 import '../../features/qr_scanner/presentation/screens/qr_scanner_screen.dart';
 import '../../features/reports/presentation/screens/qr_generation_map_screen.dart';
@@ -152,6 +153,14 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       case AppSection.users:
         return _currentUser.isAdmin
             ? UsersScreen(currentUser: _currentUser)
+            : SettingsScreen(
+                currentUser: _currentUser,
+                onUserUpdated: _handleCurrentUserUpdated,
+                onLogout: widget.onLogout,
+              );
+      case AppSection.credentials:
+        return _currentUser.isAdmin
+            ? CredentialsScreen(currentUser: _currentUser)
             : SettingsScreen(
                 currentUser: _currentUser,
                 onUserUpdated: _handleCurrentUserUpdated,
@@ -858,6 +867,7 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
       AppSection.reports,
       AppSection.map,
       AppSection.users,
+      AppSection.credentials,
       AppSection.settings,
     ];
   }

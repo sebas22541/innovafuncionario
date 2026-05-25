@@ -7,6 +7,7 @@ enum AppSection {
   reports,
   map,
   users,
+  credentials,
   qrScanner,
   settings,
 }
@@ -26,6 +27,8 @@ extension AppSectionX on AppSection {
         return 'Mapa';
       case AppSection.users:
         return 'Usuarios';
+      case AppSection.credentials:
+        return 'Credenciales';
       case AppSection.qrScanner:
         return 'Escanear';
       case AppSection.settings:
@@ -47,6 +50,8 @@ extension AppSectionX on AppSection {
         return 'Mapa de QR';
       case AppSection.users:
         return 'Gestion de usuarios';
+      case AppSection.credentials:
+        return 'Credenciales';
       case AppSection.qrScanner:
         return 'Escaneo QR';
       case AppSection.settings:
@@ -68,6 +73,8 @@ extension AppSectionX on AppSection {
         return Icons.map_outlined;
       case AppSection.users:
         return Icons.people_alt_outlined;
+      case AppSection.credentials:
+        return Icons.badge_outlined;
       case AppSection.qrScanner:
         return Icons.qr_code_scanner_rounded;
       case AppSection.settings:

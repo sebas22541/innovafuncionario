@@ -23,6 +23,8 @@ class UsersScreen extends StatefulWidget {
 }
 
 class _UsersScreenState extends State<UsersScreen> {
+  static const int _usersPerPage = 20;
+
   List<AppUser> _users = const [];
   List<OfficeOption> _offices = const [];
   List<CargoOption> _cargos = const [];
@@ -30,12 +32,23 @@ class _UsersScreenState extends State<UsersScreen> {
   bool _isCreating = false;
   final Set<int> _updatingUserIds = <int>{};
   String? _errorMessage;
+  int _currentPage = 0;
 
   int get _adminCount => _users.where((user) => user.isAdmin).length;
   int get _controlCount => _users.where((user) => user.isControl).length;
-  int get _externalCount =>
-      _users.where((user) => user.isExternalUser).length;
+  int get _externalCount => _users.where((user) => user.isExternalUser).length;
   int get _activeUsersCount => _users.where((user) => user.activo).length;
+  int get _totalPages =>
+      _users.isEmpty ? 1 : ((_users.length - 1) ~/ _usersPerPage) + 1;
+  int get _safeCurrentPage => _currentPage.clamp(0, _totalPages - 1);
+  int get _visibleStartIndex => _users.isEmpty
+      ? 0
+      : (_safeCurrentPage * _usersPerPage).clamp(0, _users.length);
+  int get _visibleEndIndex => _users.isEmpty
+      ? 0
+      : (_visibleStartIndex + _usersPerPage).clamp(0, _users.length);
+  List<AppUser> get _visibleUsers =>
+      _users.sublist(_visibleStartIndex, _visibleEndIndex);
 
   @override
   void initState() {
@@ -70,6 +83,7 @@ class _UsersScreenState extends State<UsersScreen> {
         _users = _sortUsers(results[0] as List<AppUser>);
         _offices = results[1] as List<OfficeOption>;
         _cargos = results[2] as List<CargoOption>;
+        _currentPage = _safeCurrentPage;
       });
     } on BackendApiException catch (error) {
       if (!mounted) {
@@ -142,6 +156,7 @@ class _UsersScreenState extends State<UsersScreen> {
 
       setState(() {
         _users = _sortUsers([createdUser, ..._users]);
+        _currentPage = 0;
       });
 
       AppAlert.showSuccess(
@@ -197,6 +212,7 @@ class _UsersScreenState extends State<UsersScreen> {
           updatedUser,
           ..._users.where((item) => item.id != updatedUser.id),
         ]);
+        _currentPage = _safeCurrentPage;
       });
 
       AppAlert.showSuccess(
@@ -229,13 +245,13 @@ class _UsersScreenState extends State<UsersScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final visibleUsers = _users;
+    final visibleUsers = _visibleUsers;
 
-    if (_isLoading && visibleUsers.isEmpty) {
+    if (_isLoading && _users.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_errorMessage != null && visibleUsers.isEmpty) {
+    if (_errorMessage != null && _users.isEmpty) {
       return _UsersErrorState(message: _errorMessage!, onRetry: _loadData);
     }
 
@@ -339,11 +355,34 @@ class _UsersScreenState extends State<UsersScreen> {
             ),
           ),
           const SizedBox(height: 20),
-          if (visibleUsers.isEmpty)
+          if (_users.isEmpty)
             const _EmptyUsersState()
           else
             Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                _UsersPaginationBar(
+                  currentPage: _safeCurrentPage,
+                  totalPages: _totalPages,
+                  totalUsers: _users.length,
+                  startIndex: _visibleStartIndex,
+                  endIndex: _visibleEndIndex,
+                  onPrevious: _safeCurrentPage == 0
+                      ? null
+                      : () {
+                          setState(() {
+                            _currentPage = _safeCurrentPage - 1;
+                          });
+                        },
+                  onNext: _safeCurrentPage >= _totalPages - 1
+                      ? null
+                      : () {
+                          setState(() {
+                            _currentPage = _safeCurrentPage + 1;
+                          });
+                        },
+                ),
+                const SizedBox(height: 12),
                 for (final user in visibleUsers) ...[
                   _UserListCard(
                     user: user,
@@ -353,9 +392,107 @@ class _UsersScreenState extends State<UsersScreen> {
                   ),
                   const SizedBox(height: 12),
                 ],
+                _UsersPaginationBar(
+                  currentPage: _safeCurrentPage,
+                  totalPages: _totalPages,
+                  totalUsers: _users.length,
+                  startIndex: _visibleStartIndex,
+                  endIndex: _visibleEndIndex,
+                  onPrevious: _safeCurrentPage == 0
+                      ? null
+                      : () {
+                          setState(() {
+                            _currentPage = _safeCurrentPage - 1;
+                          });
+                        },
+                  onNext: _safeCurrentPage >= _totalPages - 1
+                      ? null
+                      : () {
+                          setState(() {
+                            _currentPage = _safeCurrentPage + 1;
+                          });
+                        },
+                ),
               ],
             ),
         ],
+      ),
+    );
+  }
+}
+
+class _UsersPaginationBar extends StatelessWidget {
+  const _UsersPaginationBar({
+    required this.currentPage,
+    required this.totalPages,
+    required this.totalUsers,
+    required this.startIndex,
+    required this.endIndex,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final int currentPage;
+  final int totalPages;
+  final int totalUsers;
+  final int startIndex;
+  final int endIndex;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final firstVisible = totalUsers == 0 ? 0 : startIndex + 1;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Wrap(
+          spacing: 12,
+          runSpacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          alignment: WrapAlignment.spaceBetween,
+          children: [
+            Text(
+              'Mostrando $firstVisible-$endIndex de $totalUsers usuarios',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: onPrevious,
+                  icon: const Icon(Icons.chevron_left_rounded),
+                  label: const Text('Anterior'),
+                ),
+                const SizedBox(width: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 9,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppPalette.orangeSoft,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppPalette.line),
+                  ),
+                  child: Text(
+                    'Pagina ${currentPage + 1} de $totalPages',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                OutlinedButton.icon(
+                  onPressed: onNext,
+                  icon: const Icon(Icons.chevron_right_rounded),
+                  label: const Text('Siguiente'),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
