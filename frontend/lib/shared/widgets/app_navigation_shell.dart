@@ -111,6 +111,14 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
     });
   }
 
+  void _handleSystemBack() {
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    if (_selectedSection != AppSection.home) {
+      _selectSection(AppSection.home);
+    }
+  }
+
   Widget _buildContent() {
     switch (_selectedSection) {
       case AppSection.home:
@@ -246,39 +254,47 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
             ? 430.0
             : (isDesktop ? 1280.0 : 480.0);
 
-        return Scaffold(
-          backgroundColor: AppPalette.cream,
-          body: Stack(
-            children: [
-              const Positioned(
-                top: -120,
-                right: -60,
-                child: _BackgroundOrb(size: 300, color: Color(0x146D56A0)),
-              ),
-              const Positioned(
-                left: -100,
-                bottom: -20,
-                child: _BackgroundOrb(size: 260, color: Color(0x127D67B1)),
-              ),
-              SafeArea(
-                minimum: EdgeInsets.all(
-                  useFloatingFrame ? (isDesktop ? 22 : 12) : 0,
+        return PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, result) {
+            if (!didPop) {
+              _handleSystemBack();
+            }
+          },
+          child: Scaffold(
+            backgroundColor: AppPalette.cream,
+            body: Stack(
+              children: [
+                const Positioned(
+                  top: -120,
+                  right: -60,
+                  child: _BackgroundOrb(size: 300, color: Color(0x146D56A0)),
                 ),
-                child: useFloatingFrame
-                    ? Center(
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: framedShellWidth,
+                const Positioned(
+                  left: -100,
+                  bottom: -20,
+                  child: _BackgroundOrb(size: 260, color: Color(0x127D67B1)),
+                ),
+                SafeArea(
+                  minimum: EdgeInsets.all(
+                    useFloatingFrame ? (isDesktop ? 22 : 12) : 0,
+                  ),
+                  child: useFloatingFrame
+                      ? Center(
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: framedShellWidth,
+                            ),
+                            child: SizedBox(
+                              height: frameHeight,
+                              child: shellContent,
+                            ),
                           ),
-                          child: SizedBox(
-                            height: frameHeight,
-                            child: shellContent,
-                          ),
-                        ),
-                      )
-                    : SizedBox.expand(child: shellContent),
-              ),
-            ],
+                        )
+                      : SizedBox.expand(child: shellContent),
+                ),
+              ],
+            ),
           ),
         );
       },

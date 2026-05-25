@@ -391,7 +391,7 @@ class _UsersScreenState extends State<UsersScreen> {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              'Aqui el administrador puede gestionar las cuentas con rol administrador, control y usuario externo.',
+                              'Aqui el administrador puede gestionar las cuentas con rol administrador, control y funcionario.',
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
                           ],
@@ -420,7 +420,7 @@ class _UsersScreenState extends State<UsersScreen> {
                         icon: Icons.fact_check_outlined,
                       ),
                       _UserStatCard(
-                        label: 'Externos',
+                        label: 'Funcionarios',
                         value: '$_externalCount',
                         icon: Icons.person_outline_rounded,
                       ),
@@ -1295,12 +1295,13 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                       Text(
                         _isEditing
                             ? 'Actualiza los datos del usuario y guarda los cambios.'
-                            : 'Completa los mismos datos del registro principal y define si la cuenta sera de administrador, control o usuario externo.',
+                            : 'Completa los mismos datos del registro principal y define si la cuenta sera de administrador, control o funcionario.',
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       const SizedBox(height: 18),
                       _DropdownField<AppUserRole>(
                         label: 'Rol del sistema',
+                        isRequired: true,
                         value: _selectedRole,
                         items: const [
                           DropdownMenuItem(
@@ -1313,7 +1314,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                           ),
                           DropdownMenuItem(
                             value: AppUserRole.external,
-                            child: Text('Usuario externo'),
+                            child: Text('Funcionario'),
                           ),
                         ],
                         onChanged: (value) {
@@ -1329,6 +1330,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                       const SizedBox(height: 14),
                       _DropdownField<String>(
                         label: 'Tipo de vinculacion',
+                        isRequired: true,
                         value: _selectedTipoVinculo,
                         items: const [
                           DropdownMenuItem(value: 'ITEM', child: Text('Item')),
@@ -1360,6 +1362,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         controller: _ciController,
                         label: 'CI',
                         hint: 'Ingresa el carnet de identidad',
+                        isRequired: true,
                         validator: _requiredValidator('Ingresa el CI.'),
                       ),
                       const SizedBox(height: 14),
@@ -1367,6 +1370,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         controller: _nombreCompletoController,
                         label: 'Nombre completo',
                         hint: 'Ingresa los nombres',
+                        isRequired: true,
                         validator: _requiredValidator('Ingresa los nombres.'),
                       ),
                       const SizedBox(height: 14),
@@ -1374,6 +1378,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         controller: _primerApellidoController,
                         label: 'Primer apellido',
                         hint: 'Ingresa el primer apellido',
+                        isRequired: true,
                         validator: _requiredValidator(
                           'Ingresa el primer apellido.',
                         ),
@@ -1383,6 +1388,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         controller: _segundoApellidoController,
                         label: 'Segundo apellido',
                         hint: 'Ingresa el segundo apellido',
+                        isRequired: true,
                         validator: _requiredValidator(
                           'Ingresa el segundo apellido.',
                         ),
@@ -1400,6 +1406,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         label: 'Unidad / oficina',
                         hint: 'Selecciona una unidad registrada',
                         icon: Icons.apartment_rounded,
+                        isRequired: true,
                         onTap: _pickOffice,
                         validator: _requiredValidator(
                           'Selecciona una unidad valida.',
@@ -1425,6 +1432,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         label: 'Cargo',
                         hint: 'Selecciona un cargo registrado',
                         icon: Icons.badge_outlined,
+                        isRequired: true,
                         onTap: _pickCargo,
                         validator: _requiredValidator(
                           'Selecciona un cargo valido.',
@@ -1450,6 +1458,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                           controller: _numeroItemController,
                           label: 'Numero item',
                           hint: 'Ingresa el numero item',
+                          isRequired: true,
                           validator: _requiredValidator(
                             'Ingresa el numero item.',
                           ),
@@ -1458,6 +1467,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                       const SizedBox(height: 14),
                       _DropdownField<bool>(
                         label: 'Estado',
+                        isRequired: true,
                         value: _selectedActivo,
                         items: const [
                           DropdownMenuItem(value: true, child: Text('Activo')),
@@ -1492,6 +1502,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                             ? 'usuario@admin.com'
                             : 'usuario@correo.com',
                         keyboardType: TextInputType.emailAddress,
+                        isRequired: true,
                         validator: (value) {
                           final email = value?.trim().toLowerCase() ?? '';
 
@@ -1516,10 +1527,9 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                       _FormField(
                         controller: _passwordController,
                         label: 'Contrasena',
-                        hint: _isEditing
-                            ? 'Deja vacio para mantener la actual'
-                            : 'Minimo 6 caracteres',
+                        hint: '*******',
                         obscureText: _hidePassword,
+                        isRequired: !_isEditing,
                         suffixIcon: IconButton(
                           onPressed: () {
                             setState(() {
@@ -1550,10 +1560,9 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                       _FormField(
                         controller: _confirmPasswordController,
                         label: 'Confirmar contrasena',
-                        hint: _isEditing
-                            ? 'Repite la nueva contrasena'
-                            : 'Repite la contrasena',
+                        hint: '*******',
                         obscureText: _hideConfirmPassword,
+                        isRequired: !_isEditing,
                         suffixIcon: IconButton(
                           onPressed: () {
                             setState(() {
@@ -1662,6 +1671,7 @@ class _FormField extends StatelessWidget {
     this.obscureText = false,
     this.suffixIcon,
     this.onFieldSubmitted,
+    this.isRequired = false,
   });
 
   final TextEditingController controller;
@@ -1672,6 +1682,7 @@ class _FormField extends StatelessWidget {
   final bool obscureText;
   final Widget? suffixIcon;
   final ValueChanged<String>? onFieldSubmitted;
+  final bool isRequired;
 
   @override
   Widget build(BuildContext context) {
@@ -1682,7 +1693,7 @@ class _FormField extends StatelessWidget {
       validator: validator,
       onFieldSubmitted: onFieldSubmitted,
       decoration: InputDecoration(
-        labelText: label,
+        label: _RequiredFieldLabel(label: label, isRequired: isRequired),
         hintText: hint,
         suffixIcon: suffixIcon,
       ),
@@ -1696,12 +1707,14 @@ class _DropdownField<T> extends StatelessWidget {
     required this.value,
     required this.items,
     required this.onChanged,
+    this.isRequired = false,
   });
 
   final String label;
   final T value;
   final List<DropdownMenuItem<T>> items;
   final ValueChanged<T?> onChanged;
+  final bool isRequired;
 
   @override
   Widget build(BuildContext context) {
@@ -1709,7 +1722,9 @@ class _DropdownField<T> extends StatelessWidget {
       initialValue: value,
       items: items,
       onChanged: onChanged,
-      decoration: InputDecoration(labelText: label),
+      decoration: InputDecoration(
+        label: _RequiredFieldLabel(label: label, isRequired: isRequired),
+      ),
     );
   }
 }
@@ -1722,6 +1737,7 @@ class _PickerField extends StatelessWidget {
     required this.icon,
     required this.onTap,
     required this.validator,
+    this.isRequired = false,
   });
 
   final TextEditingController controller;
@@ -1730,6 +1746,7 @@ class _PickerField extends StatelessWidget {
   final IconData icon;
   final Future<void> Function() onTap;
   final String? Function(String?) validator;
+  final bool isRequired;
 
   @override
   Widget build(BuildContext context) {
@@ -1743,7 +1760,11 @@ class _PickerField extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: Theme.of(context).textTheme.bodySmall),
+            _RequiredFieldLabel(
+              label: label,
+              isRequired: isRequired,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             const SizedBox(height: 8),
             InkWell(
               borderRadius: BorderRadius.circular(18),
@@ -1765,12 +1786,18 @@ class _PickerField extends StatelessWidget {
                 child: Row(
                   children: [
                     Expanded(
-                      child: Text(
-                        hasValue ? controller.text.trim() : hint,
-                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          color: hasValue ? AppPalette.night : AppPalette.muted,
-                        ),
-                      ),
+                      child: hasValue
+                          ? Text(
+                              controller.text.trim(),
+                              style: Theme.of(context).textTheme.bodyLarge
+                                  ?.copyWith(color: AppPalette.night),
+                            )
+                          : _RequiredFieldLabel(
+                              label: hint,
+                              isRequired: isRequired,
+                              style: Theme.of(context).textTheme.bodyLarge
+                                  ?.copyWith(color: AppPalette.muted),
+                            ),
                     ),
                     Icon(icon, color: AppPalette.orange),
                   ],
@@ -2226,6 +2253,42 @@ String _tipoVinculoLabel(String value) {
 
 String _normalizeSearchText(String value) {
   return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+}
+
+class _RequiredFieldLabel extends StatelessWidget {
+  const _RequiredFieldLabel({
+    required this.label,
+    required this.isRequired,
+    this.style,
+  });
+
+  final String label;
+  final bool isRequired;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    final resolvedStyle =
+        style ?? Theme.of(context).inputDecorationTheme.labelStyle;
+
+    if (!isRequired) {
+      return Text(label, style: resolvedStyle);
+    }
+
+    return RichText(
+      overflow: TextOverflow.ellipsis,
+      text: TextSpan(
+        style: resolvedStyle,
+        children: [
+          TextSpan(text: label),
+          const TextSpan(
+            text: '*',
+            style: TextStyle(color: Color(0xFFD94841)),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 String? Function(String?) _requiredValidator(String message) {

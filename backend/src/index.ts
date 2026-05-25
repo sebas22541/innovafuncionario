@@ -39,7 +39,12 @@ const DB_POOL_CONNECTION_TIMEOUT_MS = clampInt(
   500,
   30_000,
 );
-const DYNAMIC_QR_TTL_SECONDS = 30;
+const DYNAMIC_QR_TTL_SECONDS = clampInt(
+  process.env.QR_DYNAMIC_TTL_SECONDS ?? null,
+  300,
+  30,
+  3600,
+);
 const DYNAMIC_QR_VERSION = "DQR1";
 const DYNAMIC_QR_SIGNATURE_LENGTH = 16;
 const REFERENCE_CACHE_TTL_MS = 5 * 60 * 1000;

@@ -43,6 +43,9 @@ class _AuthScreenState extends State<AuthScreen> {
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController =
       TextEditingController();
+  final FocusNode _emailFocusNode = FocusNode();
+  final FocusNode _passwordFocusNode = FocusNode();
+  final FocusNode _confirmPasswordFocusNode = FocusNode();
 
   _AuthStage _stage = _AuthStage.welcome;
   bool _hidePassword = true;
@@ -84,6 +87,9 @@ class _AuthScreenState extends State<AuthScreen> {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _emailFocusNode.dispose();
+    _passwordFocusNode.dispose();
+    _confirmPasswordFocusNode.dispose();
     super.dispose();
   }
 
@@ -108,6 +114,14 @@ class _AuthScreenState extends State<AuthScreen> {
       if (_availableCargos.isEmpty && !_isLoadingCargos) {
         _loadCargos();
       }
+    }
+  }
+
+  void _handleSystemBack() {
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    if (_stage != _AuthStage.welcome) {
+      _setStage(_AuthStage.welcome);
     }
   }
 
@@ -397,119 +411,126 @@ class _AuthScreenState extends State<AuthScreen> {
   Widget build(BuildContext context) {
     final viewInsets = MediaQuery.viewInsetsOf(context);
 
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: Stack(
-        children: [
-          const Positioned.fill(child: IgnorePointer(child: _AuthBackdrop())),
-          SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final horizontalPadding = constraints.maxWidth >= 720
-                    ? 28.0
-                    : 18.0;
-                final stageMinHeight = constraints.maxHeight -
-                    20 -
-                    viewInsets.bottom;
-                final resolvedStageMinHeight = stageMinHeight > 0
-                    ? stageMinHeight
-                    : 0.0;
-                final stageContent = switch (_stage) {
-                  _AuthStage.welcome => _AuthWelcomeScreen(
-                    onRegister: () => _setStage(_AuthStage.register),
-                    onLogin: () => _setStage(_AuthStage.login),
-                  ),
-                  _AuthStage.login || _AuthStage.register => _AuthFormCard(
-                    formKey: _formKey,
-                    isRegisterMode: _isRegisterMode,
-                    isSubmitting: _isSubmitting,
-                    acceptedTerms: _acceptedTerms,
-                    showTermsError: _showTermsError,
-                    nombreCompletoController: _nombreCompletoController,
-                    primerApellidoController: _primerApellidoController,
-                    segundoApellidoController: _segundoApellidoController,
-                    tercerApellidoController: _tercerApellidoController,
-                    ciController: _ciController,
-                    unidadController: _unidadController,
-                    cargoController: _cargoController,
-                    numeroItemController: _numeroItemController,
-                    emailController: _emailController,
-                    passwordController: _passwordController,
-                    confirmPasswordController: _confirmPasswordController,
-                    hidePassword: _hidePassword,
-                    hideConfirmPassword: _hideConfirmPassword,
-                    selectedTipoVinculo: _selectedTipoVinculo,
-                    isLoadingOffices: _isLoadingOffices,
-                    officeLoadError: _officeLoadError,
-                    isLoadingCargos: _isLoadingCargos,
-                    cargoLoadError: _cargoLoadError,
-                    photoBytes: _photoBytes,
-                    showPhotoError: _showPhotoError,
-                    onBack: () => _setStage(_AuthStage.welcome),
-                    onTogglePasswordVisibility: () => setState(() {
-                      _hidePassword = !_hidePassword;
-                    }),
-                    onToggleConfirmPasswordVisibility: () => setState(() {
-                      _hideConfirmPassword = !_hideConfirmPassword;
-                    }),
-                    onTipoVinculoChanged: (value) => setState(() {
-                      _selectedTipoVinculo = value;
-                      if (value != 'ITEM') {
-                        _numeroItemController.clear();
-                      }
-                    }),
-                    onAcceptedTermsChanged: (value) => setState(() {
-                      _acceptedTerms = value;
-                      _showTermsError = false;
-                    }),
-                    onPickOffice: _pickOffice,
-                    onRetryLoadOffices: _loadOffices,
-                    onPickCargo: _pickCargo,
-                    onRetryLoadCargos: _loadCargos,
-                    onPickPhoto: _pickPhoto,
-                    onSubmit: _submit,
-                    minHeight: resolvedStageMinHeight,
-                  ),
-                };
-
-                return AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
-                  child: SingleChildScrollView(
-                    key: ValueKey(_stage),
-                    controller: _formScrollController,
-                    padding: EdgeInsets.fromLTRB(
-                      horizontalPadding,
-                      6,
-                      horizontalPadding,
-                      14 + viewInsets.bottom,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          _handleSystemBack();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        body: Stack(
+          children: [
+            const Positioned.fill(child: IgnorePointer(child: _AuthBackdrop())),
+            SafeArea(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final horizontalPadding = constraints.maxWidth >= 720
+                      ? 28.0
+                      : 18.0;
+                  final stageMinHeight =
+                      constraints.maxHeight - 20 - viewInsets.bottom;
+                  final resolvedStageMinHeight = stageMinHeight > 0
+                      ? stageMinHeight
+                      : 0.0;
+                  final stageContent = switch (_stage) {
+                    _AuthStage.welcome => _AuthWelcomeScreen(
+                      onRegister: () => _setStage(_AuthStage.register),
+                      onLogin: () => _setStage(_AuthStage.login),
                     ),
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: _stage == _AuthStage.register ? 620 : 390,
-                          minHeight: _stage == _AuthStage.register
-                              ? 0
-                              : resolvedStageMinHeight,
+                    _AuthStage.login || _AuthStage.register => _AuthFormCard(
+                      formKey: _formKey,
+                      isRegisterMode: _isRegisterMode,
+                      isSubmitting: _isSubmitting,
+                      acceptedTerms: _acceptedTerms,
+                      showTermsError: _showTermsError,
+                      nombreCompletoController: _nombreCompletoController,
+                      primerApellidoController: _primerApellidoController,
+                      segundoApellidoController: _segundoApellidoController,
+                      tercerApellidoController: _tercerApellidoController,
+                      ciController: _ciController,
+                      unidadController: _unidadController,
+                      cargoController: _cargoController,
+                      numeroItemController: _numeroItemController,
+                      emailController: _emailController,
+                      passwordController: _passwordController,
+                      confirmPasswordController: _confirmPasswordController,
+                      emailFocusNode: _emailFocusNode,
+                      passwordFocusNode: _passwordFocusNode,
+                      confirmPasswordFocusNode: _confirmPasswordFocusNode,
+                      hidePassword: _hidePassword,
+                      hideConfirmPassword: _hideConfirmPassword,
+                      selectedTipoVinculo: _selectedTipoVinculo,
+                      isLoadingOffices: _isLoadingOffices,
+                      officeLoadError: _officeLoadError,
+                      isLoadingCargos: _isLoadingCargos,
+                      cargoLoadError: _cargoLoadError,
+                      photoBytes: _photoBytes,
+                      showPhotoError: _showPhotoError,
+                      onBack: () => _setStage(_AuthStage.welcome),
+                      onTogglePasswordVisibility: () => setState(() {
+                        _hidePassword = !_hidePassword;
+                      }),
+                      onToggleConfirmPasswordVisibility: () => setState(() {
+                        _hideConfirmPassword = !_hideConfirmPassword;
+                      }),
+                      onTipoVinculoChanged: (value) => setState(() {
+                        _selectedTipoVinculo = value;
+                        if (value != 'ITEM') {
+                          _numeroItemController.clear();
+                        }
+                      }),
+                      onAcceptedTermsChanged: (value) => setState(() {
+                        _acceptedTerms = value;
+                        _showTermsError = false;
+                      }),
+                      onPickOffice: _pickOffice,
+                      onRetryLoadOffices: _loadOffices,
+                      onPickCargo: _pickCargo,
+                      onRetryLoadCargos: _loadCargos,
+                      onPickPhoto: _pickPhoto,
+                      onSubmit: _submit,
+                      minHeight: resolvedStageMinHeight,
+                    ),
+                  };
+
+                  return AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    child: SingleChildScrollView(
+                      key: ValueKey(_stage),
+                      controller: _formScrollController,
+                      padding: EdgeInsets.fromLTRB(
+                        horizontalPadding,
+                        6,
+                        horizontalPadding,
+                        14 + viewInsets.bottom,
+                      ),
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: _stage == _AuthStage.register ? 620 : 390,
+                            minHeight: _stage == _AuthStage.register
+                                ? 0
+                                : resolvedStageMinHeight,
+                          ),
+                          child: stageContent,
                         ),
-                        child: stageContent,
                       ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 }
 
 class _AuthWelcomeScreen extends StatelessWidget {
-  const _AuthWelcomeScreen({
-    required this.onRegister,
-    required this.onLogin,
-  });
+  const _AuthWelcomeScreen({required this.onRegister, required this.onLogin});
 
   final VoidCallback onRegister;
   final VoidCallback onLogin;
@@ -573,6 +594,9 @@ class _AuthFormCard extends StatelessWidget {
     required this.emailController,
     required this.passwordController,
     required this.confirmPasswordController,
+    required this.emailFocusNode,
+    required this.passwordFocusNode,
+    required this.confirmPasswordFocusNode,
     required this.hidePassword,
     required this.hideConfirmPassword,
     required this.selectedTipoVinculo,
@@ -612,6 +636,9 @@ class _AuthFormCard extends StatelessWidget {
   final TextEditingController emailController;
   final TextEditingController passwordController;
   final TextEditingController confirmPasswordController;
+  final FocusNode emailFocusNode;
+  final FocusNode passwordFocusNode;
+  final FocusNode confirmPasswordFocusNode;
   final bool hidePassword;
   final bool hideConfirmPassword;
   final String selectedTipoVinculo;
@@ -653,9 +680,7 @@ class _AuthFormCard extends StatelessWidget {
                   children: [
                     _AuthBackButton(onTap: onBack),
                     const SizedBox(height: 12),
-                    Expanded(
-                      child: Center(child: _buildLoginView(context)),
-                    ),
+                    Expanded(child: Center(child: _buildLoginView(context))),
                   ],
                 ),
               );
@@ -684,11 +709,13 @@ class _AuthFormCard extends StatelessWidget {
         const SizedBox(height: 26),
         _AuthField(
           controller: emailController,
+          focusNode: emailFocusNode,
           label: 'Correo',
           hint: 'Correo',
           keyboardType: TextInputType.emailAddress,
           textInputAction: TextInputAction.next,
           autofillHints: const [AutofillHints.username, AutofillHints.email],
+          onFieldSubmitted: (_) => passwordFocusNode.requestFocus(),
           validator: (value) {
             final email = value?.trim() ?? '';
 
@@ -702,8 +729,9 @@ class _AuthFormCard extends StatelessWidget {
         const SizedBox(height: 12),
         _AuthField(
           controller: passwordController,
+          focusNode: passwordFocusNode,
           label: 'Contrasena',
-          hint: 'Contrasena',
+          hint: '*******',
           obscureText: hidePassword,
           textInputAction: TextInputAction.done,
           autofillHints: const [AutofillHints.password],
@@ -742,14 +770,16 @@ class _AuthFormCard extends StatelessWidget {
       children: [
         _AuthField(
           controller: ciController,
-          label: 'Nro. Documento *',
-          hint: 'Nro. Documento *',
+          label: 'Nro. Documento',
+          hint: 'Nro. Documento',
+          isRequired: true,
           textInputAction: TextInputAction.next,
           validator: _requiredValidator('Ingresa tu CI.'),
         ),
         const SizedBox(height: 12),
         _DropdownField<String>(
-          label: 'Tipo de vinculacion *',
+          label: 'Tipo de vinculacion',
+          isRequired: true,
           value: selectedTipoVinculo,
           items: const [
             DropdownMenuItem(value: 'ITEM', child: Text('Item')),
@@ -794,8 +824,9 @@ class _AuthFormCard extends StatelessWidget {
         const SizedBox(height: 14),
         _AuthField(
           controller: nombreCompletoController,
-          label: 'Nombres *',
-          hint: 'Nombres *',
+          label: 'Nombres',
+          hint: 'Nombres',
+          isRequired: true,
           textInputAction: TextInputAction.next,
           autofillHints: const [AutofillHints.name],
           validator: _requiredValidator('Ingresa tu nombre completo.'),
@@ -803,16 +834,18 @@ class _AuthFormCard extends StatelessWidget {
         const SizedBox(height: 12),
         _AuthField(
           controller: primerApellidoController,
-          label: 'Primer Apellido *',
-          hint: 'Primer Apellido *',
+          label: 'Primer Apellido',
+          hint: 'Primer Apellido',
+          isRequired: true,
           textInputAction: TextInputAction.next,
           validator: _requiredValidator('Ingresa tu primer apellido.'),
         ),
         const SizedBox(height: 12),
         _AuthField(
           controller: segundoApellidoController,
-          label: 'Segundo Apellido *',
-          hint: 'Segundo Apellido *',
+          label: 'Segundo Apellido',
+          hint: 'Segundo Apellido',
+          isRequired: true,
           textInputAction: TextInputAction.next,
           validator: _requiredValidator('Ingresa tu segundo apellido.'),
         ),
@@ -827,11 +860,14 @@ class _AuthFormCard extends StatelessWidget {
         const SizedBox(height: 12),
         _AuthField(
           controller: emailController,
-          label: 'Correo Electronico *',
-          hint: 'Correo Electronico *',
+          focusNode: emailFocusNode,
+          label: 'Correo Electronico',
+          hint: 'Correo Electronico',
+          isRequired: true,
           keyboardType: TextInputType.emailAddress,
           textInputAction: TextInputAction.next,
           autofillHints: const [AutofillHints.username, AutofillHints.email],
+          onFieldSubmitted: (_) => passwordFocusNode.requestFocus(),
           validator: (value) {
             final email = value?.trim() ?? '';
 
@@ -849,11 +885,14 @@ class _AuthFormCard extends StatelessWidget {
         const SizedBox(height: 12),
         _AuthField(
           controller: passwordController,
-          label: 'Contrasena *',
-          hint: 'Contrasena *',
+          focusNode: passwordFocusNode,
+          label: 'Contrasena',
+          hint: '*******',
+          isRequired: true,
           obscureText: hidePassword,
           textInputAction: TextInputAction.next,
           autofillHints: const [AutofillHints.newPassword],
+          onFieldSubmitted: (_) => confirmPasswordFocusNode.requestFocus(),
           suffixIcon: IconButton(
             onPressed: onTogglePasswordVisibility,
             icon: Icon(
@@ -874,8 +913,10 @@ class _AuthFormCard extends StatelessWidget {
         const SizedBox(height: 12),
         _AuthField(
           controller: confirmPasswordController,
-          label: 'Confirmar Contrasena *',
-          hint: 'Confirmar Contrasena *',
+          focusNode: confirmPasswordFocusNode,
+          label: 'Confirmar Contrasena',
+          hint: '*******',
+          isRequired: true,
           obscureText: hideConfirmPassword,
           textInputAction: TextInputAction.next,
           suffixIcon: IconButton(
@@ -898,12 +939,11 @@ class _AuthFormCard extends StatelessWidget {
         const SizedBox(height: 12),
         _SelectionField(
           controller: unidadController,
-          label: 'Unidad / Oficina *',
-          hint: isLoadingOffices
-              ? 'Cargando unidades...'
-              : 'Unidad / Oficina *',
+          label: 'Unidad / Oficina',
+          hint: isLoadingOffices ? 'Cargando unidades...' : 'Unidad / Oficina',
           icon: Icons.apartment_rounded,
           isLoading: isLoadingOffices,
+          isRequired: true,
           onTap: onPickOffice,
           validator: _requiredValidator('Selecciona tu unidad.'),
         ),
@@ -917,10 +957,11 @@ class _AuthFormCard extends StatelessWidget {
         const SizedBox(height: 12),
         _SelectionField(
           controller: cargoController,
-          label: 'Cargo *',
-          hint: isLoadingCargos ? 'Cargando cargos...' : 'Cargo *',
+          label: 'Cargo',
+          hint: isLoadingCargos ? 'Cargando cargos...' : 'Cargo',
           icon: Icons.badge_outlined,
           isLoading: isLoadingCargos,
+          isRequired: true,
           onTap: onPickCargo,
           validator: _requiredValidator('Selecciona tu cargo.'),
         ),
@@ -935,8 +976,9 @@ class _AuthFormCard extends StatelessWidget {
           const SizedBox(height: 12),
           _AuthField(
             controller: numeroItemController,
-            label: 'Nro. Item *',
-            hint: 'Nro. Item *',
+            label: 'Nro. Item',
+            hint: 'Nro. Item',
+            isRequired: true,
             textInputAction: TextInputAction.done,
             validator: _requiredValidator('Ingresa tu numero item.'),
           ),
@@ -1046,7 +1088,9 @@ class _AuthField extends StatelessWidget {
     this.obscureText = false,
     this.suffixIcon,
     this.autofillHints,
+    this.focusNode,
     this.onFieldSubmitted,
+    this.isRequired = false,
   });
 
   final TextEditingController controller;
@@ -1058,12 +1102,15 @@ class _AuthField extends StatelessWidget {
   final bool obscureText;
   final Widget? suffixIcon;
   final Iterable<String>? autofillHints;
+  final FocusNode? focusNode;
   final ValueChanged<String>? onFieldSubmitted;
+  final bool isRequired;
 
   @override
   Widget build(BuildContext context) {
     return TextFormField(
       controller: controller,
+      focusNode: focusNode,
       keyboardType: keyboardType,
       textInputAction: textInputAction,
       obscureText: obscureText,
@@ -1074,7 +1121,7 @@ class _AuthField extends StatelessWidget {
         filled: true,
         fillColor: const Color(0xFFF0EEF6),
         floatingLabelBehavior: FloatingLabelBehavior.never,
-        labelText: label,
+        label: _RequiredFieldLabel(label: label, isRequired: isRequired),
         hintText: hint,
         suffixIcon: suffixIcon,
         hintStyle: const TextStyle(color: Color(0xFF585364), fontSize: 14),
@@ -1117,6 +1164,7 @@ class _SelectionField extends StatelessWidget {
     required this.validator,
     required this.onTap,
     this.isLoading = false,
+    this.isRequired = false,
   });
 
   final TextEditingController controller;
@@ -1126,6 +1174,7 @@ class _SelectionField extends StatelessWidget {
   final String? Function(String?) validator;
   final Future<void> Function() onTap;
   final bool isLoading;
+  final bool isRequired;
 
   @override
   Widget build(BuildContext context) {
@@ -1147,7 +1196,7 @@ class _SelectionField extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Semantics(
-              label: label,
+              label: isRequired ? '$label, obligatorio' : label,
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
@@ -1177,19 +1226,21 @@ class _SelectionField extends StatelessWidget {
                     child: Row(
                       children: [
                         Expanded(
-                          child: Text(
-                            hasValue ? controller.text.trim() : hint,
-                            style:
-                                (hasValue
-                                    ? textTheme.bodyLarge?.copyWith(
-                                        color: const Color(0xFF2E2D36),
-                                        fontWeight: FontWeight.w500,
-                                      )
-                                    : textTheme.bodyLarge?.copyWith(
-                                        color: labelColor,
-                                      )) ??
-                                const TextStyle(),
-                          ),
+                          child: hasValue
+                              ? Text(
+                                  controller.text.trim(),
+                                  style: textTheme.bodyLarge?.copyWith(
+                                    color: const Color(0xFF2E2D36),
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                )
+                              : _RequiredFieldLabel(
+                                  label: hint,
+                                  isRequired: isRequired && !isLoading,
+                                  style: textTheme.bodyLarge?.copyWith(
+                                    color: labelColor,
+                                  ),
+                                ),
                         ),
                         const SizedBox(width: 12),
                         if (isLoading)
@@ -1229,12 +1280,14 @@ class _DropdownField<T> extends StatelessWidget {
     required this.value,
     required this.items,
     required this.onChanged,
+    this.isRequired = false,
   });
 
   final String label;
   final T value;
   final List<DropdownMenuItem<T>> items;
   final ValueChanged<T?> onChanged;
+  final bool isRequired;
 
   @override
   Widget build(BuildContext context) {
@@ -1247,7 +1300,7 @@ class _DropdownField<T> extends StatelessWidget {
       decoration: InputDecoration(
         filled: true,
         fillColor: const Color(0xFFF0EEF6),
-        labelText: label,
+        label: _RequiredFieldLabel(label: label, isRequired: isRequired),
         floatingLabelBehavior: FloatingLabelBehavior.never,
         labelStyle: const TextStyle(color: Color(0xFF585364), fontSize: 14),
         contentPadding: const EdgeInsets.symmetric(
@@ -2022,6 +2075,42 @@ class _CargoSelectionSheetState extends State<_CargoSelectionSheet> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _RequiredFieldLabel extends StatelessWidget {
+  const _RequiredFieldLabel({
+    required this.label,
+    required this.isRequired,
+    this.style,
+  });
+
+  final String label;
+  final bool isRequired;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    final resolvedStyle =
+        style ?? Theme.of(context).inputDecorationTheme.labelStyle;
+
+    if (!isRequired) {
+      return Text(label, style: resolvedStyle);
+    }
+
+    return RichText(
+      overflow: TextOverflow.ellipsis,
+      text: TextSpan(
+        style: resolvedStyle,
+        children: [
+          TextSpan(text: label),
+          const TextSpan(
+            text: '*',
+            style: TextStyle(color: Color(0xFFD94841)),
+          ),
+        ],
       ),
     );
   }

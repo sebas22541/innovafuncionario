@@ -23,6 +23,7 @@ class AppTheme {
 
     return ThemeData(
       useMaterial3: true,
+      fontFamily: 'Poppins',
       colorScheme: colorScheme,
       scaffoldBackgroundColor: AppPalette.surface,
       textTheme: baseTextTheme.copyWith(
@@ -30,22 +31,20 @@ class AppTheme {
           color: AppPalette.ink,
           fontSize: 38,
           fontWeight: FontWeight.w700,
-          letterSpacing: -1.1,
+          letterSpacing: 0,
           height: 1.05,
-          fontFamily: 'Georgia',
         ),
         headlineMedium: baseTextTheme.headlineMedium?.copyWith(
           color: AppPalette.ink,
           fontSize: 30,
           fontWeight: FontWeight.w700,
-          letterSpacing: -0.9,
+          letterSpacing: 0,
           height: 1.08,
-          fontFamily: 'Georgia',
         ),
         titleLarge: baseTextTheme.titleLarge?.copyWith(
           color: AppPalette.ink,
           fontWeight: FontWeight.w700,
-          letterSpacing: -0.3,
+          letterSpacing: 0,
         ),
         titleMedium: baseTextTheme.titleMedium?.copyWith(
           color: AppPalette.ink,

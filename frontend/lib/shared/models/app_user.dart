@@ -19,7 +19,7 @@ extension AppUserRoleX on AppUserRole {
       case AppUserRole.control:
         return 'Control';
       case AppUserRole.external:
-        return 'Usuario externo';
+        return 'Funcionario';
     }
   }
 }

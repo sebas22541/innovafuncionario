@@ -663,10 +663,7 @@ class _CredentialPreview extends StatelessWidget {
 }
 
 class _CredentialErrorView extends StatelessWidget {
-  const _CredentialErrorView({
-    required this.message,
-    required this.onRetry,
-  });
+  const _CredentialErrorView({required this.message, required this.onRetry});
 
   final String message;
   final Future<void> Function() onRetry;
@@ -687,9 +684,9 @@ class _CredentialErrorView extends StatelessWidget {
           Text(
             message,
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: const Color(0xFFD94841),
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: const Color(0xFFD94841)),
           ),
           const SizedBox(height: 16),
           OutlinedButton.icon(
@@ -704,6 +701,8 @@ class _CredentialErrorView extends StatelessWidget {
 }
 
 class _MyQrDialogState extends State<_MyQrDialog> {
+  static const Duration _minimumReusableQrTime = Duration(seconds: 15);
+
   Timer? _countdownTimer;
   DynamicQrSession? _dynamicQrSession;
   Duration _remaining = Duration.zero;
@@ -745,7 +744,9 @@ class _MyQrDialogState extends State<_MyQrDialog> {
     try {
       final activeDynamicQr = await dependencies.authApiService
           .fetchActiveDynamicQr(email: widget.currentUser.email);
-      final dynamicQr = activeDynamicQr ?? await _generateFreshDynamicQr();
+      final dynamicQr = _hasEnoughTimeToScan(activeDynamicQr)
+          ? activeDynamicQr!
+          : await _generateFreshDynamicQr();
 
       if (!mounted) {
         return;
@@ -852,6 +853,15 @@ class _MyQrDialogState extends State<_MyQrDialog> {
         _generationError = 'No fue posible generar tu QR dinamico.';
       });
     }
+  }
+
+  bool _hasEnoughTimeToScan(DynamicQrSession? session) {
+    if (session == null) {
+      return false;
+    }
+
+    return session.expiresAt.difference(DateTime.now()) >
+        _minimumReusableQrTime;
   }
 
   Future<DynamicQrSession> _generateFreshDynamicQr() async {
