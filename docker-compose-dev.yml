@@ -34,7 +34,7 @@ services:
       context: .
       dockerfile: ./.infra/frontend/prod/Dockerfile
       args:
-        BACKEND_BASE_URL: ${BACKEND_BASE_URL:-https://innovafuncionarioapidev.cochabamba.bo}
+        BACKEND_BASE_URL: ${FRONTEND_BACKEND_BASE_URL:-https://innovafuncionarioapidev.cochabamba.bo}
     restart: unless-stopped
     
     ports:
