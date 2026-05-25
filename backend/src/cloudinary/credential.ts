@@ -67,7 +67,6 @@ export async function generateAndStoreUserCredential(
 
   const token = normalizePublicToken(user.ci) ?? `id-${user.id}`;
   const frontPdfImagePublicId = `credencial-frente-pdf-${token}`;
-  const pdfPublicId = `credencial-${token}`;
   const frontPdfImageUrl = buildCloudinaryPdfPageImageUrl({
     cloudName,
     folder: "imagenes/credenciales",
@@ -91,28 +90,18 @@ export async function generateAndStoreUserCredential(
     frontImageUrl: frontPdfImageUrl,
   });
 
-  const [, pdfUrl] = await Promise.all([
-    uploadBufferToCloudinary({
-      buffer: Buffer.from(pdfBytes),
-      folder: "imagenes/credenciales",
-      publicId: frontPdfImagePublicId,
-      resourceType: "image",
-      filename: `${frontPdfImagePublicId}.pdf`,
-      mimetype: "application/pdf",
-    }),
-    uploadBufferToCloudinary({
-      buffer: Buffer.from(pdfBytes),
-      folder: "documentos/credenciales",
-      publicId: `${pdfPublicId}.pdf`,
-      resourceType: "raw",
-      filename: `${pdfPublicId}.pdf`,
-      mimetype: "application/pdf",
-    }),
-  ]);
+  await uploadBufferToCloudinary({
+    buffer: Buffer.from(pdfBytes),
+    folder: "imagenes/credenciales",
+    publicId: frontPdfImagePublicId,
+    resourceType: "image",
+    filename: `${frontPdfImagePublicId}.pdf`,
+    mimetype: "application/pdf",
+  });
 
   return {
     frontImageUrl: frontPdfImageUrl,
-    pdfUrl,
+    pdfUrl: frontPdfImageUrl,
     qrPayload,
     generatedAt: new Date().toISOString(),
   };
@@ -122,7 +111,20 @@ export async function generateUserCredentialPdf(
   user: CredentialUser,
   person: CredentialPerson,
 ) {
-  const qrPayload = buildDownloadCredentialQrPayload(user, person);
+  const cloudName = CLOUDINARY.cloud_name?.trim();
+
+  if (!cloudName) {
+    throw new HttpError(500, "Cloudinary no esta configurado.");
+  }
+
+  const token = normalizePublicToken(user.ci) ?? `id-${user.id}`;
+  const frontPdfImagePublicId = `credencial-frente-pdf-${token}`;
+  const frontImageUrl = buildCloudinaryPdfPageImageUrl({
+    cloudName,
+    folder: "imagenes/credenciales",
+    publicId: frontPdfImagePublicId,
+  });
+  const qrPayload = buildCredentialQrPayload(frontImageUrl, user, person);
   const qrPng = await QRCode.toBuffer(qrPayload, {
     type: "png",
     errorCorrectionLevel: "M",
@@ -138,7 +140,16 @@ export async function generateUserCredentialPdf(
     user,
     qrPng,
     qrPayload,
-    frontImageUrl: qrPayload,
+    frontImageUrl,
+  });
+
+  await uploadBufferToCloudinary({
+    buffer: Buffer.from(pdfBytes),
+    folder: "imagenes/credenciales",
+    publicId: frontPdfImagePublicId,
+    resourceType: "image",
+    filename: `${frontPdfImagePublicId}.pdf`,
+    mimetype: "application/pdf",
   });
 
   return pdfBytes;
@@ -600,25 +611,6 @@ function buildCredentialQrPayload(
   }
 
   return publicUrl.toString();
-}
-
-function buildDownloadCredentialQrPayload(
-  user: CredentialUser,
-  person: CredentialPerson,
-) {
-  const lookupCode = normalizeText(person?.codigo_qr);
-
-  if (lookupCode) {
-    return lookupCode;
-  }
-
-  const ci = normalizeText(user.ci);
-
-  if (ci) {
-    return ci;
-  }
-
-  return `USR-${user.id}`;
 }
 
 function stripVersionFromCloudinaryUrl(url: string) {
