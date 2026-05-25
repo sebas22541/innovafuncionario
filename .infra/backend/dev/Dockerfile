@@ -12,6 +12,7 @@ COPY backend/package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY backend/ ./
+COPY frontend/assets/templates/credencial.pdf ./assets/templates/credencial.pdf
 RUN npx prisma generate
 
 EXPOSE 3000

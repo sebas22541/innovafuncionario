@@ -50,10 +50,10 @@ export type UserCredentialResult = {
 
 const currentFilePath = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFilePath);
-const defaultTemplatePath = path.resolve(
-  currentDir,
-  "../../../frontend/assets/templates/credencial.pdf",
-);
+const defaultTemplatePaths = [
+  path.resolve(currentDir, "../../assets/templates/credencial.pdf"),
+  path.resolve(currentDir, "../../../frontend/assets/templates/credencial.pdf"),
+];
 
 export async function generateAndStoreUserCredential(
   user: CredentialUser,
@@ -172,9 +172,7 @@ async function buildCredentialPdf(input: {
   qrPayload: string;
   frontImageUrl: string;
 }) {
-  const templateBytes = await readFile(
-    process.env.CREDENTIAL_TEMPLATE_PATH?.trim() || defaultTemplatePath,
-  );
+  const templateBytes = await readCredentialTemplate();
   const pdf = await PDFDocument.load(templateBytes);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -205,6 +203,31 @@ async function buildCredentialPdf(input: {
   pdf.setAuthor("Gobierno Autonomo Municipal de Cochabamba");
 
   return pdf.save();
+}
+
+async function readCredentialTemplate() {
+  const configuredPath = process.env.CREDENTIAL_TEMPLATE_PATH?.trim();
+  const candidatePaths = configuredPath
+    ? [configuredPath, ...defaultTemplatePaths]
+    : defaultTemplatePaths;
+  const attemptedPaths: string[] = [];
+
+  for (const candidatePath of candidatePaths) {
+    attemptedPaths.push(candidatePath);
+
+    try {
+      return await readFile(candidatePath);
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
+  throw new HttpError(
+    500,
+    `No se encontro la plantilla de credencial. Rutas revisadas: ${attemptedPaths.join(", ")}`,
+  );
 }
 
 function drawFrontPageData(page: any, input: {
