@@ -42,21 +42,29 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            keyAlias = keystoreProperties["keyAlias"] as String
-            keyPassword = keystoreProperties["keyPassword"] as String
-            storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
-            storePassword = keystoreProperties["storePassword"] as String
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
         }
     }
 
     buildTypes {
-        getByName("profile") {
-            signingConfig = signingConfigs.getByName("release")
-        }
+        if (keystorePropertiesFile.exists()) {
+            getByName("profile") {
+                signingConfig = signingConfigs.getByName("release")
+            }
 
-        release {
-            signingConfig = signingConfigs.getByName("release")
+            release {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        } else {
+            release {
+                signingConfig = signingConfigs.getByName("debug")
+            }
         }
     }
 }

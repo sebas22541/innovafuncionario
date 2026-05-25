@@ -218,6 +218,49 @@ class AuthApiService {
     return AppUser.fromJson(_readMap(payload['data'], 'usuario'));
   }
 
+  Future<AppUser> updateManagedUser({
+    required String requesterEmail,
+    required int userId,
+    required AppUserRole role,
+    required String email,
+    required String? password,
+    required String nombreCompleto,
+    required String primerApellido,
+    required String segundoApellido,
+    required String tercerApellido,
+    required String ci,
+    required String tipoVinculo,
+    required int? oficinaId,
+    required String? cargoCodigo,
+    required String unidad,
+    required String cargo,
+    required String numeroItem,
+    required bool activo,
+    required String? fotoData,
+  }) async {
+    final payload = await _apiClient.putJson('/api/usuarios/$userId', {
+      'requesterEmail': requesterEmail,
+      'rol': role.apiValue,
+      'email': email,
+      'password': ?password,
+      'nombreCompleto': nombreCompleto,
+      'primerApellido': primerApellido,
+      'segundoApellido': segundoApellido,
+      'tercerApellido': tercerApellido,
+      'ci': ci,
+      'tipoVinculo': tipoVinculo,
+      'oficinaId': oficinaId,
+      'cargoCodigo': cargoCodigo,
+      'unidad': unidad,
+      'cargo': cargo,
+      'numeroItem': numeroItem,
+      'activo': activo,
+      'fotoData': ?fotoData,
+    });
+
+    return AppUser.fromJson(_readMap(payload['data'], 'usuario'));
+  }
+
   Future<List<OfficeOption>> fetchOffices({bool forceRefresh = false}) async {
     if (!forceRefresh && _isCacheFresh(_officesCacheAt, _referenceCacheTtl)) {
       return _officesCache ?? const [];

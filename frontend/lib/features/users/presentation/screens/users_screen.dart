@@ -31,6 +31,7 @@ class _UsersScreenState extends State<UsersScreen> {
   bool _isLoading = true;
   bool _isCreating = false;
   final Set<int> _updatingUserIds = <int>{};
+  final TextEditingController _searchController = TextEditingController();
   String? _errorMessage;
   int _currentPage = 0;
 
@@ -38,22 +39,49 @@ class _UsersScreenState extends State<UsersScreen> {
   int get _controlCount => _users.where((user) => user.isControl).length;
   int get _externalCount => _users.where((user) => user.isExternalUser).length;
   int get _activeUsersCount => _users.where((user) => user.activo).length;
-  int get _totalPages =>
-      _users.isEmpty ? 1 : ((_users.length - 1) ~/ _usersPerPage) + 1;
+  List<AppUser> get _filteredUsers {
+    final query = _normalizeSearchText(_searchController.text);
+
+    if (query.isEmpty) {
+      return _users;
+    }
+
+    return _users
+        .where((user) {
+          final searchableText = _normalizeSearchText(
+            '${user.ci} ${user.fullName} ${user.nombreCompleto} '
+            '${user.primerApellido} ${user.segundoApellido} '
+            '${user.tercerApellido} ${user.email}',
+          );
+
+          return searchableText.contains(query);
+        })
+        .toList(growable: false);
+  }
+
+  int get _totalPages => _filteredUsers.isEmpty
+      ? 1
+      : ((_filteredUsers.length - 1) ~/ _usersPerPage) + 1;
   int get _safeCurrentPage => _currentPage.clamp(0, _totalPages - 1);
-  int get _visibleStartIndex => _users.isEmpty
+  int get _visibleStartIndex => _filteredUsers.isEmpty
       ? 0
-      : (_safeCurrentPage * _usersPerPage).clamp(0, _users.length);
-  int get _visibleEndIndex => _users.isEmpty
+      : (_safeCurrentPage * _usersPerPage).clamp(0, _filteredUsers.length);
+  int get _visibleEndIndex => _filteredUsers.isEmpty
       ? 0
-      : (_visibleStartIndex + _usersPerPage).clamp(0, _users.length);
+      : (_visibleStartIndex + _usersPerPage).clamp(0, _filteredUsers.length);
   List<AppUser> get _visibleUsers =>
-      _users.sublist(_visibleStartIndex, _visibleEndIndex);
+      _filteredUsers.sublist(_visibleStartIndex, _visibleEndIndex);
 
   @override
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -118,7 +146,7 @@ class _UsersScreenState extends State<UsersScreen> {
     final draft = await showDialog<_ManagedUserDraft>(
       context: context,
       builder: (context) =>
-          _CreateManagedUserDialog(offices: _offices, cargos: _cargos),
+          _ManagedUserDialog(offices: _offices, cargos: _cargos),
     );
 
     if (draft == null) {
@@ -134,7 +162,7 @@ class _UsersScreenState extends State<UsersScreen> {
         requesterEmail: widget.currentUser.email,
         role: draft.role,
         email: draft.email,
-        password: draft.password,
+        password: draft.password!,
         nombreCompleto: draft.nombreCompleto,
         primerApellido: draft.primerApellido,
         segundoApellido: draft.segundoApellido,
@@ -147,7 +175,7 @@ class _UsersScreenState extends State<UsersScreen> {
         cargo: draft.cargo.name,
         numeroItem: draft.numeroItem,
         activo: draft.activo,
-        fotoData: draft.fotoData,
+        fotoData: draft.fotoData!,
       );
 
       if (!mounted) {
@@ -243,9 +271,93 @@ class _UsersScreenState extends State<UsersScreen> {
     }
   }
 
+  Future<void> _openEditDialog(AppUser user) async {
+    final userId = user.id;
+
+    if (userId == null ||
+        _offices.isEmpty ||
+        _cargos.isEmpty ||
+        _updatingUserIds.contains(userId)) {
+      return;
+    }
+
+    final draft = await showDialog<_ManagedUserDraft>(
+      context: context,
+      builder: (context) => _ManagedUserDialog(
+        offices: _offices,
+        cargos: _cargos,
+        initialUser: user,
+      ),
+    );
+
+    if (draft == null) {
+      return;
+    }
+
+    setState(() {
+      _updatingUserIds.add(userId);
+    });
+
+    try {
+      final updatedUser = await dependencies.authApiService.updateManagedUser(
+        requesterEmail: widget.currentUser.email,
+        userId: userId,
+        role: draft.role,
+        email: draft.email,
+        password: draft.password,
+        nombreCompleto: draft.nombreCompleto,
+        primerApellido: draft.primerApellido,
+        segundoApellido: draft.segundoApellido,
+        tercerApellido: draft.tercerApellido,
+        ci: draft.ci,
+        tipoVinculo: draft.tipoVinculo,
+        oficinaId: draft.office.id,
+        cargoCodigo: draft.cargo.code,
+        unidad: draft.office.name,
+        cargo: draft.cargo.name,
+        numeroItem: draft.numeroItem,
+        activo: draft.activo,
+        fotoData: draft.fotoData,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _users = _sortUsers([
+          updatedUser,
+          ..._users.where((item) => item.id != updatedUser.id),
+        ]);
+        _currentPage = _safeCurrentPage;
+      });
+
+      AppAlert.showSuccess(context, 'Usuario actualizado.');
+    } on BackendApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      AppAlert.showError(context, error.message);
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      AppAlert.showError(context, 'No fue posible actualizar el usuario.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingUserIds.remove(userId);
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final visibleUsers = _visibleUsers;
+    final filteredUsers = _filteredUsers;
 
     if (_isLoading && _users.isEmpty) {
       return const Center(child: CircularProgressIndicator());
@@ -341,6 +453,32 @@ class _UsersScreenState extends State<UsersScreen> {
                       _isCreating ? 'Creando usuario...' : 'Crear usuario',
                     ),
                   ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _searchController,
+                    onChanged: (_) {
+                      setState(() {
+                        _currentPage = 0;
+                      });
+                    },
+                    decoration: InputDecoration(
+                      labelText: 'Buscar usuarios',
+                      hintText: 'Busca por CI, nombre o correo',
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      suffixIcon: _searchController.text.trim().isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'Limpiar busqueda',
+                              onPressed: () {
+                                setState(() {
+                                  _searchController.clear();
+                                  _currentPage = 0;
+                                });
+                              },
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                    ),
+                  ),
                   if (_errorMessage != null) ...[
                     const SizedBox(height: 14),
                     Text(
@@ -357,6 +495,8 @@ class _UsersScreenState extends State<UsersScreen> {
           const SizedBox(height: 20),
           if (_users.isEmpty)
             const _EmptyUsersState()
+          else if (filteredUsers.isEmpty)
+            const _NoSearchUsersState()
           else
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -364,7 +504,7 @@ class _UsersScreenState extends State<UsersScreen> {
                 _UsersPaginationBar(
                   currentPage: _safeCurrentPage,
                   totalPages: _totalPages,
-                  totalUsers: _users.length,
+                  totalUsers: filteredUsers.length,
                   startIndex: _visibleStartIndex,
                   endIndex: _visibleEndIndex,
                   onPrevious: _safeCurrentPage == 0
@@ -388,6 +528,7 @@ class _UsersScreenState extends State<UsersScreen> {
                     user: user,
                     isUpdating:
                         user.id != null && _updatingUserIds.contains(user.id),
+                    onEdit: () => _openEditDialog(user),
                     onToggleActive: () => _toggleUserActive(user),
                   ),
                   const SizedBox(height: 12),
@@ -395,7 +536,7 @@ class _UsersScreenState extends State<UsersScreen> {
                 _UsersPaginationBar(
                   currentPage: _safeCurrentPage,
                   totalPages: _totalPages,
-                  totalUsers: _users.length,
+                  totalUsers: filteredUsers.length,
                   startIndex: _visibleStartIndex,
                   endIndex: _visibleEndIndex,
                   onPrevious: _safeCurrentPage == 0
@@ -551,11 +692,13 @@ class _UserListCard extends StatelessWidget {
   const _UserListCard({
     required this.user,
     required this.isUpdating,
+    required this.onEdit,
     required this.onToggleActive,
   });
 
   final AppUser user;
   final bool isUpdating;
+  final VoidCallback onEdit;
   final VoidCallback onToggleActive;
 
   @override
@@ -588,6 +731,18 @@ class _UserListCard extends StatelessWidget {
                       ),
                       _RoleChip(role: user.role),
                       _StatusChip(isActive: user.activo),
+                      OutlinedButton.icon(
+                        onPressed: isUpdating ? null : onEdit,
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        icon: const Icon(Icons.edit_outlined, size: 16),
+                        label: const Text('Editar'),
+                      ),
                       OutlinedButton.icon(
                         onPressed: isUpdating ? null : onToggleActive,
                         style: OutlinedButton.styleFrom(
@@ -836,18 +991,58 @@ class _EmptyUsersState extends StatelessWidget {
   }
 }
 
-class _CreateManagedUserDialog extends StatefulWidget {
-  const _CreateManagedUserDialog({required this.offices, required this.cargos});
+class _NoSearchUsersState extends StatelessWidget {
+  const _NoSearchUsersState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 58,
+              height: 58,
+              decoration: BoxDecoration(
+                color: AppPalette.orangeSoft,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Icon(
+                Icons.search_off_rounded,
+                color: AppPalette.orange,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No hay usuarios con esa busqueda',
+              style: Theme.of(context).textTheme.titleLarge,
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ManagedUserDialog extends StatefulWidget {
+  const _ManagedUserDialog({
+    required this.offices,
+    required this.cargos,
+    this.initialUser,
+  });
 
   final List<OfficeOption> offices;
   final List<CargoOption> cargos;
+  final AppUser? initialUser;
 
   @override
-  State<_CreateManagedUserDialog> createState() =>
-      _CreateManagedUserDialogState();
+  State<_ManagedUserDialog> createState() => _ManagedUserDialogState();
 }
 
-class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
+class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final ImagePicker _imagePicker = ImagePicker();
   final TextEditingController _ciController = TextEditingController();
@@ -876,6 +1071,39 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
   bool _showPhotoError = false;
   bool _hidePassword = true;
   bool _hideConfirmPassword = true;
+  bool get _isEditing => widget.initialUser != null;
+
+  @override
+  void initState() {
+    super.initState();
+
+    final user = widget.initialUser;
+
+    if (user == null) {
+      return;
+    }
+
+    _selectedRole = user.role;
+    final tipoVinculo = user.tipoVinculo.trim().toUpperCase();
+    _selectedTipoVinculo = switch (tipoVinculo) {
+      'EVENTUAL' => 'EVENTUAL',
+      'CONSULTOR' => 'CONSULTOR',
+      _ => 'ITEM',
+    };
+    _selectedActivo = user.activo;
+    _ciController.text = user.ci;
+    _nombreCompletoController.text = user.nombreCompleto;
+    _primerApellidoController.text = user.primerApellido;
+    _segundoApellidoController.text = user.segundoApellido;
+    _tercerApellidoController.text = user.tercerApellido;
+    _numeroItemController.text = user.numeroItem;
+    _emailController.text = user.email;
+
+    _selectedOffice = _findInitialOffice(user);
+    _unidadController.text = _selectedOffice?.name ?? _resolvedOfficeName(user);
+    _selectedCargo = _findInitialCargo(user);
+    _cargoController.text = _selectedCargo?.name ?? user.cargo;
+  }
 
   @override
   void dispose() {
@@ -935,6 +1163,31 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
     });
   }
 
+  OfficeOption? _findInitialOffice(AppUser user) {
+    for (final office in widget.offices) {
+      if (user.officeId != null && office.id == user.officeId) {
+        return office;
+      }
+
+      if (user.officeCode != null &&
+          office.code.toLowerCase() == user.officeCode!.toLowerCase()) {
+        return office;
+      }
+    }
+
+    return null;
+  }
+
+  CargoOption? _findInitialCargo(AppUser user) {
+    for (final cargo in widget.cargos) {
+      if (cargo.name.toLowerCase() == user.cargo.toLowerCase()) {
+        return cargo;
+      }
+    }
+
+    return null;
+  }
+
   Future<void> _pickPhoto() async {
     final file = await _imagePicker.pickImage(
       source: ImageSource.gallery,
@@ -966,7 +1219,11 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
       return;
     }
 
-    if (_photoBytes == null) {
+    if (_selectedOffice == null || _selectedCargo == null) {
+      return;
+    }
+
+    if (!_isEditing && _photoBytes == null) {
       setState(() {
         _showPhotoError = true;
       });
@@ -987,8 +1244,10 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
         cargo: _selectedCargo!,
         numeroItem: _numeroItemController.text.trim(),
         email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-        fotoData: base64Encode(_photoBytes!),
+        password: _passwordController.text.trim().isEmpty
+            ? null
+            : _passwordController.text.trim(),
+        fotoData: _photoBytes == null ? null : base64Encode(_photoBytes!),
       ),
     );
   }
@@ -996,6 +1255,7 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
   @override
   Widget build(BuildContext context) {
     final roleLabel = _selectedRole.label.toLowerCase();
+    final actionLabel = _isEditing ? 'Guardar cambios' : 'Crear usuario';
 
     return Dialog(
       backgroundColor: Colors.white,
@@ -1012,7 +1272,7 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
                 children: [
                   Expanded(
                     child: Text(
-                      'Crear $roleLabel',
+                      _isEditing ? 'Editar $roleLabel' : 'Crear $roleLabel',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                   ),
@@ -1033,7 +1293,9 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Completa los mismos datos del registro principal y define si la cuenta sera de administrador, control o usuario externo.',
+                        _isEditing
+                            ? 'Actualiza los datos del usuario y guarda los cambios.'
+                            : 'Completa los mismos datos del registro principal y define si la cuenta sera de administrador, control o usuario externo.',
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       const SizedBox(height: 18),
@@ -1217,6 +1479,8 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
                       const SizedBox(height: 14),
                       _PhotoPickerField(
                         photoBytes: _photoBytes,
+                        existingPhotoSource: widget.initialUser?.fotoUrl,
+                        isRequired: !_isEditing,
                         showError: _showPhotoError,
                         onPickPhoto: _pickPhoto,
                       ),
@@ -1252,7 +1516,9 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
                       _FormField(
                         controller: _passwordController,
                         label: 'Contrasena',
-                        hint: 'Minimo 6 caracteres',
+                        hint: _isEditing
+                            ? 'Deja vacio para mantener la actual'
+                            : 'Minimo 6 caracteres',
                         obscureText: _hidePassword,
                         suffixIcon: IconButton(
                           onPressed: () {
@@ -1267,7 +1533,13 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
                           ),
                         ),
                         validator: (value) {
-                          if ((value ?? '').trim().length < 6) {
+                          final password = (value ?? '').trim();
+
+                          if (_isEditing && password.isEmpty) {
+                            return null;
+                          }
+
+                          if (password.length < 6) {
                             return 'La contrasena debe tener al menos 6 caracteres.';
                           }
 
@@ -1278,7 +1550,9 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
                       _FormField(
                         controller: _confirmPasswordController,
                         label: 'Confirmar contrasena',
-                        hint: 'Repite la contrasena',
+                        hint: _isEditing
+                            ? 'Repite la nueva contrasena'
+                            : 'Repite la contrasena',
                         obscureText: _hideConfirmPassword,
                         suffixIcon: IconButton(
                           onPressed: () {
@@ -1293,8 +1567,16 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
                           ),
                         ),
                         validator: (value) {
-                          if ((value ?? '').trim() !=
-                              _passwordController.text.trim()) {
+                          final password = _passwordController.text.trim();
+                          final confirmation = (value ?? '').trim();
+
+                          if (_isEditing &&
+                              password.isEmpty &&
+                              confirmation.isEmpty) {
+                            return null;
+                          }
+
+                          if (confirmation != password) {
                             return 'Las contrasenas no coinciden.';
                           }
 
@@ -1324,7 +1606,7 @@ class _CreateManagedUserDialogState extends State<_CreateManagedUserDialog> {
                       foregroundColor: Colors.white,
                       elevation: 0,
                     ),
-                    child: const Text('Crear usuario'),
+                    child: Text(actionLabel),
                   ),
                 ],
               ),
@@ -1366,8 +1648,8 @@ class _ManagedUserDraft {
   final CargoOption cargo;
   final String numeroItem;
   final String email;
-  final String password;
-  final String fotoData;
+  final String? password;
+  final String? fotoData;
 }
 
 class _FormField extends StatelessWidget {
@@ -1514,11 +1796,15 @@ class _PickerField extends StatelessWidget {
 class _PhotoPickerField extends StatelessWidget {
   const _PhotoPickerField({
     required this.photoBytes,
+    required this.existingPhotoSource,
+    required this.isRequired,
     required this.showError,
     required this.onPickPhoto,
   });
 
   final Uint8List? photoBytes;
+  final String? existingPhotoSource;
+  final bool isRequired;
   final bool showError;
   final VoidCallback onPickPhoto;
 
@@ -1549,14 +1835,21 @@ class _PhotoPickerField extends StatelessWidget {
                     width: 74,
                     height: 74,
                     child: photoBytes == null
-                        ? Container(
-                            color: AppPalette.orangeSoft,
-                            alignment: Alignment.center,
-                            child: const Icon(
-                              Icons.photo_camera_outlined,
-                              color: AppPalette.orange,
-                            ),
-                          )
+                        ? existingPhotoSource?.trim().isNotEmpty == true
+                              ? Base64Avatar(
+                                  size: 74,
+                                  fallbackLabel: 'U',
+                                  photoSource: existingPhotoSource,
+                                  borderRadius: BorderRadius.circular(18),
+                                )
+                              : Container(
+                                  color: AppPalette.orangeSoft,
+                                  alignment: Alignment.center,
+                                  child: const Icon(
+                                    Icons.photo_camera_outlined,
+                                    color: AppPalette.orange,
+                                  ),
+                                )
                         : Image.memory(photoBytes!, fit: BoxFit.cover),
                   ),
                 ),
@@ -1567,13 +1860,17 @@ class _PhotoPickerField extends StatelessWidget {
                     children: [
                       Text(
                         photoBytes == null
-                            ? 'Selecciona una foto'
+                            ? existingPhotoSource?.trim().isNotEmpty == true
+                                  ? 'Foto actual del usuario'
+                                  : 'Selecciona una foto'
                             : 'Foto cargada correctamente',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'La foto es obligatoria para crear el usuario.',
+                        isRequired
+                            ? 'La foto es obligatoria para crear el usuario.'
+                            : 'Selecciona una nueva foto solo si deseas reemplazarla.',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
@@ -1925,6 +2222,10 @@ String _tipoVinculoLabel(String value) {
     default:
       return value.trim().isEmpty ? '-' : value;
   }
+}
+
+String _normalizeSearchText(String value) {
+  return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
 }
 
 String? Function(String?) _requiredValidator(String message) {

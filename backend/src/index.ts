@@ -614,7 +614,10 @@ const server = http.createServer(async (request, response) => {
     const userId = readResourceId(url.pathname, "/api/usuarios/");
 
     if (request.method === "PUT" && userId != null) {
-      const input = parseUpdateUserStatusInput(await readJsonBody(request));
+      const payload = await readJsonBody(request);
+      const input = isUpdateUserStatusPayload(payload)
+        ? parseUpdateUserStatusInput(payload)
+        : parseUpdateManagedUserInput(payload);
       await assertAdminRequester(
         input.requesterEmail,
         "Solo un administrador puede gestionar usuarios.",
@@ -628,6 +631,97 @@ const server = http.createServer(async (request, response) => {
 
         if (!existingUser) {
           throw new HttpError(404, "No se encontro el usuario seleccionado.");
+        }
+
+        if ("email" in input) {
+          const managedInput = input as UpdateManagedUserInput;
+          const selectedOffice =
+            managedInput.oficinaId == null
+              ? null
+              : await tx.oficinas.findUnique({
+                  where: { id: managedInput.oficinaId },
+                });
+
+          if (managedInput.oficinaId != null && !selectedOffice) {
+            throw new HttpError(400, "La unidad seleccionada no existe.");
+          }
+
+          const selectedCargo =
+            managedInput.cargoCodigo == null
+              ? null
+              : await tx.cargos.findUnique({
+                  where: { codigo: managedInput.cargoCodigo },
+                });
+
+          if (managedInput.cargoCodigo != null && !selectedCargo) {
+            throw new HttpError(400, "El cargo seleccionado no existe.");
+          }
+
+          const duplicatedUser = await tx.usuarios.findFirst({
+            where: {
+              email: managedInput.email,
+              id: {
+                not: userId,
+              },
+            },
+          });
+
+          if (duplicatedUser) {
+            throw new HttpError(409, "Ya existe un usuario con ese correo.");
+          }
+
+          const resolvedUnit = selectedOffice?.oficina ?? managedInput.unidad ?? "";
+          const resolvedOfficeId = selectedOffice?.id ?? null;
+          const resolvedCargo = selectedCargo?.cargo ?? managedInput.cargo;
+          const resolvedCargoCode = selectedCargo?.codigo ?? null;
+          const nextPhotoSource = managedInput.fotoData == null
+            ? existingUser.foto_url
+            : await storeUserProfilePhoto({
+                photoSource: managedInput.fotoData,
+                email: managedInput.email,
+                ci: managedInput.ci,
+                userId,
+              });
+          const nextPasswordHash = managedInput.password == null
+            ? existingUser.password_hash
+            : hashPassword(managedInput.password);
+
+          const nextUser = await tx.usuarios.update({
+            where: { id: userId },
+            data: {
+              nombre_completo: buildUserDisplayNameFromParts(managedInput),
+              nombres: managedInput.nombreCompleto,
+              primer_apellido: managedInput.primerApellido,
+              segundo_apellido: managedInput.segundoApellido,
+              tercer_apellido: managedInput.tercerApellido,
+              ci: managedInput.ci,
+              tipo_vinculo: managedInput.tipoVinculo,
+              unidad: resolvedUnit,
+              oficina_id: resolvedOfficeId,
+              cargo_codigo: resolvedCargoCode,
+              cargo: resolvedCargo,
+              numero_item: managedInput.numeroItem,
+              foto_url: nextPhotoSource,
+              email: managedInput.email,
+              password_hash: nextPasswordHash,
+              rol: managedInput.rol,
+              activo: managedInput.activo,
+              updated_at: new Date(),
+            },
+            include: userWithOfficeInclude,
+          });
+
+          await tx.personas.updateMany({
+            where: { usuario_id: userId },
+            data: {
+              nombre_completo: buildUserDisplayName(nextUser),
+              ci: normalizeOptionalText(nextUser.ci),
+              activo: managedInput.activo,
+              updated_at: new Date(),
+            },
+          });
+
+          return nextUser;
         }
 
         const nextUser = await tx.usuarios.update({
@@ -1613,6 +1707,13 @@ type UpdateUserStatusInput = {
   activo: boolean;
 };
 
+type UpdateManagedUserInput = Omit<RegisterUserInput, "password" | "fotoData"> & {
+  requesterEmail: string;
+  rol: (typeof rol_usuario)[keyof typeof rol_usuario];
+  password: string | null;
+  fotoData: string | null;
+};
+
 type AttendanceReportQuery = {
   ci: string;
   estado:
@@ -2291,6 +2392,76 @@ function parseUpdateUserStatusInput(payload: unknown): UpdateUserStatusInput {
     requesterEmail: readRequiredEmail(body, "requesterEmail"),
     activo: readRequiredBoolean(body, "activo"),
   };
+}
+
+function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
+  const body = expectRecord(payload);
+  const tipoVinculo = readRequiredUppercaseChoice(
+    body,
+    "tipoVinculo",
+    ["ITEM", "EVENTUAL", "CONSULTOR"],
+  );
+  const oficinaId = readOptionalInt(body, "oficinaId");
+  const unidad = readOptionalString(body, "unidad", 0, 120);
+  const cargoCodigo = readOptionalString(body, "cargoCodigo", 1, 50);
+  const cargo = readOptionalString(body, "cargo", 2, 120);
+  const requestedRole = readRequiredUppercaseChoice(body, "rol", [
+    rol_usuario.ADMIN,
+    rol_usuario.CONTROL,
+    rol_usuario.OPERADOR,
+  ]) as (typeof rol_usuario)[keyof typeof rol_usuario];
+  const email = readRequiredEmail(body, "email");
+
+  if (oficinaId == null && !unidad) {
+    throw new HttpError(400, "Debes seleccionar una unidad valida.");
+  }
+
+  if (cargoCodigo == null && !cargo) {
+    throw new HttpError(400, "Debes seleccionar un cargo valido.");
+  }
+
+  if (requestedRole === rol_usuario.ADMIN && !isAdminEmail(email)) {
+    throw new HttpError(
+      400,
+      "Los administradores deben usar un correo con @admin.",
+    );
+  }
+
+  if (requestedRole !== rol_usuario.ADMIN && isAdminEmail(email)) {
+    throw new HttpError(
+      400,
+      "Solo el administrador puede usar un correo con @admin.",
+    );
+  }
+
+  return {
+    requesterEmail: readRequiredEmail(body, "requesterEmail"),
+    rol: requestedRole,
+    email,
+    password: readOptionalString(body, "password", 6, 200),
+    nombreCompleto: readRequiredString(body, "nombreCompleto", 2, 150),
+    primerApellido: readRequiredString(body, "primerApellido", 2, 80),
+    segundoApellido: readRequiredString(body, "segundoApellido", 2, 80),
+    tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
+    ci: readRequiredString(body, "ci", 3, 30),
+    tipoVinculo,
+    unidad,
+    oficinaId,
+    cargoCodigo,
+    cargo: cargo ?? "",
+    numeroItem:
+      tipoVinculo === "ITEM"
+        ? readRequiredString(body, "numeroItem", 1, 50)
+        : readOptionalString(body, "numeroItem", 0, 50),
+    activo: readRequiredBoolean(body, "activo"),
+    fotoData: readOptionalPhotoData(body),
+  };
+}
+
+function isUpdateUserStatusPayload(payload: unknown) {
+  const body = expectRecord(payload);
+
+  return !("email" in body) && !("rol" in body);
 }
 
 function parseAttendanceReportQuery(url: URL): AttendanceReportQuery {
