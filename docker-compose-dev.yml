@@ -23,7 +23,7 @@ services:
       dockerfile: ./.infra/backend/dev/Dockerfile
     restart: unless-stopped
     env_file:
-      - ./backend/.env.dev
+      - ./backend/.env.prod
     environment:
       TZ: America/La_Paz
     ports:

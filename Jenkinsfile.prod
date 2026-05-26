@@ -1,0 +1,131 @@
+pipeline {
+    agent { label 'server_104.67' }
+
+    options {
+        skipDefaultCheckout(true)
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    parameters {
+        choice(
+            name: 'SERVICE',
+            choices: ['all', 'frontend', 'backend'],
+            description: 'Selecciona qué servicio desplegar'
+        )
+    }
+
+    environment {
+        DOCKER_COMPOSE_FILE = 'docker-compose-prod.yml'
+        GIT_URL = 'https://github.com/alcaldiacochabamba/innovafuncionario.cochabamba.bo.git'
+        GIT_CREDENTIALS = 'github-https'
+        GIT_BRANCH = 'prod'
+        DOCKER_BUILDKIT = '1'
+        COMPOSE_DOCKER_CLI_BUILD = '1'
+        BUILDKIT_PROGRESS = 'plain'
+        FRONTEND_SERVICE = 'frontend'
+        BACKEND_SERVICE = 'backend'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: env.GIT_BRANCH,
+                    credentialsId: env.GIT_CREDENTIALS,
+                    url: env.GIT_URL
+            }
+        }
+
+        stage('Stop old containers') {
+            steps {
+                script {
+
+                    if (params.SERVICE == 'all') {
+                        sh """
+                            docker-compose \
+                            --env-file backend/.env.prod \
+                            -f ${env.DOCKER_COMPOSE_FILE} \
+                            down --remove-orphans
+                        """
+                    } else {
+                        sh """
+                            docker-compose \
+                            --env-file backend/.env.prod \
+                            -f ${env.DOCKER_COMPOSE_FILE} \
+                            stop ${params.SERVICE}
+                        """
+                    }
+
+                }
+            }
+        }
+
+        stage('Build') {
+            steps {
+                script {
+
+                    if (params.SERVICE == 'all') {
+
+                        sh """
+                            docker-compose \
+                            --env-file backend/.env.prod \
+                            -f ${env.DOCKER_COMPOSE_FILE} \
+                            build --parallel
+                        """
+
+                    } else {
+
+                        sh """
+                            docker-compose \
+                            --env-file backend/.env.prod \
+                            -f ${env.DOCKER_COMPOSE_FILE} \
+                            build ${params.SERVICE}
+                        """
+
+                    }
+
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                script {
+
+                    if (params.SERVICE == 'all') {
+
+                        sh """
+                            docker-compose \
+                            --env-file backend/.env.prod \
+                            -f ${env.DOCKER_COMPOSE_FILE} \
+                            up -d --remove-orphans
+                        """
+
+                    } else {
+
+                        sh """
+                            docker-compose \
+                            --env-file backend/.env.prod \
+                            -f ${env.DOCKER_COMPOSE_FILE} \
+                            up -d ${params.SERVICE}
+                        """
+
+                    }
+
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            sh """
+                docker-compose \
+                --env-file backend/.env.prod \
+                -f ${env.DOCKER_COMPOSE_FILE} \
+                ps
+            """
+        }
+    }
+}
