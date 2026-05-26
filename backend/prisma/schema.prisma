@@ -82,7 +82,8 @@ model oficinas {
   cod             String            @db.VarChar(50)
   nivel           Int
   evento_oficinas evento_oficinas[]
-  usuarios        usuarios[]
+  usuarios        usuarios[]        @relation("UsuarioOficina")
+  usuarios_comision usuarios[]      @relation("UsuarioOficinaComision")
 
   @@index([cod], map: "idx_oficinas_cod")
   @@index([nivel], map: "idx_oficinas_nivel")
@@ -174,6 +175,7 @@ model usuarios {
   tipo_vinculo     String?       @db.VarChar(30)
   unidad           String?       @db.VarChar(120)
   oficina_id       Int?
+  oficina_comision_id Int?
   cargo_codigo     String?       @db.VarChar(50)
   cargo            String?       @db.VarChar(120)
   numero_item      String?       @db.VarChar(50)
@@ -188,10 +190,12 @@ model usuarios {
   asistencia_controles asistencia_controles[]
   cargos           cargos?       @relation(fields: [cargo_codigo], references: [codigo], onUpdate: NoAction)
   eventos          eventos[]
-  oficinas         oficinas?     @relation(fields: [oficina_id], references: [id], onUpdate: NoAction)
+  oficinas         oficinas?     @relation("UsuarioOficina", fields: [oficina_id], references: [id], onUpdate: NoAction)
+  oficina_comision oficinas?     @relation("UsuarioOficinaComision", fields: [oficina_comision_id], references: [id], onUpdate: NoAction)
   persona          personas?
 
   @@index([cargo_codigo], map: "idx_usuarios_cargo_codigo")
+  @@index([oficina_comision_id], map: "idx_usuarios_oficina_comision_id")
   @@index([oficina_id], map: "idx_usuarios_oficina_id")
 }
 

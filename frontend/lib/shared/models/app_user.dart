@@ -43,6 +43,11 @@ class AppUser {
     this.officeId,
     this.officeName,
     this.officeCode,
+    this.primaryOfficeId,
+    this.primaryOfficeName,
+    this.commissionOfficeId,
+    this.commissionOfficeName,
+    this.hasCommission = false,
     this.nombreVisible,
     this.personaId,
     this.qrCode,
@@ -66,6 +71,11 @@ class AppUser {
   final int? officeId;
   final String? officeName;
   final String? officeCode;
+  final int? primaryOfficeId;
+  final String? primaryOfficeName;
+  final int? commissionOfficeId;
+  final String? commissionOfficeName;
+  final bool hasCommission;
   final String? nombreVisible;
   final int? personaId;
   final String? qrCode;
@@ -93,11 +103,47 @@ class AppUser {
       officeId: source['oficinaId'] as int?,
       officeName: source['oficinaNombre'] as String?,
       officeCode: source['oficinaCodigo'] as String?,
+      primaryOfficeId: source['oficinaPrincipalId'] as int?,
+      primaryOfficeName: source['oficinaPrincipalNombre'] as String?,
+      commissionOfficeId: source['oficinaComisionId'] as int?,
+      commissionOfficeName: source['oficinaComisionNombre'] as String?,
+      hasCommission: source['tieneComision'] as bool? ?? false,
       nombreVisible: source['nombreVisible'] as String?,
       personaId: source['personaId'] as int?,
       qrCode: source['qrCode'] as String?,
       qrPayload: source['qrPayload'] as String?,
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'email': email,
+      'rol': role.apiValue,
+      'nombreCompleto': nombreCompleto,
+      'primerApellido': primerApellido,
+      'segundoApellido': segundoApellido,
+      'tercerApellido': tercerApellido,
+      'ci': ci,
+      'tipoVinculo': tipoVinculo,
+      'unidad': unidad,
+      'cargo': cargo,
+      'numeroItem': numeroItem,
+      'activo': activo,
+      'fotoUrl': fotoUrl,
+      'oficinaId': officeId,
+      'oficinaNombre': officeName,
+      'oficinaCodigo': officeCode,
+      'oficinaPrincipalId': primaryOfficeId,
+      'oficinaPrincipalNombre': primaryOfficeName,
+      'oficinaComisionId': commissionOfficeId,
+      'oficinaComisionNombre': commissionOfficeName,
+      'tieneComision': hasCommission,
+      'nombreVisible': nombreVisible,
+      'personaId': personaId,
+      'qrCode': qrCode,
+      'qrPayload': qrPayload,
+    };
   }
 
   String get fullName {

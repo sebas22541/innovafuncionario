@@ -5,7 +5,7 @@ class AppEnvironment {
 
   static const production = bool.fromEnvironment('dart.vm.product');
   static const productionBackendBaseUrl =
-      'https://innovafuncionarioapidev.cochabamba.bo';
+      'https://innovafuncionarioapi.cochabamba.bo';
 
   static String resolveBackendBaseUrl() {
     const configuredBaseUrl = String.fromEnvironment('BACKEND_BASE_URL');

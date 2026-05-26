@@ -4,6 +4,8 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/presentation/screens/auth_screen.dart';
 import 'injection_container.dart';
+import 'shared/infrastructure/session_store.dart';
+import 'shared/models/app_section.dart';
 import 'shared/models/app_user.dart';
 import 'shared/widgets/app_navigation_shell.dart';
 
@@ -22,16 +24,50 @@ class QrWebApp extends StatefulWidget {
 
 class _QrWebAppState extends State<QrWebApp> {
   AppUser? _currentUser;
+  AppSection? _initialSection;
+  bool _isRestoringSession = true;
 
-  void _handleAuthenticated(AppUser user) {
+  @override
+  void initState() {
+    super.initState();
+    _restoreSession();
+  }
+
+  Future<void> _restoreSession() async {
+    final user = await SessionStore.readUser();
+    final section = await SessionStore.readSection();
+
+    if (!mounted) {
+      return;
+    }
+
     setState(() {
       _currentUser = user;
+      _initialSection = section;
+      _isRestoringSession = false;
+    });
+  }
+
+  void _handleAuthenticated(AppUser user) {
+    SessionStore.saveUser(user);
+    setState(() {
+      _currentUser = user;
+      _initialSection = null;
     });
   }
 
   void _handleLogout() {
+    SessionStore.clearSession();
     setState(() {
       _currentUser = null;
+      _initialSection = null;
+    });
+  }
+
+  void _handleCurrentUserChanged(AppUser user) {
+    SessionStore.saveUser(user);
+    setState(() {
+      _currentUser = user;
     });
   }
 
@@ -42,28 +78,30 @@ class _QrWebAppState extends State<QrWebApp> {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       locale: const Locale('es', 'BO'),
-      supportedLocales: const [
-        Locale('es'),
-        Locale('es', 'BO'),
-      ],
+      supportedLocales: const [Locale('es'), Locale('es', 'BO')],
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 260),
-        child: _currentUser == null
-            ? AuthScreen(
-                key: const ValueKey('auth-screen'),
-                onAuthenticated: _handleAuthenticated,
-              )
-            : AppNavigationShell(
-                key: const ValueKey('app-shell'),
-                currentUser: _currentUser!,
-                onLogout: _handleLogout,
-              ),
-      ),
+      home: _isRestoringSession
+          ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+          : AnimatedSwitcher(
+              duration: const Duration(milliseconds: 260),
+              child: _currentUser == null
+                  ? AuthScreen(
+                      key: const ValueKey('auth-screen'),
+                      onAuthenticated: _handleAuthenticated,
+                    )
+                  : AppNavigationShell(
+                      key: const ValueKey('app-shell'),
+                      currentUser: _currentUser!,
+                      initialSection: _initialSection,
+                      onCurrentUserChanged: _handleCurrentUserChanged,
+                      onSectionChanged: SessionStore.saveSection,
+                      onLogout: _handleLogout,
+                    ),
+            ),
     );
   }
 }

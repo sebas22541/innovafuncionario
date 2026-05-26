@@ -22,10 +22,16 @@ class AppNavigationShell extends StatefulWidget {
   const AppNavigationShell({
     super.key,
     required this.currentUser,
+    this.initialSection,
+    this.onCurrentUserChanged,
+    this.onSectionChanged,
     required this.onLogout,
   });
 
   final AppUser currentUser;
+  final AppSection? initialSection;
+  final ValueChanged<AppUser>? onCurrentUserChanged;
+  final ValueChanged<AppSection>? onSectionChanged;
   final VoidCallback onLogout;
 
   @override
@@ -41,7 +47,10 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
   void initState() {
     super.initState();
     _currentUser = widget.currentUser;
-    _selectedSection = _defaultSectionForUser(_currentUser);
+    _selectedSection = _resolveInitialSection(
+      _currentUser,
+      widget.initialSection,
+    );
   }
 
   @override
@@ -54,6 +63,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
 
       if (!_visibleSectionsForUser(_currentUser).contains(_selectedSection)) {
         _selectedSection = _defaultSectionForUser(_currentUser);
+        widget.onSectionChanged?.call(_selectedSection);
       }
     }
   }
@@ -66,6 +76,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
     setState(() {
       _selectedSection = section;
     });
+    widget.onSectionChanged?.call(section);
   }
 
   void _handleSectionSelection(AppSection section) {
@@ -103,12 +114,14 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       _scannerEvent = event;
       _selectedSection = AppSection.qrScanner;
     });
+    widget.onSectionChanged?.call(AppSection.qrScanner);
   }
 
   void _handleCurrentUserUpdated(AppUser user) {
     setState(() {
       _currentUser = user;
     });
+    widget.onCurrentUserChanged?.call(user);
   }
 
   void _handleSystemBack() {
@@ -1048,6 +1061,22 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
 
 AppSection _defaultSectionForUser(AppUser user) {
   return AppSection.home;
+}
+
+AppSection _resolveInitialSection(AppUser user, AppSection? initialSection) {
+  if (initialSection == null) {
+    return _defaultSectionForUser(user);
+  }
+
+  if (_visibleSectionsForUser(user).contains(initialSection)) {
+    return initialSection;
+  }
+
+  if (initialSection == AppSection.qrScanner && user.canUseEventScanner) {
+    return initialSection;
+  }
+
+  return _defaultSectionForUser(user);
 }
 
 String _sectionTitleForUser(AppUser user, AppSection section) {

@@ -13,6 +13,8 @@ enum AppSection {
 }
 
 extension AppSectionX on AppSection {
+  String get storageKey => name;
+
   String get label {
     switch (this) {
       case AppSection.home:
@@ -81,4 +83,18 @@ extension AppSectionX on AppSection {
         return Icons.person_outline_rounded;
     }
   }
+}
+
+AppSection? parseAppSection(String? value) {
+  if (value == null || value.trim().isEmpty) {
+    return null;
+  }
+
+  for (final section in AppSection.values) {
+    if (section.storageKey == value.trim()) {
+      return section;
+    }
+  }
+
+  return null;
 }

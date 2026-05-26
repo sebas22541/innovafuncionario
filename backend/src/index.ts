@@ -72,6 +72,7 @@ const prisma = new PrismaClient({ adapter });
 
 const userWithOfficeInclude = {
   oficinas: true,
+  oficina_comision: true,
 } as const;
 
 const personIdentityInclude = {
@@ -150,6 +151,8 @@ let dashboardSummaryCache: CacheEntry<{
   eventos: number;
 }> | null = null;
 let eventSummaryCache: CacheEntry<any[]> | null = null;
+
+await ensureRuntimeSchema();
 
 const server = http.createServer(async (request, response) => {
   applyCors(response);
@@ -233,6 +236,17 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(400, "La unidad seleccionada no existe.");
       }
 
+      const selectedCommissionOffice =
+        input.oficinaComisionId == null
+          ? null
+          : await prisma.oficinas.findUnique({
+              where: { id: input.oficinaComisionId },
+            });
+
+      if (input.oficinaComisionId != null && !selectedCommissionOffice) {
+        throw new HttpError(400, "La oficina de comision seleccionada no existe.");
+      }
+
       const selectedCargo =
         input.cargoCodigo == null
           ? null
@@ -246,6 +260,7 @@ const server = http.createServer(async (request, response) => {
 
       const resolvedUnit = selectedOffice?.oficina ?? input.unidad ?? "";
       const resolvedOfficeId = selectedOffice?.id ?? null;
+      const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
       const resolvedCargo = selectedCargo?.cargo ?? input.cargo;
       const resolvedCargoCode = selectedCargo?.codigo ?? null;
       const storedProfilePhoto = await storeUserProfilePhoto({
@@ -268,6 +283,7 @@ const server = http.createServer(async (request, response) => {
           tipo_vinculo: input.tipoVinculo,
           unidad: resolvedUnit,
           oficina_id: resolvedOfficeId,
+          oficina_comision_id: resolvedCommissionOfficeId,
           cargo_codigo: resolvedCargoCode,
           cargo: resolvedCargo,
           numero_item: input.numeroItem,
@@ -287,6 +303,7 @@ const server = http.createServer(async (request, response) => {
           tipo_vinculo: input.tipoVinculo,
           unidad: resolvedUnit,
           oficina_id: resolvedOfficeId,
+          oficina_comision_id: resolvedCommissionOfficeId,
           cargo_codigo: resolvedCargoCode,
           cargo: resolvedCargo,
           numero_item: input.numeroItem,
@@ -556,6 +573,17 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(400, "La unidad seleccionada no existe.");
       }
 
+      const selectedCommissionOffice =
+        input.oficinaComisionId == null
+          ? null
+          : await prisma.oficinas.findUnique({
+              where: { id: input.oficinaComisionId },
+            });
+
+      if (input.oficinaComisionId != null && !selectedCommissionOffice) {
+        throw new HttpError(400, "La oficina de comision seleccionada no existe.");
+      }
+
       const selectedCargo =
         input.cargoCodigo == null
           ? null
@@ -569,6 +597,7 @@ const server = http.createServer(async (request, response) => {
 
       const resolvedUnit = selectedOffice?.oficina ?? input.unidad ?? "";
       const resolvedOfficeId = selectedOffice?.id ?? null;
+      const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
       const resolvedCargo = selectedCargo?.cargo ?? input.cargo;
       const resolvedCargoCode = selectedCargo?.codigo ?? null;
       const existingUser = await prisma.usuarios.findUnique({
@@ -596,6 +625,7 @@ const server = http.createServer(async (request, response) => {
           tipo_vinculo: input.tipoVinculo,
           unidad: resolvedUnit,
           oficina_id: resolvedOfficeId,
+          oficina_comision_id: resolvedCommissionOfficeId,
           cargo_codigo: resolvedCargoCode,
           cargo: resolvedCargo,
           numero_item: input.numeroItem,
@@ -651,6 +681,23 @@ const server = http.createServer(async (request, response) => {
             throw new HttpError(400, "La unidad seleccionada no existe.");
           }
 
+          const selectedCommissionOffice =
+            managedInput.oficinaComisionId == null
+              ? null
+              : await tx.oficinas.findUnique({
+                  where: { id: managedInput.oficinaComisionId },
+                });
+
+          if (
+            managedInput.oficinaComisionId != null &&
+            !selectedCommissionOffice
+          ) {
+            throw new HttpError(
+              400,
+              "La oficina de comision seleccionada no existe.",
+            );
+          }
+
           const selectedCargo =
             managedInput.cargoCodigo == null
               ? null
@@ -677,6 +724,7 @@ const server = http.createServer(async (request, response) => {
 
           const resolvedUnit = selectedOffice?.oficina ?? managedInput.unidad ?? "";
           const resolvedOfficeId = selectedOffice?.id ?? null;
+          const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
           const resolvedCargo = selectedCargo?.cargo ?? managedInput.cargo;
           const resolvedCargoCode = selectedCargo?.codigo ?? null;
           const nextPhotoSource = managedInput.fotoData == null
@@ -703,6 +751,7 @@ const server = http.createServer(async (request, response) => {
               tipo_vinculo: managedInput.tipoVinculo,
               unidad: resolvedUnit,
               oficina_id: resolvedOfficeId,
+              oficina_comision_id: resolvedCommissionOfficeId,
               cargo_codigo: resolvedCargoCode,
               cargo: resolvedCargo,
               numero_item: managedInput.numeroItem,
@@ -1695,6 +1744,7 @@ type RegisterUserInput = {
   tipoVinculo: string;
   unidad: string | null;
   oficinaId: number | null;
+  oficinaComisionId: number | null;
   cargoCodigo: string | null;
   cargo: string;
   numeroItem: string | null;
@@ -1852,6 +1902,36 @@ function invalidateDashboardSummaryCache() {
 
 function invalidateEventSummaryCache() {
   eventSummaryCache = null;
+}
+
+async function ensureRuntimeSchema() {
+  await pool.query(`
+    ALTER TABLE "usuarios"
+      ADD COLUMN IF NOT EXISTS "oficina_comision_id" INTEGER
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'usuarios_oficina_comision_id_fkey'
+      ) THEN
+        ALTER TABLE "usuarios"
+          ADD CONSTRAINT "usuarios_oficina_comision_id_fkey"
+          FOREIGN KEY ("oficina_comision_id")
+          REFERENCES "oficinas" ("id")
+          ON DELETE SET NULL
+          ON UPDATE NO ACTION;
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_usuarios_oficina_comision_id"
+      ON "usuarios" ("oficina_comision_id")
+  `);
 }
 
 function getErrorMessage(error: unknown) {
@@ -2337,6 +2417,7 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
     ["ITEM", "EVENTUAL", "CONSULTOR"],
   );
   const oficinaId = readOptionalInt(body, "oficinaId");
+  const oficinaComisionId = readOptionalInt(body, "oficinaComisionId");
   const unidad = readOptionalString(body, "unidad", 0, 120);
   const cargoCodigo = readOptionalString(body, "cargoCodigo", 1, 50);
   const cargo = readOptionalString(body, "cargo", 2, 120);
@@ -2360,6 +2441,7 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
     tipoVinculo,
     unidad,
     oficinaId,
+    oficinaComisionId,
     cargoCodigo,
     cargo: cargo ?? "",
     numeroItem:
@@ -2422,6 +2504,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     ["ITEM", "EVENTUAL", "CONSULTOR"],
   );
   const oficinaId = readOptionalInt(body, "oficinaId");
+  const oficinaComisionId = readOptionalInt(body, "oficinaComisionId");
   const unidad = readOptionalString(body, "unidad", 0, 120);
   const cargoCodigo = readOptionalString(body, "cargoCodigo", 1, 50);
   const cargo = readOptionalString(body, "cargo", 2, 120);
@@ -2467,6 +2550,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     tipoVinculo,
     unidad,
     oficinaId,
+    oficinaComisionId,
     cargoCodigo,
     cargo: cargo ?? "",
     numeroItem:
@@ -3016,8 +3100,15 @@ async function ensureUserOfficeLink(tx: any, user: any) {
 
   const currentOfficeId = resolveLinkedOfficeId(user);
 
-  if (currentOfficeId != null && user.oficinas != null) {
+  if (currentOfficeId != null && resolveLinkedOffice(user) != null) {
     return user;
+  }
+
+  if (currentOfficeId != null) {
+    return tx.usuarios.findUnique({
+      where: { id: user.id },
+      include: userWithOfficeInclude,
+    });
   }
 
   const resolvedOffice = await resolveOfficeForUser(tx, user);
@@ -3047,7 +3138,12 @@ async function resolveOfficeForUser(tx: any, user: any) {
     return null;
   }
 
-  const officeId = user.oficinas?.id ?? user.oficina_id ?? null;
+  const officeId =
+    user.oficina_comision?.id ??
+    user.oficina_comision_id ??
+    user.oficinas?.id ??
+    user.oficina_id ??
+    null;
 
   if (officeId != null) {
     return tx.oficinas.findUnique({
@@ -4382,15 +4478,24 @@ function serializeEvent(event: any) {
 }
 
 function resolveLinkedOffice(linkedUser: any) {
-  return linkedUser?.oficinas ?? null;
+  return linkedUser?.oficina_comision ?? linkedUser?.oficinas ?? null;
 }
 
 function resolveLinkedOfficeId(linkedUser: any) {
   const linkedOffice = resolveLinkedOffice(linkedUser);
-  return linkedOffice?.id ?? linkedUser?.oficina_id ?? null;
+  return linkedOffice?.id ??
+    linkedUser?.oficina_comision_id ??
+    linkedUser?.oficina_id ??
+    null;
 }
 
 function resolveLinkedOfficeName(linkedUser: any) {
+  const commissionOfficeName = resolveCommissionOfficeName(linkedUser);
+
+  if (commissionOfficeName != null) {
+    return `Comision: ${commissionOfficeName}`;
+  }
+
   const linkedOffice = resolveLinkedOffice(linkedUser);
 
   return (
@@ -4405,6 +4510,18 @@ function resolveLinkedOfficeCode(linkedUser: any) {
   return normalizeOptionalText(linkedOffice?.cod) ?? null;
 }
 
+function resolvePrimaryOfficeName(linkedUser: any) {
+  return (
+    normalizeOptionalText(linkedUser?.oficinas?.oficina) ??
+    normalizeOptionalText(linkedUser?.unidad) ??
+    null
+  );
+}
+
+function resolveCommissionOfficeName(linkedUser: any) {
+  return normalizeOptionalText(linkedUser?.oficina_comision?.oficina) ?? null;
+}
+
 function serializeAppUser(user: any, person?: any | null) {
   // El frontend recibe dos piezas equivalentes:
   // 1. `qrCode` para mostrar el ID externo en texto.
@@ -4412,6 +4529,8 @@ function serializeAppUser(user: any, person?: any | null) {
   const linkedPerson = person ?? user.persona ?? null;
   const qrCode = linkedPerson?.codigo_qr ?? buildUserQrCode(user);
   const officeName = resolveLinkedOfficeName(user);
+  const primaryOfficeName = resolvePrimaryOfficeName(user);
+  const commissionOfficeName = resolveCommissionOfficeName(user);
 
   return {
     id: user.id,
@@ -4428,6 +4547,11 @@ function serializeAppUser(user: any, person?: any | null) {
     oficinaId: resolveLinkedOfficeId(user),
     oficinaNombre: officeName,
     oficinaCodigo: resolveLinkedOfficeCode(user),
+    oficinaPrincipalId: user.oficina_id ?? user.oficinas?.id ?? null,
+    oficinaPrincipalNombre: primaryOfficeName,
+    oficinaComisionId: user.oficina_comision_id ?? user.oficina_comision?.id ?? null,
+    oficinaComisionNombre: commissionOfficeName,
+    tieneComision: commissionOfficeName != null,
     cargo: user.cargo ?? "",
     numeroItem: user.numero_item ?? "",
     activo: user.activo,

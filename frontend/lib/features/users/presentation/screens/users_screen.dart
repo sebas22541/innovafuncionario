@@ -170,6 +170,7 @@ class _UsersScreenState extends State<UsersScreen> {
         ci: draft.ci,
         tipoVinculo: draft.tipoVinculo,
         oficinaId: draft.office.id,
+        oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
         unidad: draft.office.name,
         cargo: draft.cargo.name,
@@ -312,6 +313,7 @@ class _UsersScreenState extends State<UsersScreen> {
         ci: draft.ci,
         tipoVinculo: draft.tipoVinculo,
         oficinaId: draft.office.id,
+        oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
         unidad: draft.office.name,
         cargo: draft.cargo.name,
@@ -1055,6 +1057,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   final TextEditingController _tercerApellidoController =
       TextEditingController();
   final TextEditingController _unidadController = TextEditingController();
+  final TextEditingController _commissionOfficeController =
+      TextEditingController();
   final TextEditingController _cargoController = TextEditingController();
   final TextEditingController _numeroItemController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
@@ -1066,6 +1070,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   String _selectedTipoVinculo = 'ITEM';
   bool _selectedActivo = true;
   OfficeOption? _selectedOffice;
+  OfficeOption? _selectedCommissionOffice;
+  bool _hasCommission = false;
   CargoOption? _selectedCargo;
   Uint8List? _photoBytes;
   bool _showPhotoError = false;
@@ -1099,8 +1105,23 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _numeroItemController.text = user.numeroItem;
     _emailController.text = user.email;
 
-    _selectedOffice = _findInitialOffice(user);
-    _unidadController.text = _selectedOffice?.name ?? _resolvedOfficeName(user);
+    _selectedOffice = _findInitialOffice(
+      officeId: user.primaryOfficeId ?? user.officeId,
+      officeCode: user.hasCommission ? null : user.officeCode,
+      officeName: user.primaryOfficeName,
+    );
+    _unidadController.text = _selectedOffice?.name ??
+        user.primaryOfficeName ??
+        _resolvedOfficeName(user);
+    _hasCommission = user.hasCommission;
+    _selectedCommissionOffice = _findInitialOffice(
+      officeId: user.commissionOfficeId,
+      officeCode: user.hasCommission ? user.officeCode : null,
+      officeName: user.commissionOfficeName,
+    );
+    _commissionOfficeController.text = _selectedCommissionOffice?.name ??
+        user.commissionOfficeName ??
+        '';
     _selectedCargo = _findInitialCargo(user);
     _cargoController.text = _selectedCargo?.name ?? user.cargo;
   }
@@ -1113,6 +1134,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _segundoApellidoController.dispose();
     _tercerApellidoController.dispose();
     _unidadController.dispose();
+    _commissionOfficeController.dispose();
     _cargoController.dispose();
     _numeroItemController.dispose();
     _emailController.dispose();
@@ -1163,14 +1185,44 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     });
   }
 
-  OfficeOption? _findInitialOffice(AppUser user) {
+  Future<void> _pickCommissionOffice() async {
+    final office = await showModalBottomSheet<OfficeOption>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _OfficeSelectionSheet(
+        offices: widget.offices,
+        selectedOffice: _selectedCommissionOffice,
+      ),
+    );
+
+    if (!mounted || office == null) {
+      return;
+    }
+
+    setState(() {
+      _selectedCommissionOffice = office;
+      _commissionOfficeController.text = office.name;
+    });
+  }
+
+  OfficeOption? _findInitialOffice({
+    int? officeId,
+    String? officeCode,
+    String? officeName,
+  }) {
     for (final office in widget.offices) {
-      if (user.officeId != null && office.id == user.officeId) {
+      if (officeId != null && office.id == officeId) {
         return office;
       }
 
-      if (user.officeCode != null &&
-          office.code.toLowerCase() == user.officeCode!.toLowerCase()) {
+      if (officeCode != null &&
+          office.code.toLowerCase() == officeCode.toLowerCase()) {
+        return office;
+      }
+
+      if (officeName != null &&
+          office.name.toLowerCase() == officeName.toLowerCase()) {
         return office;
       }
     }
@@ -1219,7 +1271,9 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
       return;
     }
 
-    if (_selectedOffice == null || _selectedCargo == null) {
+    if (_selectedOffice == null ||
+        _selectedCargo == null ||
+        (_hasCommission && _selectedCommissionOffice == null)) {
       return;
     }
 
@@ -1241,6 +1295,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
         segundoApellido: _segundoApellidoController.text.trim(),
         tercerApellido: _tercerApellidoController.text.trim(),
         office: _selectedOffice!,
+        commissionOffice: _hasCommission ? _selectedCommissionOffice : null,
         cargo: _selectedCargo!,
         numeroItem: _numeroItemController.text.trim(),
         email: _emailController.text.trim(),
@@ -1426,6 +1481,52 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                               : FontWeight.w600,
                         ),
                       ),
+                      const SizedBox(height: 12),
+                      CheckboxListTile(
+                        value: _hasCommission,
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: const Text('Comision'),
+                        onChanged: (value) {
+                          setState(() {
+                            _hasCommission = value ?? false;
+
+                            if (!_hasCommission) {
+                              _selectedCommissionOffice = null;
+                              _commissionOfficeController.clear();
+                            }
+                          });
+                        },
+                      ),
+                      if (_hasCommission) ...[
+                        const SizedBox(height: 10),
+                        _PickerField(
+                          controller: _commissionOfficeController,
+                          label: 'Oficina de comision',
+                          hint: 'Selecciona la oficina de comision',
+                          icon: Icons.swap_horiz_rounded,
+                          isRequired: true,
+                          onTap: _pickCommissionOffice,
+                          validator: _requiredValidator(
+                            'Selecciona la oficina de comision.',
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _selectedCommissionOffice == null
+                              ? 'Esta oficina contara como principal para eventos.'
+                              : 'Comision: ${_selectedCommissionOffice!.name}',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: _selectedCommissionOffice == null
+                                    ? null
+                                    : AppPalette.orange,
+                                fontWeight: _selectedCommissionOffice == null
+                                    ? null
+                                    : FontWeight.w600,
+                              ),
+                        ),
+                      ],
                       const SizedBox(height: 14),
                       _PickerField(
                         controller: _cargoController,
@@ -1638,6 +1739,7 @@ class _ManagedUserDraft {
     required this.segundoApellido,
     required this.tercerApellido,
     required this.office,
+    required this.commissionOffice,
     required this.cargo,
     required this.numeroItem,
     required this.email,
@@ -1654,6 +1756,7 @@ class _ManagedUserDraft {
   final String segundoApellido;
   final String tercerApellido;
   final OfficeOption office;
+  final OfficeOption? commissionOffice;
   final CargoOption cargo;
   final String numeroItem;
   final String email;
