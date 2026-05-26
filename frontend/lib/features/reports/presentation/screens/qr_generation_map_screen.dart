@@ -11,8 +11,9 @@ import '../../../events/domain/entities/event_record.dart';
 import '../../domain/entities/qr_generation_map_record.dart';
 
 const _defaultQrMapCenter = LatLng(-16.489689, -68.119293);
-const _qrMapMaxZoom = 17.6;
+const _qrMapMaxZoom = 15.4;
 const _qrMapMaxNativeZoom = 18;
+const _qrMapSelectedRecordZoom = 15.2;
 
 class QrGenerationMapScreen extends StatefulWidget {
   const QrGenerationMapScreen({super.key, required this.currentUser});
@@ -409,7 +410,10 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
       _selectedRecordId = record.id;
     });
 
-    _moveMapTo(LatLng(record.latitude, record.longitude), zoom: 16.4);
+    _moveMapTo(
+      LatLng(record.latitude, record.longitude),
+      zoom: _qrMapSelectedRecordZoom,
+    );
 
     if (revealMap) {
       _scrollMapIntoView();
