@@ -429,7 +429,7 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
       mapContext,
       duration: const Duration(milliseconds: 520),
       curve: Curves.easeOutCubic,
-      alignment: 0.04,
+      alignment: 0.16,
     );
   }
 
@@ -856,22 +856,56 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            isEventSource
-                                ? 'Puntos de registro'
-                                : 'Puntos de QR generados',
-                            style: Theme.of(context).textTheme.titleLarge,
-                          ),
-                        ),
-                        if (_records.isNotEmpty)
-                          Text(
-                            'Toca un punto o un registro de la lista para resaltarlo en rojo',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                      ],
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final title = isEventSource
+                            ? 'Puntos de registro'
+                            : 'Puntos de QR generados';
+                        const helperText =
+                            'Toca un punto o un registro de la lista para resaltarlo en rojo';
+                        final shouldStackHeader = constraints.maxWidth < 620;
+
+                        if (shouldStackHeader) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                title,
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                              if (_records.isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                Text(
+                                  helperText,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ],
+                            ],
+                          );
+                        }
+
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                title,
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                            ),
+                            if (_records.isNotEmpty) ...[
+                              const SizedBox(width: 16),
+                              Flexible(
+                                child: Text(
+                                  helperText,
+                                  textAlign: TextAlign.end,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ),
+                            ],
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 14),
                     if (_records.isEmpty && !_isLoading)

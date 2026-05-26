@@ -65,13 +65,34 @@ class _RolePortalShellState extends State<RolePortalShell> {
 
   Future<void> _handleSectionTap(AppSection section) async {
     FocusManager.instance.primaryFocus?.unfocus();
-    await Navigator.of(context).maybePop();
+    final scaffoldState = _scaffoldKey.currentState;
+
+    if (scaffoldState?.isDrawerOpen == true) {
+      scaffoldState!.closeDrawer();
+      await Future<void>.delayed(const Duration(milliseconds: 260));
+    }
 
     if (!mounted) {
       return;
     }
 
     widget.onSelected(section);
+  }
+
+  Future<void> _handleLogout() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    final scaffoldState = _scaffoldKey.currentState;
+
+    if (scaffoldState?.isDrawerOpen == true) {
+      scaffoldState!.closeDrawer();
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    widget.onLogout();
   }
 
   @override
@@ -97,6 +118,7 @@ class _RolePortalShellState extends State<RolePortalShell> {
         borderRadius: borderRadius,
         child: Scaffold(
           key: _scaffoldKey,
+          resizeToAvoidBottomInset: false,
           backgroundColor: _isHome ? Colors.white : AppPalette.night,
           drawerScrimColor: Colors.black.withValues(alpha: 0.28),
           drawer: _PortalDrawer(
@@ -104,7 +126,7 @@ class _RolePortalShellState extends State<RolePortalShell> {
             selectedSection: widget.selectedSection,
             entries: widget.entries,
             onSelected: _handleSectionTap,
-            onLogout: widget.onLogout,
+            onLogout: _handleLogout,
           ),
           body: _isHome
               ? Column(

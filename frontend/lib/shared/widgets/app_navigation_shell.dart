@@ -266,6 +266,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
             }
           },
           child: Scaffold(
+            resizeToAvoidBottomInset: false,
             backgroundColor: AppPalette.cream,
             body: Stack(
               children: [
@@ -499,7 +500,7 @@ class _MobileTopBar extends StatelessWidget {
   }
 }
 
-class _MobileBottomBar extends StatelessWidget {
+class _MobileBottomBar extends StatefulWidget {
   const _MobileBottomBar({
     required this.currentUser,
     required this.selectedSection,
@@ -511,6 +512,63 @@ class _MobileBottomBar extends StatelessWidget {
   final AppSection selectedSection;
   final List<AppSection> visibleSections;
   final ValueChanged<AppSection> onSelected;
+
+  @override
+  State<_MobileBottomBar> createState() => _MobileBottomBarState();
+}
+
+class _MobileBottomBarState extends State<_MobileBottomBar> {
+  final ScrollController _scrollController = ScrollController();
+  bool _canScrollLeft = false;
+  bool _canScrollRight = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_syncScrollIndicators);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncScrollIndicators();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _MobileBottomBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.visibleSections.length != widget.visibleSections.length) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _syncScrollIndicators();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController
+      ..removeListener(_syncScrollIndicators)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _syncScrollIndicators() {
+    if (!_scrollController.hasClients) {
+      return;
+    }
+
+    final position = _scrollController.position;
+    final nextCanScrollLeft = position.pixels > position.minScrollExtent + 1;
+    final nextCanScrollRight = position.pixels < position.maxScrollExtent - 1;
+
+    if (_canScrollLeft == nextCanScrollLeft &&
+        _canScrollRight == nextCanScrollRight) {
+      return;
+    }
+
+    setState(() {
+      _canScrollLeft = nextCanScrollLeft;
+      _canScrollRight = nextCanScrollRight;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -526,28 +584,88 @@ class _MobileBottomBar extends StatelessWidget {
         builder: (context, constraints) {
           final itemWidth = math.max(
             minItemWidth,
-            constraints.maxWidth / visibleSections.length,
+            constraints.maxWidth / widget.visibleSections.length,
           );
 
-          return SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            child: Row(
-              children: [
-                for (final section in visibleSections)
-                  SizedBox(
-                    width: itemWidth,
-                    child: _BottomBarItem(
-                      currentUser: currentUser,
-                      section: section,
-                      isSelected: section == selectedSection,
-                      onTap: () => onSelected(section),
-                    ),
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              SingleChildScrollView(
+                controller: _scrollController,
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                child: Row(
+                  children: [
+                    for (final section in widget.visibleSections)
+                      SizedBox(
+                        width: itemWidth,
+                        child: _BottomBarItem(
+                          currentUser: widget.currentUser,
+                          section: section,
+                          isSelected: section == widget.selectedSection,
+                          onTap: () => widget.onSelected(section),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (_canScrollLeft)
+                const Positioned(
+                  left: 0,
+                  child: _BottomBarScrollHint(icon: Icons.chevron_left_rounded),
+                ),
+              if (_canScrollRight)
+                const Positioned(
+                  right: 0,
+                  child: _BottomBarScrollHint(
+                    icon: Icons.chevron_right_rounded,
                   ),
-              ],
-            ),
+                ),
+            ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _BottomBarScrollHint extends StatelessWidget {
+  const _BottomBarScrollHint({required this.icon});
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Container(
+        width: 28,
+        height: 58,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: icon == Icons.chevron_left_rounded
+                ? Alignment.centerLeft
+                : Alignment.centerRight,
+            end: icon == Icons.chevron_left_rounded
+                ? Alignment.centerRight
+                : Alignment.centerLeft,
+            colors: [
+              AppPalette.surface,
+              AppPalette.surface.withValues(alpha: 0.72),
+              AppPalette.surface.withValues(alpha: 0),
+            ],
+          ),
+        ),
+        child: Container(
+          width: 22,
+          height: 32,
+          decoration: BoxDecoration(
+            color: AppPalette.orangeSoft,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: AppPalette.line),
+          ),
+          child: Icon(icon, size: 20, color: AppPalette.orange),
+        ),
       ),
     );
   }
@@ -743,6 +861,8 @@ class _BottomBarItem extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
         onTap: onTap,
+        splashFactory: NoSplash.splashFactory,
+        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
           constraints: const BoxConstraints(minHeight: 64),
