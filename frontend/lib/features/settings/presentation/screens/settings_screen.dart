@@ -321,31 +321,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         icon: const Icon(Icons.qr_code_2_rounded),
                         label: const Text('Mi QR'),
                       ),
-                      ElevatedButton.icon(
-                        onPressed: _isDownloadingCredential
-                            ? null
-                            : _downloadCredentialDirectly,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppPalette.night,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
+                      if (!currentUser.isExternalUser)
+                        ElevatedButton.icon(
+                          onPressed: _isDownloadingCredential
+                              ? null
+                              : _downloadCredentialDirectly,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppPalette.night,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                          ),
+                          icon: _isDownloadingCredential
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.download_rounded),
+                          label: Text(
+                            _isDownloadingCredential
+                                ? 'Descargando...'
+                                : 'Credencial',
+                          ),
                         ),
-                        icon: _isDownloadingCredential
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : const Icon(Icons.download_rounded),
-                        label: Text(
-                          _isDownloadingCredential
-                              ? 'Descargando...'
-                              : 'Credencial',
-                        ),
-                      ),
                     ],
                   ),
                   const SizedBox(height: 20),

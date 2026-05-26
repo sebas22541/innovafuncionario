@@ -1275,7 +1275,7 @@ const server = http.createServer(async (request, response) => {
       }
 
       if (input.estado === estado_asistencia.ASISTIO) {
-        assertPersonCanAttendEvent(persona, evento);
+        await assertPersonCanAttendEvent(persona, evento);
       }
 
       const operador = await assertEventOperator(input.operatorEmail);
@@ -2109,6 +2109,21 @@ async function syncEventControls(
 
 function normalizeOfficeCode(code: string) {
   return code.trim().replace(/\.+$/, "");
+}
+
+function normalizeOfficeMatchText(value: unknown) {
+  const text = normalizeOptionalText(value);
+
+  if (text == null) {
+    return null;
+  }
+
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
 }
 
 function isOfficeCoveredByBranch(officeCode: string, branchCode: string) {
@@ -2947,9 +2962,10 @@ async function ensurePersonIdentityForUser(tx: any, user: any) {
   // Generacion y sincronizacion del QR del usuario:
   // usuario autenticado -> persona vinculada -> codigo_qr estable -> datos_qr.
   // Esto mantiene en la tabla `personas` la identidad que luego resuelve el escaner.
-  const normalizedCi = normalizeOptionalText(user.ci);
+  const linkedUser = await ensureUserOfficeLink(tx, user);
+  const normalizedCi = normalizeOptionalText(linkedUser.ci);
   const existingPerson = await tx.personas.findUnique({
-    where: { usuario_id: user.id },
+    where: { usuario_id: linkedUser.id },
     include: personIdentityInclude,
   });
   const matchedPerson =
@@ -2964,19 +2980,19 @@ async function ensurePersonIdentityForUser(tx: any, user: any) {
           include: personIdentityInclude,
           orderBy: [{ activo: "desc" }, { updated_at: "desc" }, { id: "desc" }],
         }));
-  const qrCode = resolveUserQrCode(user, matchedPerson?.codigo_qr ?? null);
+  const qrCode = resolveUserQrCode(linkedUser, matchedPerson?.codigo_qr ?? null);
   const data = {
-    nombre_completo: buildUserDisplayName(user),
+    nombre_completo: buildUserDisplayName(linkedUser),
     ci: normalizedCi,
     codigo_qr: qrCode,
     datos_qr: buildStoredUserQrMetadata(
-      user,
+      linkedUser,
       qrCode,
       matchedPerson?.datos_qr ?? null,
     ),
-    activo: user.activo === true,
+    activo: linkedUser.activo === true,
     updated_at: new Date(),
-    usuario_id: user.id,
+    usuario_id: linkedUser.id,
   };
 
   if (matchedPerson) {
@@ -2991,6 +3007,87 @@ async function ensurePersonIdentityForUser(tx: any, user: any) {
     data,
     include: personIdentityInclude,
   });
+}
+
+async function ensureUserOfficeLink(tx: any, user: any) {
+  if (!user) {
+    return user;
+  }
+
+  const currentOfficeId = resolveLinkedOfficeId(user);
+
+  if (currentOfficeId != null && user.oficinas != null) {
+    return user;
+  }
+
+  const resolvedOffice = await resolveOfficeForUser(tx, user);
+
+  if (resolvedOffice == null) {
+    return user;
+  }
+
+  if (user.oficina_id === resolvedOffice.id && user.oficinas == null) {
+    return tx.usuarios.findUnique({
+      where: { id: user.id },
+      include: userWithOfficeInclude,
+    });
+  }
+
+  return tx.usuarios.update({
+    where: { id: user.id },
+    data: {
+      oficina_id: resolvedOffice.id,
+    },
+    include: userWithOfficeInclude,
+  });
+}
+
+async function resolveOfficeForUser(tx: any, user: any) {
+  if (!user) {
+    return null;
+  }
+
+  const officeId = user.oficinas?.id ?? user.oficina_id ?? null;
+
+  if (officeId != null) {
+    return tx.oficinas.findUnique({
+      where: { id: officeId },
+    });
+  }
+
+  const normalizedUnit = normalizeOfficeMatchText(user.unidad);
+
+  if (normalizedUnit == null) {
+    return null;
+  }
+
+  const offices = (await tx.oficinas.findMany()) as EventOfficeNode[];
+  return (
+    offices.find(
+      (office) => normalizeOfficeMatchText(office.oficina) === normalizedUnit,
+    ) ?? null
+  );
+}
+
+async function ensurePersonLinkedOffice(person: any) {
+  const linkedUser = person?.usuario ?? null;
+
+  if (!linkedUser) {
+    return person;
+  }
+
+  const originalOfficeId = resolveLinkedOfficeId(linkedUser);
+  const resolvedUser = await ensureUserOfficeLink(prisma, linkedUser);
+  const resolvedOfficeId = resolveLinkedOfficeId(resolvedUser);
+
+  if (originalOfficeId === resolvedOfficeId && linkedUser.oficinas != null) {
+    return person;
+  }
+
+  return {
+    ...person,
+    usuario: resolvedUser,
+  };
 }
 
 async function issueDynamicQrForUser(
@@ -3121,7 +3218,7 @@ async function findPersonByScannedValue(
     });
 
     if (person) {
-      return person;
+      return ensurePersonLinkedOffice(person);
     }
   }
 
@@ -3132,7 +3229,7 @@ async function findPersonByScannedValue(
     const legacyPerson = await findPersonByLegacyUserQrCode(candidate);
 
     if (legacyPerson) {
-      return legacyPerson;
+      return ensurePersonLinkedOffice(legacyPerson);
     }
   }
 
@@ -3140,7 +3237,7 @@ async function findPersonByScannedValue(
     const personByCi = await findPersonByCi(candidate);
 
     if (personByCi) {
-      return personByCi;
+      return ensurePersonLinkedOffice(personByCi);
     }
   }
 
@@ -3153,7 +3250,7 @@ async function findPersonByScannedValue(
     });
 
     if (dynamicPerson) {
-      return dynamicPerson;
+      return ensurePersonLinkedOffice(dynamicPerson);
     }
   }
 
@@ -3219,13 +3316,15 @@ async function findPersonByCi(ci: string) {
     return ensurePersonIdentityForUser(prisma, linkedUser);
   }
 
-  return prisma.personas.findFirst({
+  const person = await prisma.personas.findFirst({
     where: {
       ci: normalizedCi,
     },
     include: personIdentityInclude,
     orderBy: [{ activo: "desc" }, { updated_at: "desc" }, { id: "desc" }],
   });
+
+  return person == null ? null : ensurePersonLinkedOffice(person);
 }
 
 function buildCiAttendanceRawValue(ci: string) {
@@ -4489,9 +4588,12 @@ function serializeQrPersonDetail(
   };
 }
 
-function assertPersonCanAttendEvent(person: any, event: any) {
+async function assertPersonCanAttendEvent(person: any, event: any) {
   const linkedUser = person.usuario ?? null;
-  const userOfficeId = linkedUser?.oficina_id ?? null;
+  const userOfficeId =
+    resolveLinkedOfficeId(linkedUser) ??
+    (await resolveOfficeForUser(prisma, linkedUser))?.id ??
+    null;
 
   if (userOfficeId == null) {
     throw new HttpError(
