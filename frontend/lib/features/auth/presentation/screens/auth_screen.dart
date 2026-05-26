@@ -1518,8 +1518,10 @@ class _AuthBrandLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.sizeOf(context).width < 700;
+
     return Image.asset(
-      'assets/images/inlogplo.png',
+      isMobile ? 'assets/images/letragris.png' : 'assets/images/inlogplo.png',
       height: height,
       fit: BoxFit.contain,
     );

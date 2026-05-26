@@ -664,11 +664,13 @@ class _InlogLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.sizeOf(context).width < 700;
+
     return SizedBox(
       width: height * 1.75,
       height: height,
       child: Image.asset(
-        'assets/images/inlog.png',
+        isMobile ? 'assets/images/letrablan.png' : 'assets/images/inlog.png',
         fit: BoxFit.contain,
         errorBuilder: (context, error, stackTrace) {
           return Icon(

@@ -77,7 +77,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
       if (_selectedEventId != null) {
         for (final event in events) {
           if (event.id == _selectedEventId) {
-            selectedEvent = event;
+            selectedEvent = await dependencies.eventsApiService.fetchEventById(
+              event.id,
+            );
             break;
           }
         }
@@ -195,27 +197,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
     });
 
     try {
-      final events = await dependencies.eventsApiService.fetchEvents();
-      EventRecord? selectedEvent;
-
-      for (final event in events) {
-        if (event.id == selectedEventId) {
-          selectedEvent = event;
-          break;
-        }
-      }
+      final selectedEvent = await dependencies.eventsApiService.fetchEventById(
+        selectedEventId,
+      );
+      final events = await dependencies.eventsApiService.fetchEvents(
+        forceRefresh: true,
+      );
 
       if (!mounted) {
-        return;
-      }
-
-      if (selectedEvent == null) {
-        setState(() {
-          _events = events;
-          _eventReport = null;
-          _eventErrorMessage =
-              'No se encontro el evento seleccionado para el reporte.';
-        });
         return;
       }
 
@@ -1177,9 +1166,7 @@ class _EventRosterTableSection extends StatelessWidget {
                       _EventTableValueCell(
                         value: entry.officeName ?? 'Sin oficina',
                       ),
-                      _EventTableDateTimeCell(
-                        dateTime: entry.registeredAt,
-                      ),
+                      _EventTableDateTimeCell(dateTime: entry.registeredAt),
                       _EventTableValueCell(
                         value: _eventRosterTipoLabel(entry.tipoVinculo),
                       ),
