@@ -11,6 +11,8 @@ import '../../../events/domain/entities/event_record.dart';
 import '../../domain/entities/qr_generation_map_record.dart';
 
 const _defaultQrMapCenter = LatLng(-16.489689, -68.119293);
+const _qrMapMaxZoom = 17.6;
+const _qrMapMaxNativeZoom = 18;
 
 class QrGenerationMapScreen extends StatefulWidget {
   const QrGenerationMapScreen({super.key, required this.currentUser});
@@ -949,6 +951,8 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
                             options: MapOptions(
                               initialCenter: initialCenter,
                               initialZoom: _records.isEmpty ? 12 : 14.4,
+                              minZoom: 3,
+                              maxZoom: _qrMapMaxZoom,
                               onMapReady: _handleMapReady,
                             ),
                             children: [
@@ -956,6 +960,8 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
                                 urlTemplate:
                                     'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                                 userAgentPackageName: 'qr',
+                                maxZoom: _qrMapMaxZoom,
+                                maxNativeZoom: _qrMapMaxNativeZoom,
                               ),
                               MarkerLayer(
                                 markers: [

@@ -33,6 +33,48 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <script>
+    // Reduce browser/password-manager overlays on Flutter Web text inputs.
+    // Chrome may still show security warnings it owns, but these attributes
+    // keep app fields from advertising saved-account/autofill behavior.
+    (function () {
+      function hardenInput(element) {
+        if (!element || !element.setAttribute) {
+          return;
+        }
+
+        element.setAttribute('autocomplete', 'off');
+        element.setAttribute('autocorrect', 'off');
+        element.setAttribute('autocapitalize', 'off');
+        element.setAttribute('spellcheck', 'false');
+        element.setAttribute('data-lpignore', 'true');
+        element.setAttribute('data-1p-ignore', 'true');
+        element.setAttribute('data-bwignore', 'true');
+      }
+
+      function hardenAutofillTargets(root) {
+        var scope = root && root.querySelectorAll ? root : document;
+        scope.querySelectorAll('input, textarea, form').forEach(hardenInput);
+      }
+
+      window.addEventListener('DOMContentLoaded', function () {
+        hardenAutofillTargets(document);
+
+        new MutationObserver(function (mutations) {
+          mutations.forEach(function (mutation) {
+            mutation.addedNodes.forEach(function (node) {
+              if (node.nodeType !== Node.ELEMENT_NODE) {
+                return;
+              }
+
+              hardenInput(node);
+              hardenAutofillTargets(node);
+            });
+          });
+        }).observe(document.body, { childList: true, subtree: true });
+      });
+    })();
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

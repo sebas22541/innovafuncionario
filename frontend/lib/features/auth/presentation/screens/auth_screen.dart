@@ -419,6 +419,7 @@ class _AuthScreenState extends State<AuthScreen> {
         }
       },
       child: Scaffold(
+        resizeToAvoidBottomInset: false,
         backgroundColor: Colors.white,
         body: Stack(
           children: [
@@ -663,104 +664,112 @@ class _AuthFormCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AutofillGroup(
-      child: Form(
-        key: formKey,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final availableHeight = constraints.hasBoundedHeight
-                ? constraints.maxHeight
-                : constraints.minHeight;
+    return Form(
+      key: formKey,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final availableHeight = constraints.hasBoundedHeight
+              ? constraints.maxHeight
+              : constraints.minHeight;
 
-            if (!isRegisterMode) {
-              return SizedBox(
-                height: availableHeight > 0 ? availableHeight : minHeight,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _AuthBackButton(onTap: onBack),
-                    const SizedBox(height: 12),
-                    Expanded(child: Center(child: _buildLoginView(context))),
-                  ],
-                ),
-              );
-            }
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _AuthBackButton(onTap: onBack),
-                const SizedBox(height: 12),
-                _buildRegisterView(context, constraints),
-              ],
+          if (!isRegisterMode) {
+            return ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: availableHeight > 0 ? availableHeight : minHeight,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _AuthBackButton(onTap: onBack),
+                  const SizedBox(height: 12),
+                  _buildLoginView(context),
+                ],
+              ),
             );
-          },
-        ),
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _AuthBackButton(onTap: onBack),
+              const SizedBox(height: 12),
+              _buildRegisterView(context, constraints),
+            ],
+          );
+        },
       ),
     );
   }
 
   Widget _buildLoginView(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Center(child: _AuthBrandLogo(height: 94)),
-        const SizedBox(height: 26),
-        _AuthField(
-          controller: emailController,
-          focusNode: emailFocusNode,
-          label: 'Correo',
-          hint: 'Correo',
-          keyboardType: TextInputType.emailAddress,
-          textInputAction: TextInputAction.next,
-          autofillHints: const [AutofillHints.username, AutofillHints.email],
-          onFieldSubmitted: (_) => passwordFocusNode.requestFocus(),
-          validator: (value) {
-            final email = value?.trim() ?? '';
+    return Padding(
+      padding: const EdgeInsets.only(top: 28),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Center(child: _AuthBrandLogo(height: 94)),
+          const SizedBox(height: 26),
+          _AuthField(
+            controller: emailController,
+            focusNode: emailFocusNode,
+            label: 'Correo',
+            hint: 'Correo',
+            keyboardType: TextInputType.emailAddress,
+            textInputAction: TextInputAction.next,
+            enableSuggestions: false,
+            autocorrect: false,
+            enableIMEPersonalizedLearning: false,
+            onFieldSubmitted: (_) => passwordFocusNode.requestFocus(),
+            validator: (value) {
+              final email = value?.trim() ?? '';
 
-            if (email.isEmpty || !email.contains('@')) {
-              return 'Ingresa un correo valido.';
-            }
+              if (email.isEmpty || !email.contains('@')) {
+                return 'Ingresa un correo valido.';
+              }
 
-            return null;
-          },
-        ),
-        const SizedBox(height: 12),
-        _AuthField(
-          controller: passwordController,
-          focusNode: passwordFocusNode,
-          label: 'Contrasena',
-          hint: '*******',
-          obscureText: hidePassword,
-          textInputAction: TextInputAction.done,
-          autofillHints: const [AutofillHints.password],
-          suffixIcon: IconButton(
-            onPressed: onTogglePasswordVisibility,
-            icon: Icon(
-              hidePassword
-                  ? Icons.visibility_off_outlined
-                  : Icons.visibility_outlined,
-              color: const Color(0xFF585364),
-            ),
+              return null;
+            },
           ),
-          validator: (value) {
-            if ((value ?? '').trim().length < 6) {
-              return 'La contrasena debe tener al menos 6 caracteres.';
-            }
+          const SizedBox(height: 12),
+          _AuthField(
+            controller: passwordController,
+            focusNode: passwordFocusNode,
+            label: 'Contrasena',
+            hint: '*******',
+            obscureText: hidePassword,
+            keyboardType: TextInputType.visiblePassword,
+            textInputAction: TextInputAction.done,
+            enableSuggestions: false,
+            autocorrect: false,
+            enableIMEPersonalizedLearning: false,
+            suffixIcon: IconButton(
+              onPressed: onTogglePasswordVisibility,
+              icon: Icon(
+                hidePassword
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+                color: const Color(0xFF585364),
+              ),
+            ),
+            validator: (value) {
+              if ((value ?? '').trim().length < 6) {
+                return 'La contrasena debe tener al menos 6 caracteres.';
+              }
 
-            return null;
-          },
-          onFieldSubmitted: (_) => onSubmit(),
-        ),
-        const SizedBox(height: 16),
-        _AuthPrimaryButton(
-          label: 'Ingresar',
-          color: const Color(0xFFE95182),
-          onTap: isSubmitting ? null : onSubmit,
-          isLoading: isSubmitting,
-        ),
-      ],
+              return null;
+            },
+            onFieldSubmitted: (_) => onSubmit(),
+          ),
+          const SizedBox(height: 16),
+          _AuthPrimaryButton(
+            label: 'Ingresar',
+            color: const Color(0xFFE95182),
+            onTap: isSubmitting ? null : onSubmit,
+            isLoading: isSubmitting,
+          ),
+        ],
+      ),
     );
   }
 
@@ -1091,6 +1100,9 @@ class _AuthField extends StatelessWidget {
     this.focusNode,
     this.onFieldSubmitted,
     this.isRequired = false,
+    this.enableSuggestions = true,
+    this.autocorrect = true,
+    this.enableIMEPersonalizedLearning = true,
   });
 
   final TextEditingController controller;
@@ -1105,6 +1117,9 @@ class _AuthField extends StatelessWidget {
   final FocusNode? focusNode;
   final ValueChanged<String>? onFieldSubmitted;
   final bool isRequired;
+  final bool enableSuggestions;
+  final bool autocorrect;
+  final bool enableIMEPersonalizedLearning;
 
   @override
   Widget build(BuildContext context) {
@@ -1115,6 +1130,9 @@ class _AuthField extends StatelessWidget {
       textInputAction: textInputAction,
       obscureText: obscureText,
       autofillHints: autofillHints,
+      enableSuggestions: enableSuggestions,
+      autocorrect: autocorrect,
+      enableIMEPersonalizedLearning: enableIMEPersonalizedLearning,
       validator: validator,
       onFieldSubmitted: onFieldSubmitted,
       decoration: InputDecoration(
