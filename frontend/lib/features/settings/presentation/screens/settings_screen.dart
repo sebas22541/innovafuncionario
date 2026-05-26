@@ -3,12 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-import 'package:qr/qr.dart' as qr;
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../../core/theme/app_palette.dart';
@@ -257,7 +253,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Puedes actualizar tu foto, nombres y apellidos. El resto de los datos se mantiene de solo lectura.',
+                              currentUser.isExternalUser
+                                  ? 'Tus datos se mantienen de solo lectura.'
+                                  : 'Puedes actualizar tu foto, nombres y apellidos. El resto de los datos se mantiene de solo lectura.',
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
                             const SizedBox(height: 10),
@@ -275,42 +273,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     spacing: 12,
                     runSpacing: 12,
                     children: [
-                      OutlinedButton.icon(
-                        onPressed: _isSavingProfile || _isSavingPhoto
-                            ? null
-                            : _openEditProfileDialog,
-                        icon: _isSavingProfile
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.edit_outlined),
-                        label: Text(
-                          _isSavingProfile
-                              ? 'Guardando...'
-                              : 'Editar nombres y apellidos',
+                      if (!currentUser.isExternalUser) ...[
+                        OutlinedButton.icon(
+                          onPressed: _isSavingProfile || _isSavingPhoto
+                              ? null
+                              : _openEditProfileDialog,
+                          icon: _isSavingProfile
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.edit_outlined),
+                          label: Text(
+                            _isSavingProfile
+                                ? 'Guardando...'
+                                : 'Editar nombres y apellidos',
+                          ),
                         ),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _isSavingProfile || _isSavingPhoto
-                            ? null
-                            : _pickProfilePhoto,
-                        icon: _isSavingPhoto
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.photo_camera_outlined),
-                        label: Text(
-                          _isSavingPhoto ? 'Subiendo foto...' : 'Cambiar foto',
+                        OutlinedButton.icon(
+                          onPressed: _isSavingProfile || _isSavingPhoto
+                              ? null
+                              : _pickProfilePhoto,
+                          icon: _isSavingPhoto
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.photo_camera_outlined),
+                          label: Text(
+                            _isSavingPhoto
+                                ? 'Subiendo foto...'
+                                : 'Cambiar foto',
+                          ),
                         ),
-                      ),
+                      ],
                       ElevatedButton.icon(
                         onPressed: _openMyQrDialog,
                         style: ElevatedButton.styleFrom(
@@ -708,7 +710,6 @@ class _MyQrDialogState extends State<_MyQrDialog> {
   DynamicQrSession? _dynamicQrSession;
   Duration _remaining = Duration.zero;
   bool _isGenerating = true;
-  bool _isExporting = false;
   String? _generationError;
 
   @override
@@ -939,50 +940,6 @@ class _MyQrDialogState extends State<_MyQrDialog> {
     return Duration(seconds: difference.inSeconds + 1);
   }
 
-  Future<void> _downloadQrPdf(BuildContext context) async {
-    final session = _dynamicQrSession;
-    final qrPayload = session?.qrPayload;
-
-    if (session == null || qrPayload == null || qrPayload.trim().isEmpty) {
-      return;
-    }
-
-    if (_isExpired) {
-      AppAlert.showWarning(
-        context,
-        'El QR ya caduco. Refrescalo antes de descargarlo.',
-      );
-      return;
-    }
-
-    setState(() {
-      _isExporting = true;
-    });
-
-    try {
-      final bytes = await _buildProfileQrPdf(
-        widget.currentUser,
-        qrPayload: qrPayload,
-      );
-      await Printing.sharePdf(
-        bytes: bytes,
-        filename: _buildProfileQrFilename(widget.currentUser),
-      );
-    } catch (_) {
-      if (!context.mounted) {
-        return;
-      }
-
-      AppAlert.showError(context, 'No fue posible descargar tu QR.');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isExporting = false;
-        });
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final currentUser = widget.currentUser;
@@ -997,7 +954,6 @@ class _MyQrDialogState extends State<_MyQrDialog> {
           child: _QrProfileCard(
             currentUser: currentUser,
             qrPayload: dynamicQrSession?.qrPayload,
-            externalId: dynamicQrSession?.qrCode ?? currentUser.qrCode,
             isGenerating: _isGenerating,
             isExpired: _isExpired,
             remaining: _remaining,
@@ -1011,27 +967,6 @@ class _MyQrDialogState extends State<_MyQrDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cerrar'),
         ),
-        ElevatedButton.icon(
-          onPressed: _isExporting || _isGenerating || _isExpired
-              ? null
-              : () => _downloadQrPdf(context),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppPalette.orange,
-            foregroundColor: Colors.white,
-            elevation: 0,
-          ),
-          icon: _isExporting
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                )
-              : const Icon(Icons.download_rounded),
-          label: Text(_isExporting ? 'Descargando...' : 'Descargar PDF'),
-        ),
       ],
     );
   }
@@ -1041,7 +976,6 @@ class _QrProfileCard extends StatelessWidget {
   const _QrProfileCard({
     required this.currentUser,
     required this.qrPayload,
-    required this.externalId,
     required this.isGenerating,
     required this.isExpired,
     required this.remaining,
@@ -1051,7 +985,6 @@ class _QrProfileCard extends StatelessWidget {
 
   final AppUser currentUser;
   final String? qrPayload;
-  final String? externalId;
   final bool isGenerating;
   final bool isExpired;
   final Duration remaining;
@@ -1120,75 +1053,12 @@ class _QrProfileCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 14),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            currentUser.fullName,
-                            style: Theme.of(context).textTheme.headlineMedium
-                                ?.copyWith(color: Colors.white, fontSize: 28),
-                          ),
-                          if (currentUser.ci.trim().isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.14),
-                                borderRadius: BorderRadius.circular(999),
-                                border: Border.all(
-                                  color: Colors.white.withValues(alpha: 0.14),
-                                ),
-                              ),
-                              child: Text(
-                                'CI: ${currentUser.ci}',
-                                style: Theme.of(context).textTheme.bodyMedium
-                                    ?.copyWith(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 18),
-                          _QrProfileInfoTile(
-                            icon: Icons.work_outline_rounded,
-                            label: 'Cargo',
-                            value: _resolvedJobTitle(currentUser),
-                          ),
-                          const SizedBox(height: 10),
-                          _QrProfileInfoTile(
-                            icon: Icons.apartment_rounded,
-                            label: 'Oficina',
-                            value: _resolvedOfficeName(currentUser),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.16),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.16),
-                        ),
-                      ),
-                      child: Base64Avatar(
-                        size: 92,
-                        fallbackLabel: currentUser.fullName,
-                        photoSource: currentUser.fotoUrl,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                    ),
-                  ],
+                Text(
+                  currentUser.fullName,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    color: Colors.white,
+                    fontSize: 28,
+                  ),
                 ),
                 const SizedBox(height: 22),
                 Container(
@@ -1336,14 +1206,6 @@ class _QrProfileCard extends StatelessWidget {
                         ).textTheme.bodyMedium?.copyWith(color: AppPalette.ink),
                         textAlign: TextAlign.center,
                       ),
-                      if ((externalId ?? '').trim().isNotEmpty) ...[
-                        const SizedBox(height: 12),
-                        SelectableText(
-                          'ID externo: $externalId',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -1439,299 +1301,6 @@ class _QrGenerationLocationSnapshot {
   final double? accuracy;
 }
 
-class _QrProfileInfoTile extends StatelessWidget {
-  const _QrProfileInfoTile({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-
-  final IconData icon;
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: AppPalette.orangeSoft,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(icon, color: AppPalette.orange),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: AppPalette.onDarkMuted,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleMedium?.copyWith(color: Colors.white),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-Future<Uint8List> _buildProfileQrPdf(
-  AppUser currentUser, {
-  required String qrPayload,
-}) async {
-  final document = pw.Document();
-  final photoBytes = await _resolvePhotoBytes(currentUser.fotoUrl);
-  final photoImage = photoBytes == null ? null : pw.MemoryImage(photoBytes);
-  // En PDF se vuelve a construir la matriz QR a partir del mismo payload del backend.
-  final qrImage = _buildPdfQrImage(qrPayload);
-  final pageFormat = PdfPageFormat(
-    86 * PdfPageFormat.mm,
-    150 * PdfPageFormat.mm,
-    marginAll: 0,
-  );
-
-  document.addPage(
-    pw.Page(
-      pageFormat: pageFormat,
-      margin: pw.EdgeInsets.zero,
-      build: (context) {
-        return pw.Container(
-          width: pageFormat.width,
-          height: pageFormat.height,
-          color: const PdfColor.fromInt(0xFFF7F4FC),
-          padding: const pw.EdgeInsets.all(6),
-          child: pw.Container(
-            decoration: pw.BoxDecoration(
-              color: PdfColors.white,
-              borderRadius: pw.BorderRadius.circular(20),
-              border: pw.Border.all(
-                color: const PdfColor.fromInt(0xFFE6DFF2),
-                width: 1.2,
-              ),
-            ),
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-              children: [
-                pw.Container(
-                  padding: const pw.EdgeInsets.fromLTRB(14, 14, 14, 10),
-                  decoration: const pw.BoxDecoration(
-                    color: PdfColor.fromInt(0xFF6D56A0),
-                    borderRadius: pw.BorderRadius.vertical(
-                      top: pw.Radius.circular(19),
-                    ),
-                  ),
-                  child: pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-                    children: [
-                      pw.Row(
-                        crossAxisAlignment: pw.CrossAxisAlignment.start,
-                        children: [
-                          pw.Expanded(
-                            child: pw.Column(
-                              crossAxisAlignment: pw.CrossAxisAlignment.start,
-                              children: [
-                                pw.Text(
-                                  currentUser.fullName,
-                                  style: pw.TextStyle(
-                                    color: PdfColors.white,
-                                    fontSize: 15,
-                                    fontWeight: pw.FontWeight.bold,
-                                  ),
-                                ),
-                                if (currentUser.ci.trim().isNotEmpty) ...[
-                                  pw.SizedBox(height: 6),
-                                  pw.Text(
-                                    'CI: ${currentUser.ci}',
-                                    style: pw.TextStyle(
-                                      color: const PdfColor.fromInt(0xFFF2EDFB),
-                                      fontSize: 9,
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                          pw.SizedBox(width: 10),
-                          _buildPdfAvatar(
-                            currentUser: currentUser,
-                            photoImage: photoImage,
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                pw.Padding(
-                  padding: const pw.EdgeInsets.fromLTRB(8, 8, 8, 10),
-                  child: pw.Column(
-                    mainAxisSize: pw.MainAxisSize.min,
-                    children: [
-                      pw.Container(
-                        width: 216,
-                        padding: const pw.EdgeInsets.all(5),
-                        decoration: pw.BoxDecoration(
-                          color: PdfColors.white,
-                          borderRadius: pw.BorderRadius.circular(16),
-                          border: pw.Border.all(
-                            color: const PdfColor.fromInt(0xFFE6DFF2),
-                          ),
-                        ),
-                        child: qrImage != null
-                            ? _buildPdfQrWidget(qrImage, 206)
-                            : pw.Container(
-                                width: 206,
-                                height: 206,
-                                alignment: pw.Alignment.center,
-                                color: const PdfColor.fromInt(0xFFF8F6FC),
-                                child: pw.Text(
-                                  'QR no disponible',
-                                  style: pw.TextStyle(
-                                    color: const PdfColor.fromInt(0xFF4A396F),
-                                    fontSize: 10,
-                                  ),
-                                ),
-                              ),
-                      ),
-                      pw.SizedBox(height: 8),
-                      pw.Text(
-                        'Credencial personal QR',
-                        textAlign: pw.TextAlign.center,
-                        style: pw.TextStyle(
-                          color: const PdfColor.fromInt(0xFF7C6E9E),
-                          fontSize: 9,
-                          fontWeight: pw.FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    ),
-  );
-
-  return document.save();
-}
-
-pw.Widget _buildPdfAvatar({
-  required AppUser currentUser,
-  required pw.MemoryImage? photoImage,
-}) {
-  return pw.Container(
-    width: 58,
-    height: 58,
-    decoration: pw.BoxDecoration(
-      color: const PdfColor.fromInt(0xFFEDE7F8),
-      borderRadius: pw.BorderRadius.circular(14),
-      image: photoImage == null
-          ? null
-          : pw.DecorationImage(image: photoImage, fit: pw.BoxFit.cover),
-    ),
-    alignment: pw.Alignment.center,
-    child: photoImage == null
-        ? pw.Text(
-            currentUser.initial,
-            style: pw.TextStyle(
-              color: const PdfColor.fromInt(0xFF7D67B1),
-              fontSize: 20,
-              fontWeight: pw.FontWeight.bold,
-            ),
-          )
-        : null,
-  );
-}
-
-qr.QrImage? _buildPdfQrImage(String payload) {
-  if (payload.trim().isEmpty) {
-    return null;
-  }
-
-  try {
-    // Aqui no se interpreta el payload; solo se convierte a modulos QR para imprimirlo.
-    final code = qr.QrCode.fromData(
-      data: payload,
-      errorCorrectLevel: qr.QrErrorCorrectLevel.L,
-    );
-    return qr.QrImage(code);
-  } catch (_) {
-    return null;
-  }
-}
-
-pw.Widget _buildPdfQrWidget(qr.QrImage image, double size) {
-  const quietZoneModules = 4;
-  final totalModules = image.moduleCount + (quietZoneModules * 2);
-  final cellSize = size / totalModules;
-
-  // El PDF pinta manualmente cada modulo oscuro del QR para mantener control visual.
-  return pw.CustomPaint(
-    size: PdfPoint(size, size),
-    painter: (canvas, canvasSize) {
-      canvas.setFillColor(PdfColors.white);
-      canvas.drawRect(0, 0, canvasSize.x, canvasSize.y);
-      canvas.fillPath();
-
-      canvas.setFillColor(const PdfColor.fromInt(0xFF4A396F));
-
-      for (var row = 0; row < image.moduleCount; row++) {
-        for (var col = 0; col < image.moduleCount; col++) {
-          if (!image.isDark(row, col)) {
-            continue;
-          }
-
-          final x = (col + quietZoneModules) * cellSize;
-          final y = canvasSize.y - ((row + quietZoneModules + 1) * cellSize);
-
-          canvas.drawRect(x, y, cellSize, cellSize);
-          canvas.fillPath();
-        }
-      }
-    },
-  );
-}
-
-String _buildProfileQrFilename(AppUser currentUser) {
-  final ci = currentUser.ci.trim();
-  final fallbackName = currentUser.firstName
-      .trim()
-      .toLowerCase()
-      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
-      .replaceAll(RegExp(r'^-+|-+$'), '');
-
-  final safeId = ci.isNotEmpty
-      ? ci
-      : (fallbackName.isEmpty ? 'usuario' : fallbackName);
-  return 'qr-perfil-$safeId.pdf';
-}
-
 String _buildCredentialFilename(AppUser currentUser) {
   final ci = currentUser.ci.trim();
   final fallbackName = currentUser.firstName
@@ -1744,43 +1313,6 @@ String _buildCredentialFilename(AppUser currentUser) {
       : (fallbackName.isEmpty ? 'usuario' : fallbackName);
 
   return 'credencial-$safeId.pdf';
-}
-
-Future<Uint8List?> _resolvePhotoBytes(String? photoSource) async {
-  if (photoSource == null || photoSource.trim().isEmpty) {
-    return null;
-  }
-
-  final normalizedPhotoSource = photoSource.trim();
-  final parsedUri = Uri.tryParse(normalizedPhotoSource);
-
-  if (parsedUri != null &&
-      (parsedUri.scheme == 'http' || parsedUri.scheme == 'https')) {
-    try {
-      final response = await http.get(parsedUri);
-
-      if (response.statusCode >= 200 &&
-          response.statusCode < 300 &&
-          response.bodyBytes.isNotEmpty) {
-        return Uint8List.fromList(response.bodyBytes);
-      }
-    } catch (_) {
-      return null;
-    }
-
-    return null;
-  }
-
-  try {
-    return base64Decode(normalizedPhotoSource);
-  } catch (_) {
-    return null;
-  }
-}
-
-String _resolvedJobTitle(AppUser currentUser) {
-  final jobTitle = currentUser.cargo.trim();
-  return jobTitle.isEmpty ? 'Cargo no registrado' : jobTitle;
 }
 
 String _resolvedOfficeName(AppUser currentUser) {
