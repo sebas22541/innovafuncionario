@@ -59,11 +59,18 @@ class _RolePortalShellState extends State<RolePortalShell> {
   }
 
   void _openDrawer() {
+    FocusManager.instance.primaryFocus?.unfocus();
     _scaffoldKey.currentState?.openDrawer();
   }
 
-  void _handleSectionTap(AppSection section) {
-    Navigator.of(context).maybePop();
+  Future<void> _handleSectionTap(AppSection section) async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    await Navigator.of(context).maybePop();
+
+    if (!mounted) {
+      return;
+    }
+
     widget.onSelected(section);
   }
 
@@ -163,10 +170,9 @@ class RolePortalHomeContent extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(18, 26, 18, 32),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final greetingTextWidth = math.min(
-            constraints.maxWidth - 112,
-            280.0,
-          ).clamp(180.0, 280.0);
+          final greetingTextWidth = math
+              .min(constraints.maxWidth - 112, 280.0)
+              .clamp(180.0, 280.0);
 
           return Column(
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -193,10 +199,7 @@ class RolePortalHomeContent extends StatelessWidget {
                           'Hola',
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.headlineMedium
-                              ?.copyWith(
-                                color: Colors.black87,
-                                fontSize: 26,
-                              ),
+                              ?.copyWith(color: Colors.black87, fontSize: 26),
                         ),
                         const SizedBox(height: 4),
                         Text(
@@ -237,7 +240,10 @@ class RolePortalHomeContent extends StatelessWidget {
               const SizedBox(height: 18),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 18),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 18,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFFF1F1F5),
                   borderRadius: BorderRadius.circular(28),

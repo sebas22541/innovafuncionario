@@ -214,7 +214,11 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
           layoutBuilder: (currentChild, previousChildren) {
             return Stack(
               alignment: Alignment.topCenter,
-              children: [...previousChildren, ?currentChild],
+              children: [
+                for (final child in previousChildren)
+                  IgnorePointer(ignoring: true, child: child),
+                ?currentChild,
+              ],
             );
           },
           child: KeyedSubtree(
@@ -510,24 +514,40 @@ class _MobileBottomBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const minItemWidth = 76.0;
+
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 10, 10, 14),
       decoration: const BoxDecoration(
         color: AppPalette.surface,
         border: Border(top: BorderSide(color: AppPalette.line)),
       ),
-      child: Row(
-        children: [
-          for (final section in visibleSections)
-            Expanded(
-              child: _BottomBarItem(
-                currentUser: currentUser,
-                section: section,
-                isSelected: section == selectedSection,
-                onTap: () => onSelected(section),
-              ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final itemWidth = math.max(
+            minItemWidth,
+            constraints.maxWidth / visibleSections.length,
+          );
+
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Row(
+              children: [
+                for (final section in visibleSections)
+                  SizedBox(
+                    width: itemWidth,
+                    child: _BottomBarItem(
+                      currentUser: currentUser,
+                      section: section,
+                      isSelected: section == selectedSection,
+                      onTap: () => onSelected(section),
+                    ),
+                  ),
+              ],
             ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -725,6 +745,7 @@ class _BottomBarItem extends StatelessWidget {
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
+          constraints: const BoxConstraints(minHeight: 64),
           padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
           decoration: BoxDecoration(
             color: isSelected ? AppPalette.orangeSoft : Colors.transparent,

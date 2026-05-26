@@ -25,6 +25,7 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
   final TextEditingController _ciController = TextEditingController();
   final MapController _mapController = MapController();
   final ScrollController _scrollController = ScrollController();
+  final GlobalKey _mapSectionKey = GlobalKey();
 
   List<EventRecord> _events = const [];
   List<QrGenerationMapRecord> _records = const [];
@@ -397,16 +398,39 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
     });
   }
 
-  void _selectRecord(QrGenerationMapRecord record, {bool openDetails = false}) {
+  void _selectRecord(
+    QrGenerationMapRecord record, {
+    bool openDetails = false,
+    bool revealMap = false,
+  }) {
     setState(() {
       _selectedRecordId = record.id;
     });
 
-    _moveMapTo(LatLng(record.latitude, record.longitude), zoom: 14.1);
+    _moveMapTo(LatLng(record.latitude, record.longitude), zoom: 16.4);
+
+    if (revealMap) {
+      _scrollMapIntoView();
+    }
 
     if (openDetails) {
       _openPointSheet(record);
     }
+  }
+
+  Future<void> _scrollMapIntoView() async {
+    final mapContext = _mapSectionKey.currentContext;
+
+    if (mapContext == null) {
+      return;
+    }
+
+    await Scrollable.ensureVisible(
+      mapContext,
+      duration: const Duration(milliseconds: 520),
+      curve: Curves.easeOutCubic,
+      alignment: 0.04,
+    );
   }
 
   Future<void> _openPointSheet(QrGenerationMapRecord record) {
@@ -826,6 +850,7 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
             ),
             const SizedBox(height: 16),
             Card(
+              key: _mapSectionKey,
               child: Padding(
                 padding: const EdgeInsets.all(18),
                 child: Column(
@@ -960,7 +985,7 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
                           return _QrGenerationRecordCard(
                             record: record,
                             isSelected: _selectedRecordId == record.id,
-                            onTap: () => _selectRecord(record),
+                            onTap: () => _selectRecord(record, revealMap: true),
                             onOpenDetails: () =>
                                 _selectRecord(record, openDetails: true),
                           );
