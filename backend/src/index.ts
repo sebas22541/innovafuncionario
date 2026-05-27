@@ -2718,7 +2718,7 @@ function parseGenerateDynamicQrInput(payload: unknown): GenerateDynamicQrInput {
   const body = expectRecord(payload);
 
   return {
-    email: readRequiredEmail(body, "email"),
+    email: readRequiredString(body, "email", 3, 150).toLowerCase(),
     latitud: readRequiredFloat(body, "latitud", -90, 90),
     longitud: readRequiredFloat(body, "longitud", -180, 180),
     accuracy: readOptionalFloatOrNull(body, "accuracy", 0, 10_000),
