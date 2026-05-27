@@ -74,6 +74,18 @@ class AuthApiService {
     return AppUser.fromJson(_readMap(payload['data'], 'usuario'));
   }
 
+  Future<void> updatePassword({
+    required String currentPassword,
+    required String newPassword,
+    required String confirmPassword,
+  }) async {
+    await _apiClient.putJson('/api/auth/password', {
+      'currentPassword': currentPassword,
+      'newPassword': newPassword,
+      'confirmPassword': confirmPassword,
+    });
+  }
+
   Future<DynamicQrSession> generateDynamicQr({
     required String email,
     required double latitude,

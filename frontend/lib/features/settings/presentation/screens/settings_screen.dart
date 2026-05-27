@@ -36,6 +36,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isSavingProfile = false;
   bool _isSavingPhoto = false;
   bool _isDownloadingCredential = false;
+  bool _isChangingPassword = false;
 
   Future<AppUser> _updateProfile({
     required String nombreCompleto,
@@ -171,6 +172,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         setState(() {
           _isSavingPhoto = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openChangePasswordDialog() async {
+    if (_isChangingPassword) {
+      return;
+    }
+
+    final draft = await showDialog<_PasswordChangeDraft>(
+      context: context,
+      builder: (context) => const _ChangePasswordDialog(),
+    );
+
+    if (draft == null) {
+      return;
+    }
+
+    setState(() {
+      _isChangingPassword = true;
+    });
+
+    try {
+      await dependencies.authApiService.updatePassword(
+        currentPassword: draft.currentPassword,
+        newPassword: draft.newPassword,
+        confirmPassword: draft.confirmPassword,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      AppAlert.showSuccess(context, 'Contrasena actualizada.');
+    } on BackendApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      AppAlert.showError(context, error.message);
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      AppAlert.showError(context, 'No fue posible cambiar la contrasena.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isChangingPassword = false;
         });
       }
     }
@@ -327,6 +379,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         icon: const Icon(Icons.qr_code_2_rounded),
                         label: const Text('Mi QR'),
                       ),
+                      OutlinedButton.icon(
+                        onPressed: _isChangingPassword
+                            ? null
+                            : _openChangePasswordDialog,
+                        icon: _isChangingPassword
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.lock_reset_rounded),
+                        label: Text(
+                          _isChangingPassword
+                              ? 'Actualizando...'
+                              : 'Cambiar contrasena',
+                        ),
+                      ),
                       if (currentUser.isAdmin)
                         ElevatedButton.icon(
                           onPressed: _isDownloadingCredential
@@ -423,7 +494,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   const SizedBox(height: 14),
                   _UserDataRow(
-                    label: 'Correo electronico',
+                    label: 'Usuario de acceso',
                     value: currentUser.email,
                     icon: Icons.alternate_email_rounded,
                   ),
@@ -1481,6 +1552,180 @@ class _EditProfileDialogState extends State<_EditProfileDialog> {
   }
 }
 
+class _PasswordChangeDraft {
+  const _PasswordChangeDraft({
+    required this.currentPassword,
+    required this.newPassword,
+    required this.confirmPassword,
+  });
+
+  final String currentPassword;
+  final String newPassword;
+  final String confirmPassword;
+}
+
+class _ChangePasswordDialog extends StatefulWidget {
+  const _ChangePasswordDialog();
+
+  @override
+  State<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
+}
+
+class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  final TextEditingController _currentPasswordController =
+      TextEditingController();
+  final TextEditingController _newPasswordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+      TextEditingController();
+  bool _hideCurrentPassword = true;
+  bool _hideNewPassword = true;
+  bool _hideConfirmPassword = true;
+
+  @override
+  void dispose() {
+    _currentPasswordController.dispose();
+    _newPasswordController.dispose();
+    _confirmPasswordController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final form = _formKey.currentState;
+
+    if (form == null || !form.validate()) {
+      return;
+    }
+
+    Navigator.of(context).pop(
+      _PasswordChangeDraft(
+        currentPassword: _currentPasswordController.text.trim(),
+        newPassword: _newPasswordController.text.trim(),
+        confirmPassword: _confirmPasswordController.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Cambiar contrasena'),
+      content: SizedBox(
+        width: 440,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _currentPasswordController,
+                obscureText: _hideCurrentPassword,
+                textInputAction: TextInputAction.next,
+                decoration: InputDecoration(
+                  labelText: 'Contrasena actual',
+                  suffixIcon: IconButton(
+                    onPressed: () {
+                      setState(() {
+                        _hideCurrentPassword = !_hideCurrentPassword;
+                      });
+                    },
+                    icon: Icon(
+                      _hideCurrentPassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                  ),
+                ),
+                validator: _passwordValidator,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _newPasswordController,
+                obscureText: _hideNewPassword,
+                textInputAction: TextInputAction.next,
+                decoration: InputDecoration(
+                  labelText: 'Nueva contrasena',
+                  suffixIcon: IconButton(
+                    onPressed: () {
+                      setState(() {
+                        _hideNewPassword = !_hideNewPassword;
+                      });
+                    },
+                    icon: Icon(
+                      _hideNewPassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                  ),
+                ),
+                validator: (value) {
+                  final message = _passwordValidator(value);
+
+                  if (message != null) {
+                    return message;
+                  }
+
+                  if ((value ?? '').trim() ==
+                      _currentPasswordController.text.trim()) {
+                    return 'La nueva contrasena debe ser diferente.';
+                  }
+
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _confirmPasswordController,
+                obscureText: _hideConfirmPassword,
+                textInputAction: TextInputAction.done,
+                decoration: InputDecoration(
+                  labelText: 'Confirmar nueva contrasena',
+                  suffixIcon: IconButton(
+                    onPressed: () {
+                      setState(() {
+                        _hideConfirmPassword = !_hideConfirmPassword;
+                      });
+                    },
+                    icon: Icon(
+                      _hideConfirmPassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                  ),
+                ),
+                validator: (value) {
+                  if ((value ?? '').trim() !=
+                      _newPasswordController.text.trim()) {
+                    return 'Las contrasenas no coinciden.';
+                  }
+
+                  return null;
+                },
+                onFieldSubmitted: (_) => _submit(),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        ElevatedButton(
+          onPressed: _submit,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppPalette.orange,
+            foregroundColor: Colors.white,
+            elevation: 0,
+          ),
+          child: const Text('Guardar'),
+        ),
+      ],
+    );
+  }
+}
+
 class _UserDataRow extends StatelessWidget {
   const _UserDataRow({
     required this.label,
@@ -1553,4 +1798,12 @@ String? Function(String?) _requiredValidator(String message) {
 
     return null;
   };
+}
+
+String? _passwordValidator(String? value) {
+  if ((value ?? '').trim().length < 6) {
+    return 'La contrasena debe tener al menos 6 caracteres.';
+  }
+
+  return null;
 }

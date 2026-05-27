@@ -33,6 +33,7 @@ class _UsersScreenState extends State<UsersScreen> {
   bool _isLoadingReferenceData = false;
   final Set<int> _updatingUserIds = <int>{};
   final TextEditingController _searchController = TextEditingController();
+  OfficeOption? _selectedFilterOffice;
   String? _errorMessage;
   int _currentPage = 0;
 
@@ -42,13 +43,26 @@ class _UsersScreenState extends State<UsersScreen> {
   int get _activeUsersCount => _users.where((user) => user.activo).length;
   List<AppUser> get _filteredUsers {
     final query = _normalizeSearchText(_searchController.text);
+    final selectedOffice = _selectedFilterOffice;
 
-    if (query.isEmpty) {
+    if (query.isEmpty && selectedOffice == null) {
       return _users;
     }
 
     return _users
         .where((user) {
+          final matchesOffice =
+              selectedOffice == null ||
+              _userBelongsToOffice(user, selectedOffice);
+
+          if (!matchesOffice) {
+            return false;
+          }
+
+          if (query.isEmpty) {
+            return true;
+          }
+
           final searchableText = _normalizeSearchText(
             '${user.ci} ${user.fullName} ${user.nombreCompleto} '
             '${user.primerApellido} ${user.segundoApellido} '
@@ -77,6 +91,7 @@ class _UsersScreenState extends State<UsersScreen> {
   void initState() {
     super.initState();
     _loadData();
+    _loadOfficesForFilter();
   }
 
   @override
@@ -418,6 +433,38 @@ class _UsersScreenState extends State<UsersScreen> {
     }
   }
 
+  Future<void> _loadOfficesForFilter() async {
+    if (_offices.isNotEmpty || _isLoadingReferenceData) {
+      return;
+    }
+
+    setState(() {
+      _isLoadingReferenceData = true;
+    });
+
+    try {
+      final offices = await dependencies.authApiService.fetchOffices();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _offices = offices;
+      });
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar las oficinas.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingReferenceData = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final visibleUsers = _visibleUsers;
@@ -533,7 +580,7 @@ class _UsersScreenState extends State<UsersScreen> {
                     },
                     decoration: InputDecoration(
                       labelText: 'Buscar usuarios',
-                      hintText: 'Busca por CI, nombre o correo',
+                      hintText: 'Busca por CI, nombre o usuario',
                       prefixIcon: const Icon(Icons.search_rounded),
                       suffixIcon: _searchController.text.trim().isEmpty
                           ? null
@@ -548,6 +595,54 @@ class _UsersScreenState extends State<UsersScreen> {
                               icon: const Icon(Icons.close_rounded),
                             ),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<int?>(
+                    initialValue: _selectedFilterOffice?.id,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: 'Filtrar por oficina',
+                      prefixIcon: const Icon(Icons.account_tree_outlined),
+                      suffixIcon: _selectedFilterOffice == null
+                          ? null
+                          : IconButton(
+                              tooltip: 'Quitar filtro de oficina',
+                              onPressed: () {
+                                setState(() {
+                                  _selectedFilterOffice = null;
+                                  _currentPage = 0;
+                                });
+                              },
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                    ),
+                    items: [
+                      const DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text('Todas las oficinas'),
+                      ),
+                      for (final office in _offices)
+                        DropdownMenuItem<int?>(
+                          value: office.id,
+                          child: Text(
+                            office.displayLabel,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onTap: _loadOfficesForFilter,
+                    onChanged: _offices.isEmpty
+                        ? null
+                        : (officeId) {
+                            setState(() {
+                              _selectedFilterOffice = officeId == null
+                                  ? null
+                                  : _offices.firstWhere(
+                                      (office) => office.id == officeId,
+                                    );
+                              _currentPage = 0;
+                            });
+                          },
                   ),
                   if (_errorMessage != null) ...[
                     const SizedBox(height: 14),
@@ -851,7 +946,7 @@ class _UserListCard extends StatelessWidget {
                     runSpacing: 10,
                     children: [
                       _UserMeta(label: 'CI', value: user.ci),
-                      _UserMeta(label: 'Correo', value: user.email),
+                      _UserMeta(label: 'Usuario', value: user.email),
                       _UserMeta(
                         label: 'Oficina',
                         value: _resolvedOfficeName(user),
@@ -1135,7 +1230,6 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
       TextEditingController();
   final TextEditingController _cargoController = TextEditingController();
   final TextEditingController _numeroItemController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController =
       TextEditingController();
@@ -1151,6 +1245,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   bool _showPhotoError = false;
   bool _hidePassword = true;
   bool _hideConfirmPassword = true;
+  bool _changePassword = false;
   bool get _isEditing => widget.initialUser != null;
 
   @override
@@ -1177,7 +1272,6 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _segundoApellidoController.text = user.segundoApellido;
     _tercerApellidoController.text = user.tercerApellido;
     _numeroItemController.text = user.numeroItem;
-    _emailController.text = user.email;
 
     _selectedOffice = _findInitialOffice(
       officeId: user.primaryOfficeId ?? user.officeId,
@@ -1211,7 +1305,6 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _commissionOfficeController.dispose();
     _cargoController.dispose();
     _numeroItemController.dispose();
-    _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
@@ -1372,10 +1465,15 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
         commissionOffice: _hasCommission ? _selectedCommissionOffice : null,
         cargo: _selectedCargo!,
         numeroItem: _numeroItemController.text.trim(),
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim().isEmpty
-            ? null
-            : _passwordController.text.trim(),
+        email: _ciController.text.trim(),
+        password: _isEditing
+            ? (_changePassword && _passwordController.text.trim().isNotEmpty
+                  ? _passwordController.text.trim()
+                  : null)
+            : _buildInitialPassword(
+                primerApellido: _primerApellidoController.text,
+                ci: _ciController.text,
+              ),
         fotoData: _photoBytes == null ? null : base64Encode(_photoBytes!),
       ),
     );
@@ -1424,7 +1522,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                       Text(
                         _isEditing
                             ? 'Actualiza los datos del usuario y guarda los cambios.'
-                            : 'Completa los mismos datos del registro principal y define si la cuenta sera de administrador, control o funcionario.',
+                            : 'Completa los datos del usuario. El acceso se creara automaticamente con CI como usuario y primer apellido + CI como contrasena inicial.',
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       const SizedBox(height: 18),
@@ -1493,6 +1591,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         hint: 'Ingresa el carnet de identidad',
                         isRequired: true,
                         validator: _requiredValidator('Ingresa el CI.'),
+                        onChanged: (_) => setState(() {}),
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -1511,6 +1610,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         validator: _requiredValidator(
                           'Ingresa el primer apellido.',
                         ),
+                        onChanged: (_) => setState(() {}),
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -1670,104 +1770,93 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         onPickPhoto: _pickPhoto,
                       ),
                       const SizedBox(height: 14),
-                      _FormField(
-                        controller: _emailController,
-                        label: 'Correo',
-                        hint: _selectedRole == AppUserRole.admin
-                            ? 'usuario@admin.com'
-                            : 'usuario@correo.com',
-                        keyboardType: TextInputType.emailAddress,
-                        isRequired: true,
-                        validator: (value) {
-                          final email = value?.trim().toLowerCase() ?? '';
-
-                          if (email.isEmpty || !email.contains('@')) {
-                            return 'Ingresa un correo valido.';
-                          }
-
-                          if (_selectedRole == AppUserRole.admin &&
-                              !email.contains('@admin')) {
-                            return 'El administrador debe usar un correo con @admin.';
-                          }
-
-                          if (_selectedRole != AppUserRole.admin &&
-                              email.contains('@admin')) {
-                            return 'Solo el administrador puede usar un correo con @admin.';
-                          }
-
-                          return null;
-                        },
+                      _AccessInfoCard(
+                        isEditing: _isEditing,
+                        ci: _ciController.text,
+                        primerApellido: _primerApellidoController.text,
                       ),
-                      const SizedBox(height: 14),
-                      _FormField(
-                        controller: _passwordController,
-                        label: 'Contrasena',
-                        hint: '*******',
-                        obscureText: _hidePassword,
-                        isRequired: !_isEditing,
-                        suffixIcon: IconButton(
-                          onPressed: () {
+                      if (_isEditing) ...[
+                        const SizedBox(height: 12),
+                        CheckboxListTile(
+                          value: _changePassword,
+                          contentPadding: EdgeInsets.zero,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          title: const Text('Cambiar contrasena'),
+                          onChanged: (value) {
                             setState(() {
-                              _hidePassword = !_hidePassword;
+                              _changePassword = value ?? false;
+
+                              if (!_changePassword) {
+                                _passwordController.clear();
+                                _confirmPasswordController.clear();
+                              }
                             });
                           },
-                          icon: Icon(
-                            _hidePassword
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
-                          ),
                         ),
-                        validator: (value) {
-                          final password = (value ?? '').trim();
+                        if (_changePassword) ...[
+                          const SizedBox(height: 14),
+                          _FormField(
+                            controller: _passwordController,
+                            label: 'Nueva contrasena',
+                            hint: '*******',
+                            obscureText: _hidePassword,
+                            isRequired: true,
+                            suffixIcon: IconButton(
+                              onPressed: () {
+                                setState(() {
+                                  _hidePassword = !_hidePassword;
+                                });
+                              },
+                              icon: Icon(
+                                _hidePassword
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                              ),
+                            ),
+                            validator: (value) {
+                              final password = (value ?? '').trim();
 
-                          if (_isEditing && password.isEmpty) {
-                            return null;
-                          }
+                              if (password.length < 6) {
+                                return 'La contrasena debe tener al menos 6 caracteres.';
+                              }
 
-                          if (password.length < 6) {
-                            return 'La contrasena debe tener al menos 6 caracteres.';
-                          }
-
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 14),
-                      _FormField(
-                        controller: _confirmPasswordController,
-                        label: 'Confirmar contrasena',
-                        hint: '*******',
-                        obscureText: _hideConfirmPassword,
-                        isRequired: !_isEditing,
-                        suffixIcon: IconButton(
-                          onPressed: () {
-                            setState(() {
-                              _hideConfirmPassword = !_hideConfirmPassword;
-                            });
-                          },
-                          icon: Icon(
-                            _hideConfirmPassword
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
+                              return null;
+                            },
                           ),
-                        ),
-                        validator: (value) {
-                          final password = _passwordController.text.trim();
-                          final confirmation = (value ?? '').trim();
+                          const SizedBox(height: 14),
+                          _FormField(
+                            controller: _confirmPasswordController,
+                            label: 'Confirmar nueva contrasena',
+                            hint: '*******',
+                            obscureText: _hideConfirmPassword,
+                            isRequired: true,
+                            suffixIcon: IconButton(
+                              onPressed: () {
+                                setState(() {
+                                  _hideConfirmPassword =
+                                      !_hideConfirmPassword;
+                                });
+                              },
+                              icon: Icon(
+                                _hideConfirmPassword
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                              ),
+                            ),
+                            validator: (value) {
+                              final password = _passwordController.text.trim();
+                              final confirmation = (value ?? '').trim();
 
-                          if (_isEditing &&
-                              password.isEmpty &&
-                              confirmation.isEmpty) {
-                            return null;
-                          }
+                              if (confirmation != password) {
+                                return 'Las contrasenas no coinciden.';
+                              }
 
-                          if (confirmation != password) {
-                            return 'Las contrasenas no coinciden.';
-                          }
-
-                          return null;
-                        },
-                        onFieldSubmitted: (_) => _submit(),
-                      ),
+                              return null;
+                            },
+                            onFieldSubmitted: (_) => _submit(),
+                          ),
+                        ],
+                      ],
                     ],
                   ),
                 ),
@@ -1838,15 +1927,71 @@ class _ManagedUserDraft {
   final String? fotoData;
 }
 
+class _AccessInfoCard extends StatelessWidget {
+  const _AccessInfoCard({
+    required this.isEditing,
+    required this.ci,
+    required this.primerApellido,
+  });
+
+  final bool isEditing;
+  final String ci;
+  final String primerApellido;
+
+  @override
+  Widget build(BuildContext context) {
+    final normalizedCi = ci.trim();
+    final initialPassword = _buildInitialPassword(
+      primerApellido: primerApellido,
+      ci: ci,
+    );
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppPalette.surfaceSoft,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Acceso a la app',
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            isEditing
+                ? 'Usuario: ${normalizedCi.isEmpty ? 'CI del usuario' : normalizedCi}'
+                : 'Usuario inicial: ${normalizedCi.isEmpty ? 'CI del usuario' : normalizedCi}',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          if (!isEditing) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Contrasena inicial: ${initialPassword.isEmpty ? 'primer apellido + CI' : initialPassword}',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _FormField extends StatelessWidget {
   const _FormField({
     required this.controller,
     required this.label,
     required this.hint,
     required this.validator,
-    this.keyboardType,
     this.obscureText = false,
     this.suffixIcon,
+    this.onChanged,
     this.onFieldSubmitted,
     this.isRequired = false,
   });
@@ -1855,9 +2000,9 @@ class _FormField extends StatelessWidget {
   final String label;
   final String hint;
   final String? Function(String?) validator;
-  final TextInputType? keyboardType;
   final bool obscureText;
   final Widget? suffixIcon;
+  final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onFieldSubmitted;
   final bool isRequired;
 
@@ -1865,9 +2010,9 @@ class _FormField extends StatelessWidget {
   Widget build(BuildContext context) {
     return TextFormField(
       controller: controller,
-      keyboardType: keyboardType,
       obscureText: obscureText,
       validator: validator,
+      onChanged: onChanged,
       onFieldSubmitted: onFieldSubmitted,
       decoration: InputDecoration(
         label: _RequiredFieldLabel(label: label, isRequired: isRequired),
@@ -2415,6 +2560,32 @@ String _resolvedOfficeName(AppUser user) {
   return unidad.isNotEmpty ? unidad : 'Sin oficina';
 }
 
+bool _userBelongsToOffice(AppUser user, OfficeOption office) {
+  final officeIds = <int?>{
+    user.officeId,
+    user.primaryOfficeId,
+    user.commissionOfficeId,
+  };
+
+  if (officeIds.contains(office.id)) {
+    return true;
+  }
+
+  final expectedCode = _normalizeSearchText(office.code);
+  final expectedName = _normalizeSearchText(office.name);
+  final userOfficeValues = [
+    user.officeCode,
+    user.officeName,
+    user.primaryOfficeName,
+    user.commissionOfficeName,
+    user.unidad,
+  ].whereType<String>().map(_normalizeSearchText);
+
+  return userOfficeValues.any(
+    (value) => value == expectedCode || value == expectedName,
+  );
+}
+
 String _tipoVinculoLabel(String value) {
   switch (value.trim().toUpperCase()) {
     case 'ITEM':
@@ -2430,6 +2601,25 @@ String _tipoVinculoLabel(String value) {
 
 String _normalizeSearchText(String value) {
   return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+}
+
+String _buildInitialPassword({
+  required String primerApellido,
+  required String ci,
+}) {
+  final prefix = primerApellido
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'[áàäâã]'), 'a')
+      .replaceAll(RegExp(r'[éèëê]'), 'e')
+      .replaceAll(RegExp(r'[íìïî]'), 'i')
+      .replaceAll(RegExp(r'[óòöôõ]'), 'o')
+      .replaceAll(RegExp(r'[úùüû]'), 'u')
+      .replaceAll('ñ', 'n')
+      .replaceAll(RegExp(r'[^a-zA-Z]'), '');
+  final normalizedCi = ci.trim().replaceAll(RegExp(r'\s+'), '');
+
+  return '${prefix.length > 3 ? prefix.substring(0, 3) : prefix}$normalizedCi';
 }
 
 class _RequiredFieldLabel extends StatelessWidget {

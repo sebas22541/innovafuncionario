@@ -297,37 +297,28 @@ const server = http.createServer(async (request, response) => {
       const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
       const resolvedCargo = selectedCargo?.cargo ?? input.cargo;
       const resolvedCargoCode = selectedCargo?.codigo ?? null;
+      const duplicatedUser = await findUserByLoginOrCi(prisma, {
+        login: input.email,
+        ci: input.ci,
+      });
+
+      if (duplicatedUser) {
+        throw new HttpError(
+          409,
+          sameCiValue(duplicatedUser.ci, input.ci)
+            ? "Ya existe un usuario con ese CI."
+            : "Ya existe un usuario con ese usuario de acceso.",
+        );
+      }
+
       const storedProfilePhoto = await storeUserProfilePhoto({
         photoSource: input.fotoData,
         email: input.email,
         ci: input.ci,
       });
 
-      const user = await prisma.usuarios.upsert({
-        where: {
-          email: input.email,
-        },
-        update: {
-          nombre_completo: buildUserDisplayNameFromParts(input),
-          nombres: input.nombreCompleto,
-          primer_apellido: input.primerApellido,
-          segundo_apellido: input.segundoApellido,
-          tercer_apellido: input.tercerApellido,
-          ci: input.ci,
-          tipo_vinculo: input.tipoVinculo,
-          unidad: resolvedUnit,
-          oficina_id: resolvedOfficeId,
-          oficina_comision_id: resolvedCommissionOfficeId,
-          cargo_codigo: resolvedCargoCode,
-          cargo: resolvedCargo,
-          numero_item: input.numeroItem,
-          foto_url: storedProfilePhoto,
-          password_hash: passwordHash,
-          rol: rol_usuario.OPERADOR,
-          activo: input.activo,
-          updated_at: new Date(),
-        },
-        create: {
+      const user = await prisma.usuarios.create({
+        data: {
           nombre_completo: buildUserDisplayNameFromParts(input),
           nombres: input.nombreCompleto,
           primer_apellido: input.primerApellido,
@@ -367,7 +358,7 @@ const server = http.createServer(async (request, response) => {
       });
 
       if (!user || !verifyPassword(input.password, user.password_hash)) {
-        throw new HttpError(401, "Correo o contrasena incorrectos.");
+        throw new HttpError(401, "Usuario o contrasena incorrectos.");
       }
 
       if (user.activo !== true) {
@@ -450,6 +441,34 @@ const server = http.createServer(async (request, response) => {
 
       sendJson(response, 200, {
         data: serializeAppUser(updatedUser, person, authToken),
+      });
+      return;
+    }
+
+    if (request.method === "PUT" && url.pathname === "/api/auth/password") {
+      const input = parseUpdatePasswordInput(await readJsonBody(request));
+      const existingUser = await prisma.usuarios.findUnique({
+        where: { email: authenticatedUser.email },
+      });
+
+      if (!existingUser) {
+        throw new HttpError(404, "No se encontro el usuario seleccionado.");
+      }
+
+      if (!verifyPassword(input.currentPassword, existingUser.password_hash)) {
+        throw new HttpError(401, "La contrasena actual no es correcta.");
+      }
+
+      await prisma.usuarios.update({
+        where: { email: authenticatedUser.email },
+        data: {
+          password_hash: hashPassword(input.newPassword),
+          updated_at: new Date(),
+        },
+      });
+
+      sendJson(response, 200, {
+        data: { updated: true },
       });
       return;
     }
@@ -638,9 +657,22 @@ const server = http.createServer(async (request, response) => {
       const existingUser = await prisma.usuarios.findUnique({
         where: { email: input.email },
       });
+      const duplicatedUser = await findUserByLoginOrCi(prisma, {
+        login: input.email,
+        ci: input.ci,
+      });
 
       if (existingUser) {
-        throw new HttpError(409, "Ya existe un usuario con ese correo.");
+        throw new HttpError(409, "Ya existe un usuario con ese usuario de acceso.");
+      }
+
+      if (duplicatedUser) {
+        throw new HttpError(
+          409,
+          sameCiValue(duplicatedUser.ci, input.ci)
+            ? "Ya existe un usuario con ese CI."
+            : "Ya existe un usuario con ese usuario de acceso.",
+        );
       }
 
       const storedProfilePhoto = await storeUserProfilePhoto({
@@ -744,17 +776,19 @@ const server = http.createServer(async (request, response) => {
             throw new HttpError(400, "El cargo seleccionado no existe.");
           }
 
-          const duplicatedUser = await tx.usuarios.findFirst({
-            where: {
-              email: managedInput.email,
-              id: {
-                not: userId,
-              },
-            },
+          const duplicatedUser = await findUserByLoginOrCi(tx, {
+            login: managedInput.email,
+            ci: managedInput.ci,
+            excludeUserId: userId,
           });
 
           if (duplicatedUser) {
-            throw new HttpError(409, "Ya existe un usuario con ese correo.");
+            throw new HttpError(
+              409,
+              sameCiValue(duplicatedUser.ci, managedInput.ci)
+                ? "Ya existe un usuario con ese CI."
+                : "Ya existe un usuario con ese usuario de acceso.",
+            );
           }
 
           const resolvedUnit = selectedOffice?.oficina ?? managedInput.unidad ?? "";
@@ -1759,6 +1793,11 @@ type UpdateProfileInput = {
   fotoData: string | null;
 };
 
+type UpdatePasswordInput = {
+  currentPassword: string;
+  newPassword: string;
+};
+
 type GenerateDynamicQrInput = {
   email: string;
   latitud: number;
@@ -2249,7 +2288,7 @@ function parseUpdateEventInput(payload: unknown): UpdateEventInput {
 
   return {
     ...eventInput,
-    requesterEmail: readRequiredEmail(body, "requesterEmail"),
+    requesterEmail: readRequiredLoginIdentifier(body, "requesterEmail"),
   };
 }
 
@@ -2640,6 +2679,10 @@ function readOptionalLoginIdentifier(source: JsonRecord, key: string) {
   return normalizeEmailValue(rawValue);
 }
 
+function readRequiredLoginIdentifier(source: JsonRecord, key: string) {
+  return normalizeEmailValue(readRequiredString(source, key, 3, 150));
+}
+
 async function resolveCredentialTargetUser(
   authenticatedUser: AuthenticatedUser,
   payload: unknown,
@@ -2676,7 +2719,7 @@ async function resolveCredentialTargetUser(
 
 function readQueryEmailFromBody(payload: unknown) {
   const body = expectRecord(payload);
-  return readRequiredEmail(body, "email");
+  return readRequiredLoginIdentifier(body, "email");
 }
 
 function readOptionalPhotoData(body: JsonRecord): string | null {
@@ -2699,12 +2742,35 @@ function parseUpdateProfileInput(payload: unknown): UpdateProfileInput {
   const body = expectRecord(payload);
 
   return {
-    email: readRequiredEmail(body, "email"),
+    email: readRequiredLoginIdentifier(body, "email"),
     nombreCompleto: readRequiredString(body, "nombreCompleto", 2, 150),
     primerApellido: readRequiredString(body, "primerApellido", 2, 80),
     segundoApellido: readRequiredString(body, "segundoApellido", 2, 80),
     tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
     fotoData: readOptionalPhotoData(body),
+  };
+}
+
+function parseUpdatePasswordInput(payload: unknown): UpdatePasswordInput {
+  const body = expectRecord(payload);
+  const currentPassword = readRequiredString(body, "currentPassword", 6, 200);
+  const newPassword = readRequiredString(body, "newPassword", 6, 200);
+  const confirmPassword = readRequiredString(body, "confirmPassword", 6, 200);
+
+  if (newPassword !== confirmPassword) {
+    throw new HttpError(400, "Las contrasenas no coinciden.");
+  }
+
+  if (newPassword === currentPassword) {
+    throw new HttpError(
+      400,
+      "La nueva contrasena debe ser diferente a la actual.",
+    );
+  }
+
+  return {
+    currentPassword,
+    newPassword,
   };
 }
 
@@ -2731,6 +2797,10 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
   const unidad = readOptionalString(body, "unidad", 0, 120);
   const cargoCodigo = readOptionalString(body, "cargoCodigo", 1, 50);
   const cargo = readOptionalString(body, "cargo", 2, 120);
+  const ci = readRequiredString(body, "ci", 3, 30);
+  const primerApellido = readRequiredString(body, "primerApellido", 2, 80);
+  const loginIdentifier =
+    readOptionalLoginIdentifier(body, "email") ?? normalizeEmailValue(ci);
 
   if (oficinaId == null && !unidad) {
     throw new HttpError(400, "Debes seleccionar una unidad valida.");
@@ -2741,10 +2811,15 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
   }
 
   return {
-    email: readRequiredEmail(body, "email"),
-    password: readRequiredString(body, "password", 6, 200),
+    email: loginIdentifier,
+    password:
+      readOptionalString(body, "password", 6, 200) ??
+      buildDefaultUserPassword({
+        primerApellido,
+        ci,
+      }),
     nombreCompleto: readRequiredString(body, "nombreCompleto", 2, 150),
-    primerApellido: readRequiredString(body, "primerApellido", 2, 80),
+    primerApellido,
     segundoApellido: readRequiredString(body, "segundoApellido", 2, 80),
     tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
     ci: readRequiredString(body, "ci", 3, 30),
@@ -2771,24 +2846,7 @@ function parseManagedUserInput(payload: unknown): ManagedUserInput {
     rol_usuario.CONTROL,
     rol_usuario.OPERADOR,
   ]) as (typeof rol_usuario)[keyof typeof rol_usuario];
-  const requesterEmail = readRequiredEmail(body, "requesterEmail");
-
-  if (requestedRole === rol_usuario.ADMIN && !isAdminEmail(baseInput.email)) {
-    throw new HttpError(
-      400,
-      "Los administradores deben usar un correo con @admin.",
-    );
-  }
-
-  if (
-    requestedRole !== rol_usuario.ADMIN &&
-    isAdminEmail(baseInput.email)
-  ) {
-    throw new HttpError(
-      400,
-      "Solo el administrador puede usar un correo con @admin.",
-    );
-  }
+  const requesterEmail = readRequiredLoginIdentifier(body, "requesterEmail");
 
   return {
     ...baseInput,
@@ -2801,7 +2859,7 @@ function parseUpdateUserStatusInput(payload: unknown): UpdateUserStatusInput {
   const body = expectRecord(payload);
 
   return {
-    requesterEmail: readRequiredEmail(body, "requesterEmail"),
+    requesterEmail: readRequiredLoginIdentifier(body, "requesterEmail"),
     activo: readRequiredBoolean(body, "activo"),
   };
 }
@@ -2823,7 +2881,8 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     rol_usuario.CONTROL,
     rol_usuario.OPERADOR,
   ]) as (typeof rol_usuario)[keyof typeof rol_usuario];
-  const email = readRequiredEmail(body, "email");
+  const email = readRequiredLoginIdentifier(body, "email");
+  const ci = readRequiredString(body, "ci", 3, 30);
 
   if (oficinaId == null && !unidad) {
     throw new HttpError(400, "Debes seleccionar una unidad valida.");
@@ -2833,22 +2892,8 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     throw new HttpError(400, "Debes seleccionar un cargo valido.");
   }
 
-  if (requestedRole === rol_usuario.ADMIN && !isAdminEmail(email)) {
-    throw new HttpError(
-      400,
-      "Los administradores deben usar un correo con @admin.",
-    );
-  }
-
-  if (requestedRole !== rol_usuario.ADMIN && isAdminEmail(email)) {
-    throw new HttpError(
-      400,
-      "Solo el administrador puede usar un correo con @admin.",
-    );
-  }
-
   return {
-    requesterEmail: readRequiredEmail(body, "requesterEmail"),
+    requesterEmail: readRequiredLoginIdentifier(body, "requesterEmail"),
     rol: requestedRole,
     email,
     password: readOptionalString(body, "password", 6, 200),
@@ -2856,7 +2901,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     primerApellido: readRequiredString(body, "primerApellido", 2, 80),
     segundoApellido: readRequiredString(body, "segundoApellido", 2, 80),
     tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
-    ci: readRequiredString(body, "ci", 3, 30),
+    ci,
     tipoVinculo,
     unidad,
     oficinaId,
@@ -3002,6 +3047,10 @@ function readQueryEmail(url: URL, key: string) {
 
 function normalizeEmailValue(value: string) {
   return value.trim().toLowerCase();
+}
+
+function normalizeCiValue(value: string | null) {
+  return (value ?? "").trim().replace(/\s+/g, "");
 }
 
 function readOptionalQueryInt(url: URL, key: string) {
@@ -3584,6 +3633,60 @@ function hashPassword(password: string) {
   const derivedKey = scryptSync(password, salt, 64).toString("hex");
 
   return `scrypt:${salt}:${derivedKey}`;
+}
+
+function buildDefaultUserPassword(input: {
+  primerApellido: string;
+  ci: string;
+}) {
+  const lastNamePrefix = input.primerApellido
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z]/g, "")
+    .toLowerCase()
+    .slice(0, 3);
+  const ci = input.ci.trim().replace(/\s+/g, "");
+
+  return `${lastNamePrefix}${ci}`;
+}
+
+async function findUserByLoginOrCi(
+  tx: any,
+  input: {
+    login: string;
+    ci: string;
+    excludeUserId?: number;
+  },
+) {
+  const normalizedLogin = normalizeEmailValue(input.login);
+  const normalizedCi = normalizeCiValue(input.ci);
+  const users = await tx.usuarios.findMany({
+    where:
+      input.excludeUserId == null
+        ? undefined
+        : {
+            id: {
+              not: input.excludeUserId,
+            },
+          },
+    select: {
+      id: true,
+      email: true,
+      ci: true,
+    },
+  });
+
+  return users.find((user: { email: string; ci: string | null }) => {
+    return (
+      normalizeEmailValue(user.email) === normalizedLogin ||
+      normalizeCiValue(user.ci) === normalizedCi
+    );
+  }) ?? null;
+}
+
+function sameCiValue(left: string | null, right: string) {
+  return normalizeCiValue(left) === normalizeCiValue(right);
 }
 
 function verifyPassword(password: string, storedHash: string) {
