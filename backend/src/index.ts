@@ -3647,8 +3647,16 @@ function buildDefaultUserPassword(input: {
     .toLowerCase()
     .slice(0, 3);
   const ci = input.ci.trim().replace(/\s+/g, "");
+  const password = `${lastNamePrefix}${ci}`;
 
-  return `${lastNamePrefix}${ci}`;
+  if (password.length < 6) {
+    throw new HttpError(
+      400,
+      "La contrasena inicial generada debe tener al menos 6 caracteres. Verifica el primer apellido y CI.",
+    );
+  }
+
+  return password;
 }
 
 async function findUserByLoginOrCi(

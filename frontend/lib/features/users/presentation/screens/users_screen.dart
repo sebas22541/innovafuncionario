@@ -176,7 +176,6 @@ class _UsersScreenState extends State<UsersScreen> {
         requesterEmail: widget.currentUser.email,
         role: draft.role,
         email: draft.email,
-        password: draft.password!,
         nombreCompleto: draft.nombreCompleto,
         primerApellido: draft.primerApellido,
         segundoApellido: draft.segundoApellido,
@@ -1470,10 +1469,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
             ? (_changePassword && _passwordController.text.trim().isNotEmpty
                   ? _passwordController.text.trim()
                   : null)
-            : _buildInitialPassword(
-                primerApellido: _primerApellidoController.text,
-                ci: _ciController.text,
-              ),
+            : null,
         fotoData: _photoBytes == null ? null : base64Encode(_photoBytes!),
       ),
     );
