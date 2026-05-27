@@ -30,6 +30,7 @@ class _UsersScreenState extends State<UsersScreen> {
   List<CargoOption> _cargos = const [];
   bool _isLoading = true;
   bool _isCreating = false;
+  bool _isLoadingReferenceData = false;
   final Set<int> _updatingUserIds = <int>{};
   final TextEditingController _searchController = TextEditingController();
   String? _errorMessage;
@@ -95,22 +96,16 @@ class _UsersScreenState extends State<UsersScreen> {
     });
 
     try {
-      final results = await Future.wait([
-        dependencies.authApiService.fetchUsers(
-          requesterEmail: widget.currentUser.email,
-        ),
-        dependencies.authApiService.fetchOffices(),
-        dependencies.authApiService.fetchCargos(),
-      ]);
+      final users = await dependencies.authApiService.fetchUsers(
+        requesterEmail: widget.currentUser.email,
+      );
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _users = _sortUsers(results[0] as List<AppUser>);
-        _offices = results[1] as List<OfficeOption>;
-        _cargos = results[2] as List<CargoOption>;
+        _users = _sortUsers(users);
         _currentPage = _safeCurrentPage;
       });
     } on BackendApiException catch (error) {
@@ -139,7 +134,11 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 
   Future<void> _openCreateDialog() async {
-    if (_offices.isEmpty || _cargos.isEmpty || _isCreating) {
+    if (_isCreating || !await _ensureReferenceData()) {
+      return;
+    }
+
+    if (!mounted) {
       return;
     }
 
@@ -275,10 +274,15 @@ class _UsersScreenState extends State<UsersScreen> {
   Future<void> _openEditDialog(AppUser user) async {
     final userId = user.id;
 
-    if (userId == null ||
-        _offices.isEmpty ||
-        _cargos.isEmpty ||
-        _updatingUserIds.contains(userId)) {
+    if (userId == null || _updatingUserIds.contains(userId)) {
+      return;
+    }
+
+    if (!await _ensureReferenceData()) {
+      return;
+    }
+
+    if (!mounted) {
       return;
     }
 
@@ -351,6 +355,64 @@ class _UsersScreenState extends State<UsersScreen> {
       if (mounted) {
         setState(() {
           _updatingUserIds.remove(userId);
+        });
+      }
+    }
+  }
+
+  Future<bool> _ensureReferenceData() async {
+    if (_offices.isNotEmpty && _cargos.isNotEmpty) {
+      return true;
+    }
+
+    if (_isLoadingReferenceData) {
+      return false;
+    }
+
+    setState(() {
+      _isLoadingReferenceData = true;
+    });
+
+    try {
+      final offices = _offices.isEmpty
+          ? await dependencies.authApiService.fetchOffices()
+          : _offices;
+      final cargos = _cargos.isEmpty
+          ? await dependencies.authApiService.fetchCargos()
+          : _cargos;
+
+      if (!mounted) {
+        return false;
+      }
+
+      setState(() {
+        _offices = offices;
+        _cargos = cargos;
+      });
+
+      if (offices.isEmpty || cargos.isEmpty) {
+        AppAlert.showWarning(
+          context,
+          'No hay oficinas o cargos disponibles para gestionar usuarios.',
+        );
+        return false;
+      }
+
+      return true;
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        AppAlert.showError(context, error.message);
+      }
+      return false;
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar oficinas y cargos.');
+      }
+      return false;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingReferenceData = false;
         });
       }
     }
@@ -435,13 +497,15 @@ class _UsersScreenState extends State<UsersScreen> {
                   ),
                   const SizedBox(height: 18),
                   ElevatedButton.icon(
-                    onPressed: _isCreating ? null : _openCreateDialog,
+                    onPressed: (_isCreating || _isLoadingReferenceData)
+                        ? null
+                        : _openCreateDialog,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppPalette.orange,
                       foregroundColor: Colors.white,
                       elevation: 0,
                     ),
-                    icon: _isCreating
+                    icon: (_isCreating || _isLoadingReferenceData)
                         ? const SizedBox(
                             width: 18,
                             height: 18,
@@ -452,7 +516,11 @@ class _UsersScreenState extends State<UsersScreen> {
                           )
                         : const Icon(Icons.person_add_alt_1_rounded),
                     label: Text(
-                      _isCreating ? 'Creando usuario...' : 'Crear usuario',
+                      _isCreating
+                          ? 'Creando usuario...'
+                          : _isLoadingReferenceData
+                          ? 'Cargando datos...'
+                          : 'Crear usuario',
                     ),
                   ),
                   const SizedBox(height: 16),

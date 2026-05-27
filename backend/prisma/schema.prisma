@@ -215,3 +215,4 @@ enum rol_usuario {
   CONTROL
   OPERADOR
 }
+    

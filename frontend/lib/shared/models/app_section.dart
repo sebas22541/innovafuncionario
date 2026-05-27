@@ -9,6 +9,7 @@ enum AppSection {
   users,
   credentials,
   qrScanner,
+  myQr,
   settings,
 }
 
@@ -33,6 +34,8 @@ extension AppSectionX on AppSection {
         return 'Credenciales';
       case AppSection.qrScanner:
         return 'Escanear';
+      case AppSection.myQr:
+        return 'Mi QR';
       case AppSection.settings:
         return 'Perfil';
     }
@@ -56,6 +59,8 @@ extension AppSectionX on AppSection {
         return 'Credenciales';
       case AppSection.qrScanner:
         return 'Escaneo QR';
+      case AppSection.myQr:
+        return 'Mi QR';
       case AppSection.settings:
         return 'Perfil y ajustes';
     }
@@ -79,6 +84,8 @@ extension AppSectionX on AppSection {
         return Icons.badge_outlined;
       case AppSection.qrScanner:
         return Icons.qr_code_scanner_rounded;
+      case AppSection.myQr:
+        return Icons.qr_code_2_rounded;
       case AppSection.settings:
         return Icons.person_outline_rounded;
     }

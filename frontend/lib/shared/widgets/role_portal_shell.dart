@@ -548,19 +548,19 @@ class _PortalDrawer extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
               ],
-              const SizedBox(height: 14),
-              Container(height: 1, color: AppPalette.line),
-              const SizedBox(height: 18),
-              Text(
-                'Otras opciones',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  color: Colors.black54,
-                  fontWeight: FontWeight.w500,
-                  fontSize: 13,
-                ),
-              ),
-              const SizedBox(height: 10),
               if (settingsEntry != null) ...[
+                const SizedBox(height: 14),
+                Container(height: 1, color: AppPalette.line),
+                const SizedBox(height: 18),
+                Text(
+                  'Otras opciones',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: Colors.black54,
+                    fontWeight: FontWeight.w500,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 10),
                 _PortalDrawerItem(
                   icon: settingsEntry.icon,
                   label: settingsEntry.label,

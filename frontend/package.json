@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "dev:local": "flutter run -d chrome --dart-define=BACKEND_BASE_URL=http://localhost:3000",
+    "dev:web": "flutter run -d web-server --web-hostname localhost --web-port 8080 --dart-define=BACKEND_BASE_URL=http://localhost:3000",
     "build:local": "flutter build web --debug --dart-define=BACKEND_BASE_URL=http://localhost:3000"
   }
 }

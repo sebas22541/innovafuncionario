@@ -215,6 +215,7 @@ const server = http.createServer(async (request, response) => {
           "/health",
           "/api/auth/login",
           "/api/auth/register",
+          "/api/auth/me",
           "/api/auth/profile",
           "/api/auth/qr/dynamic",
           "/api/auth/credential",
@@ -374,6 +375,25 @@ const server = http.createServer(async (request, response) => {
           403,
           "Tu usuario se encuentra inactivo. Solicita su activacion.",
         );
+      }
+
+      const person = await ensurePersonIdentityForUser(prisma, user);
+      const authToken = createAuthToken(user);
+
+      sendJson(response, 200, {
+        data: serializeAppUser(user, person, authToken),
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/auth/me") {
+      const user = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+        include: userWithOfficeInclude,
+      });
+
+      if (!user || user.activo !== true) {
+        throw new HttpError(401, "Sesion invalida o expirada.");
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);

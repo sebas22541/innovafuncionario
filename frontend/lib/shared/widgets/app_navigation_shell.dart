@@ -95,7 +95,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       return;
     }
 
-    if (section == AppSection.settings && _currentUser.isExternalUser) {
+    if (section == AppSection.myQr && _currentUser.isExternalUser) {
       _openMyQrDialog();
       return;
     }
@@ -221,6 +221,12 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 currentUser: _currentUser,
                 viewMode: UserEventsViewMode.attended,
               );
+      case AppSection.myQr:
+        return RolePortalHomeContent(
+          currentUser: _currentUser,
+          entries: _portalEntriesForUser(_currentUser),
+          onSelected: _handleSectionSelection,
+        );
       case AppSection.settings:
         return SettingsScreen(
           currentUser: _currentUser,
@@ -1075,6 +1081,7 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
     AppSection.home,
     AppSection.events,
     AppSection.availableEvents,
+    AppSection.myQr,
     AppSection.settings,
   ];
 }
@@ -1088,7 +1095,7 @@ AppSection _resolveInitialSection(AppUser user, AppSection? initialSection) {
     return _defaultSectionForUser(user);
   }
 
-  if (user.isExternalUser && initialSection == AppSection.settings) {
+  if (user.isExternalUser && initialSection == AppSection.myQr) {
     return _defaultSectionForUser(user);
   }
 
@@ -1116,8 +1123,10 @@ String _sectionTitleForUser(AppUser user, AppSection section) {
         return 'Eventos';
       case AppSection.qrScanner:
         return 'Escanear QR';
+      case AppSection.myQr:
+        return 'Mi QR';
       case AppSection.settings:
-        return 'Mi perfil';
+        return 'Perfil';
       default:
         return section.title;
     }
@@ -1130,6 +1139,8 @@ String _sectionTitleForUser(AppUser user, AppSection section) {
       return 'Eventos asistidos';
     case AppSection.availableEvents:
       return 'Eventos programados';
+    case AppSection.myQr:
+      return 'Mi QR';
     case AppSection.settings:
       return 'Mi perfil';
     default:
@@ -1144,8 +1155,10 @@ String _sectionLabelForUser(AppUser user, AppSection section) {
         return 'Inicio';
       case AppSection.qrScanner:
         return 'Escanear QR';
-      case AppSection.settings:
+      case AppSection.myQr:
         return 'Mi QR';
+      case AppSection.settings:
+        return 'Perfil';
       default:
         return section.label;
     }
@@ -1159,8 +1172,10 @@ String _sectionLabelForUser(AppUser user, AppSection section) {
         return 'Eventos asistidos';
       case AppSection.availableEvents:
         return 'Eventos programados';
+      case AppSection.myQr:
+        return 'Mi QR';
       case AppSection.settings:
-        return 'Mi perfil';
+        return 'Perfil';
       default:
         return section.label;
     }
@@ -1178,8 +1193,10 @@ IconData _sectionIconForUser(AppUser user, AppSection section) {
         return Icons.event_note_rounded;
       case AppSection.qrScanner:
         return Icons.qr_code_scanner_rounded;
-      case AppSection.settings:
+      case AppSection.myQr:
         return Icons.qr_code_2_rounded;
+      case AppSection.settings:
+        return Icons.person_outline_rounded;
       default:
         return section.icon;
     }
@@ -1193,8 +1210,10 @@ IconData _sectionIconForUser(AppUser user, AppSection section) {
         return Icons.event_available_rounded;
       case AppSection.availableEvents:
         return Icons.event_note_rounded;
+      case AppSection.myQr:
+        return Icons.qr_code_2_rounded;
       case AppSection.settings:
-        return Icons.edit_rounded;
+        return Icons.person_outline_rounded;
       default:
         return section.icon;
     }

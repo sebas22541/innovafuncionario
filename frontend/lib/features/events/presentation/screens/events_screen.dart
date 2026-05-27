@@ -523,6 +523,7 @@ class _EventsScreenState extends State<EventsScreen> {
         return _EventDetailView(
           event: event,
           canManageEvents: widget.currentUser.canManageEvents,
+          canOpenScanner: widget.currentUser.isAdmin,
           onBack: _goBack,
           onEdit: () => _showEditEventDialog(event),
           onDelete: () => _deleteEvent(event),
@@ -560,6 +561,7 @@ class _EventsScreenState extends State<EventsScreen> {
           event: event,
           selectedListType: _selectedListType,
           isLoadingEventDetails: _isLoadingSelectedEvent,
+          canOpenScanner: widget.currentUser.isAdmin,
           onBack: _goBack,
           onListTypeChanged: (type) {
             setState(() {
@@ -778,6 +780,7 @@ class _EventDetailView extends StatelessWidget {
   const _EventDetailView({
     required this.event,
     required this.canManageEvents,
+    required this.canOpenScanner,
     required this.onBack,
     required this.onEdit,
     required this.onDelete,
@@ -788,6 +791,7 @@ class _EventDetailView extends StatelessWidget {
 
   final EventRecord event;
   final bool canManageEvents;
+  final bool canOpenScanner;
   final VoidCallback onBack;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -916,18 +920,19 @@ class _EventDetailView extends StatelessWidget {
                       onTap: onOpenLists,
                     ),
                   ),
-                  SizedBox(
-                    width: cardWidth,
-                    child: _ActionOptionCard(
-                      title: 'Escanear QR',
-                      description:
-                          'Abre el lector QR y registra el resultado sobre este evento en la base de datos.',
-                      icon: Icons.qr_code_scanner_rounded,
-                      buttonLabel: 'Ir al escaner',
-                      accentColor: AppPalette.night,
-                      onTap: onOpenScanner,
+                  if (canOpenScanner)
+                    SizedBox(
+                      width: cardWidth,
+                      child: _ActionOptionCard(
+                        title: 'Escanear QR',
+                        description:
+                            'Abre el lector QR y registra el resultado sobre este evento en la base de datos.',
+                        icon: Icons.qr_code_scanner_rounded,
+                        buttonLabel: 'Ir al escaner',
+                        accentColor: AppPalette.night,
+                        onTap: onOpenScanner,
+                      ),
                     ),
-                  ),
                 ],
               );
             },
@@ -975,6 +980,7 @@ class _EventListsView extends StatelessWidget {
     required this.event,
     required this.selectedListType,
     required this.isLoadingEventDetails,
+    required this.canOpenScanner,
     required this.onBack,
     required this.onListTypeChanged,
     required this.onOpenScanner,
@@ -983,6 +989,7 @@ class _EventListsView extends StatelessWidget {
   final EventRecord event;
   final EventListType selectedListType;
   final bool isLoadingEventDetails;
+  final bool canOpenScanner;
   final VoidCallback onBack;
   final ValueChanged<EventListType> onListTypeChanged;
   final VoidCallback onOpenScanner;
@@ -1066,11 +1073,12 @@ class _EventListsView extends StatelessWidget {
                         icon: Icons.visibility_outlined,
                         onTap: () => onListTypeChanged(EventListType.observed),
                       ),
-                      OutlinedButton.icon(
-                        onPressed: onOpenScanner,
-                        icon: const Icon(Icons.qr_code_scanner_rounded),
-                        label: const Text('Escanear QR'),
-                      ),
+                      if (canOpenScanner)
+                        OutlinedButton.icon(
+                          onPressed: onOpenScanner,
+                          icon: const Icon(Icons.qr_code_scanner_rounded),
+                          label: const Text('Escanear QR'),
+                        ),
                     ],
                   ),
                 ],

@@ -31,12 +31,23 @@ class _QrWebAppState extends State<QrWebApp> {
   @override
   void initState() {
     super.initState();
+    _requestStartupPermissions();
     _restoreSession();
   }
 
   Future<void> _restoreSession() async {
-    final user = await SessionStore.readUser();
     final section = await SessionStore.readSection();
+    final storedUser = await SessionStore.readUser();
+    AppUser? user;
+
+    if (storedUser != null) {
+      try {
+        user = await dependencies.authApiService.fetchCurrentUser();
+        await SessionStore.saveUser(user);
+      } catch (_) {
+        await SessionStore.clearSession();
+      }
+    }
 
     if (!mounted) {
       return;
@@ -47,10 +58,6 @@ class _QrWebAppState extends State<QrWebApp> {
       _initialSection = section;
       _isRestoringSession = false;
     });
-
-    if (user != null) {
-      _requestStartupPermissions(user);
-    }
   }
 
   void _handleAuthenticated(AppUser user) {
@@ -59,7 +66,6 @@ class _QrWebAppState extends State<QrWebApp> {
       _currentUser = user;
       _initialSection = null;
     });
-    _requestStartupPermissions(user);
   }
 
   void _handleLogout() {
@@ -77,9 +83,9 @@ class _QrWebAppState extends State<QrWebApp> {
     });
   }
 
-  void _requestStartupPermissions(AppUser user) {
+  void _requestStartupPermissions() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      AppPermissionsService.requestStartupPermissions(user);
+      AppPermissionsService.requestStartupPermissions();
     });
   }
 
