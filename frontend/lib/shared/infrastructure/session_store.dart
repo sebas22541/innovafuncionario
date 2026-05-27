@@ -10,8 +10,15 @@ class SessionStore {
 
   static const _userKey = 'qr_asistencia.current_user';
   static const _sectionKey = 'qr_asistencia.current_section';
+  static AppUser? _cachedUser;
 
   static Future<AppUser?> readUser() async {
+    final cachedUser = _cachedUser;
+
+    if (cachedUser != null) {
+      return cachedUser;
+    }
+
     final preferences = await SharedPreferences.getInstance();
     final rawUser = preferences.getString(_userKey);
 
@@ -27,7 +34,9 @@ class SessionStore {
         return null;
       }
 
-      return AppUser.fromJson(parsedUser);
+      final user = AppUser.fromJson(parsedUser);
+      _cachedUser = user;
+      return user;
     } catch (_) {
       await clearSession();
       return null;
@@ -35,6 +44,7 @@ class SessionStore {
   }
 
   static Future<void> saveUser(AppUser user) async {
+    _cachedUser = user;
     final preferences = await SharedPreferences.getInstance();
     await preferences.setString(_userKey, jsonEncode(user.toJson()));
   }
@@ -57,6 +67,7 @@ class SessionStore {
   }
 
   static Future<void> clearSession() async {
+    _cachedUser = null;
     final preferences = await SharedPreferences.getInstance();
     await preferences.remove(_userKey);
     await preferences.remove(_sectionKey);
