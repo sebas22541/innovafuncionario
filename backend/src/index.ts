@@ -416,6 +416,13 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(404, "No se encontro el usuario seleccionado.");
       }
 
+      if (existingUser.rol === rol_usuario.OPERADOR) {
+        throw new HttpError(
+          403,
+          "Los usuarios externos no pueden editar su perfil.",
+        );
+      }
+
       const nextPhotoSource = input.fotoData == null
         ? existingUser.foto_url
         : await storeUserProfilePhoto({
@@ -2113,7 +2120,7 @@ function verifyAuthToken(token: string): AuthTokenPayload {
     ? normalizeEmailValue(parsedPayload.email)
     : "";
 
-  if (sub == null || exp == null || !email.includes("@")) {
+  if (sub == null || exp == null || email.length < 3) {
     throw new HttpError(401, "Token de sesion invalido.");
   }
 

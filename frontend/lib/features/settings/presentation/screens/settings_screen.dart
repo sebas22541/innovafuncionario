@@ -55,7 +55,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _openEditProfileDialog() async {
-    if (_isSavingProfile || _isSavingPhoto) {
+    if (widget.currentUser.isExternalUser ||
+        _isSavingProfile ||
+        _isSavingPhoto) {
       return;
     }
 
@@ -108,7 +110,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _pickProfilePhoto() async {
-    if (_isSavingProfile || _isSavingPhoto) {
+    if (widget.currentUser.isExternalUser ||
+        _isSavingProfile ||
+        _isSavingPhoto) {
       return;
     }
 
