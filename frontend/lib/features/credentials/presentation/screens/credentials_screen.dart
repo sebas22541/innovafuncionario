@@ -411,18 +411,19 @@ class _OfficePickerSheetState extends State<_OfficePickerSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final query = _normalizeSearchText(_searchController.text);
+    final query = _normalizeOfficeSearchText(_searchController.text);
     final filteredOffices = widget.offices
         .where((office) {
           if (query.isEmpty) {
             return true;
           }
 
-          final searchableOffice = _normalizeSearchText(
-            '${office.name} ${office.code} ${office.level}',
-          );
-
-          return searchableOffice.contains(query);
+          return _officeTextLooksSimilar(
+                _normalizeOfficeSearchText(office.name),
+                query,
+              ) ||
+              _normalizeOfficeSearchText(office.code).contains(query) ||
+              office.level.toString().contains(query);
         })
         .toList(growable: false);
 
@@ -887,8 +888,8 @@ bool _matchesOffice(AppUser user, OfficeOption office) {
     return true;
   }
 
-  final selectedOfficeCode = _normalizeSearchText(office.code);
-  final selectedOfficeName = _normalizeSearchText(office.name);
+  final selectedOfficeCode = _normalizeOfficeSearchText(office.code);
+  final selectedOfficeName = _normalizeOfficeSearchText(office.name);
 
   if (selectedOfficeCode.isEmpty && selectedOfficeName.isEmpty) {
     return false;
@@ -901,7 +902,7 @@ bool _matchesOffice(AppUser user, OfficeOption office) {
     user.commissionOfficeName,
     user.unidad,
     _resolvedOfficeName(user),
-  ].whereType<String>().map(_normalizeSearchText);
+  ].whereType<String>().map(_normalizeOfficeSearchText);
 
   return userOfficeValues.any(
     (value) => _officeValueMatches(
@@ -921,24 +922,115 @@ bool _officeValueMatches(
     return false;
   }
 
-  final normalizedValue = userOfficeValue
-      .replaceFirst(RegExp(r'^comision\s*'), '')
-      .trim();
-
-  return normalizedValue == selectedOfficeCode ||
-      normalizedValue == selectedOfficeName ||
+  if (userOfficeValue == selectedOfficeCode ||
+      userOfficeValue == selectedOfficeName ||
       (selectedOfficeName.isNotEmpty &&
-          normalizedValue.contains(selectedOfficeName)) ||
-      (normalizedValue.isNotEmpty &&
-          selectedOfficeName.contains(normalizedValue));
+          userOfficeValue.contains(selectedOfficeName)) ||
+      (userOfficeValue.isNotEmpty &&
+          selectedOfficeName.contains(userOfficeValue))) {
+    return true;
+  }
+
+  if (selectedOfficeCode.isNotEmpty &&
+      (userOfficeValue.startsWith('$selectedOfficeCode ') ||
+          userOfficeValue.startsWith('$selectedOfficeCode.') ||
+          selectedOfficeCode.startsWith('$userOfficeValue '))) {
+    return true;
+  }
+
+  final userTokens = _officeSearchTokens(userOfficeValue);
+  final selectedTokens = _officeSearchTokens(selectedOfficeName);
+
+  if (userTokens.isEmpty || selectedTokens.isEmpty) {
+    return false;
+  }
+
+  final matches = selectedTokens
+      .where((token) => userTokens.any((userToken) => userToken == token))
+      .length;
+  final requiredMatches = selectedTokens.length <= 2
+      ? selectedTokens.length
+      : 2;
+
+  return matches >= requiredMatches;
+}
+
+bool _officeTextLooksSimilar(String value, String query) {
+  if (value.isEmpty || query.isEmpty) {
+    return false;
+  }
+
+  if (value == query || value.contains(query) || query.contains(value)) {
+    return true;
+  }
+
+  final valueTokens = _officeSearchTokens(value);
+  final queryTokens = _officeSearchTokens(query);
+
+  if (valueTokens.isEmpty || queryTokens.isEmpty) {
+    return false;
+  }
+
+  final matches = queryTokens
+      .where((token) => valueTokens.any((valueToken) => valueToken == token))
+      .length;
+  final requiredMatches = queryTokens.length <= 2 ? queryTokens.length : 2;
+
+  return matches >= requiredMatches;
 }
 
 String _normalizeSearchText(String value) {
-  return value
-      .trim()
-      .toLowerCase()
+  return _stripTextAccents(
+    value.trim().toLowerCase(),
+  ).replaceAll(RegExp(r'\s+'), ' ').replaceAll(RegExp(r'[^a-z0-9 ]'), '');
+}
+
+String _normalizeOfficeSearchText(String value) {
+  return _normalizeSearchText(value)
+      .replaceAll(RegExp(r'\bcomision\b'), ' ')
       .replaceAll(RegExp(r'\s+'), ' ')
-      .replaceAll(RegExp(r'[^a-z0-9 ]'), '');
+      .trim();
+}
+
+String _stripTextAccents(String value) {
+  return value
+      .replaceAll(RegExp(r'[áàäâã]'), 'a')
+      .replaceAll(RegExp(r'[éèëê]'), 'e')
+      .replaceAll(RegExp(r'[íìïî]'), 'i')
+      .replaceAll(RegExp(r'[óòöôõ]'), 'o')
+      .replaceAll(RegExp(r'[úùüû]'), 'u')
+      .replaceAll('ñ', 'n');
+}
+
+Set<String> _officeSearchTokens(String value) {
+  const ignoredTokens = {
+    'oficina',
+    'unidad',
+    'direccion',
+    'direcciones',
+    'departamento',
+    'secretaria',
+    'municipal',
+    'gobierno',
+    'autonomo',
+    'de',
+    'del',
+    'la',
+    'las',
+    'los',
+    'el',
+    'y',
+  };
+
+  return value
+      .split(' ')
+      .where(
+        (token) =>
+            token.isNotEmpty &&
+            !ignoredTokens.contains(token) &&
+            (token.length >= 3 || RegExp(r'\d').hasMatch(token)),
+      )
+      .toSet();
 }
 
 String _resolvedJobTitle(AppUser user) {

@@ -428,7 +428,7 @@ class _EventsScreenState extends State<EventsScreen> {
   }
 
   List<EventRecord> get _filteredEvents {
-    final normalizedQuery = _eventSearchQuery.trim().toLowerCase();
+    final normalizedQuery = _normalizeOfficeSearchText(_eventSearchQuery);
 
     if (normalizedQuery.isEmpty) {
       return _events;
@@ -446,7 +446,10 @@ class _EventsScreenState extends State<EventsScreen> {
           ];
 
           return searchValues.any(
-            (value) => value.toLowerCase().contains(normalizedQuery),
+            (value) => _officeTextLooksSimilar(
+              _normalizeOfficeSearchText(value),
+              normalizedQuery,
+            ),
           );
         })
         .toList(growable: false);
@@ -1117,13 +1120,13 @@ class _EventListsView extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             if (currentList.isEmpty)
-            _EmptyListState(selectedListType: selectedListType)
+              _EmptyListState(selectedListType: selectedListType)
             else
-            _EventRosterTable(
-              eventControls: event.controls,
-              entries: currentList,
-              selectedListType: selectedListType,
-            ),
+              _EventRosterTable(
+                eventControls: event.controls,
+                entries: currentList,
+                selectedListType: selectedListType,
+              ),
           ],
         ],
       ),
@@ -1176,12 +1179,11 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
   late final Set<int> _excludedOfficeIds;
   bool _showValidation = false;
 
-  Set<int> get _expandedOfficeIds =>
-      _expandOfficeSelection(
-        _selectedOfficeIds,
-        widget.offices,
-        excludedOfficeIds: _excludedOfficeIds,
-      );
+  Set<int> get _expandedOfficeIds => _expandOfficeSelection(
+    _selectedOfficeIds,
+    widget.offices,
+    excludedOfficeIds: _excludedOfficeIds,
+  );
 
   @override
   void initState() {
@@ -1301,15 +1303,15 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
   Future<void> _pickOffices() async {
     final selectionResult =
         await showModalBottomSheet<_EventOfficeSelectionResult>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => _EventOfficeSelectionSheet(
-        offices: widget.offices,
-        selectedOfficeIds: _selectedOfficeIds,
-        excludedOfficeIds: _excludedOfficeIds,
-      ),
-    );
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (context) => _EventOfficeSelectionSheet(
+            offices: widget.offices,
+            selectedOfficeIds: _selectedOfficeIds,
+            excludedOfficeIds: _excludedOfficeIds,
+          ),
+        );
 
     if (!mounted || selectionResult == null) {
       return;
@@ -1692,7 +1694,8 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                                             context,
                                           ).textTheme.bodySmall,
                                         ),
-                                        if (excludedBranchOffices.isNotEmpty) ...[
+                                        if (excludedBranchOffices
+                                            .isNotEmpty) ...[
                                           const SizedBox(height: 4),
                                           Text(
                                             '${excludedBranchOffices.length} ramas quedaran fuera aunque pertenezcan a una oficina padre seleccionada.',
@@ -2256,15 +2259,14 @@ class _EventOfficeSelectionSheetState
   Set<int> get _rawExpandedOfficeIds =>
       _expandOfficeSelection(_draftSelectedOfficeIds, widget.offices);
 
-  Set<int> get _expandedOfficeIds =>
-      _expandOfficeSelection(
-        _draftSelectedOfficeIds,
-        widget.offices,
-        excludedOfficeIds: _draftExcludedOfficeIds,
-      );
+  Set<int> get _expandedOfficeIds => _expandOfficeSelection(
+    _draftSelectedOfficeIds,
+    widget.offices,
+    excludedOfficeIds: _draftExcludedOfficeIds,
+  );
 
   List<EventOffice> get _filteredOffices {
-    final normalizedQuery = _searchQuery.trim().toLowerCase();
+    final normalizedQuery = _normalizeOfficeSearchText(_searchQuery);
 
     if (normalizedQuery.isEmpty) {
       return widget.offices;
@@ -2272,8 +2274,13 @@ class _EventOfficeSelectionSheetState
 
     return widget.offices
         .where((office) {
-          return office.name.toLowerCase().contains(normalizedQuery) ||
-              office.code.toLowerCase().contains(normalizedQuery) ||
+          return _officeTextLooksSimilar(
+                _normalizeOfficeSearchText(office.name),
+                normalizedQuery,
+              ) ||
+              _normalizeOfficeSearchText(
+                office.code,
+              ).contains(normalizedQuery) ||
               office.level.toString().contains(normalizedQuery);
         })
         .toList(growable: false);
@@ -2287,9 +2294,7 @@ class _EventOfficeSelectionSheetState
     }, widget.offices);
     _draftExcludedOfficeIds = _normalizeExcludedOfficeSelection(
       _draftSelectedOfficeIds,
-      {
-        ...widget.excludedOfficeIds,
-      },
+      {...widget.excludedOfficeIds},
       widget.offices,
     );
   }
@@ -2325,9 +2330,8 @@ class _EventOfficeSelectionSheetState
       final office = widget.offices.firstWhere((item) => item.id == officeId);
 
       if (_draftSelectedOfficeIds.contains(officeId)) {
-        final nextSelectedOfficeIds = {
-          ..._draftSelectedOfficeIds,
-        }..remove(officeId);
+        final nextSelectedOfficeIds = {..._draftSelectedOfficeIds}
+          ..remove(officeId);
         _syncDraftOfficeSelection(nextSelectedOfficeIds);
         return;
       }
@@ -2362,10 +2366,7 @@ class _EventOfficeSelectionSheetState
         return;
       }
 
-      final nextSelectedOfficeIds = {
-        ..._draftSelectedOfficeIds,
-        officeId,
-      };
+      final nextSelectedOfficeIds = {..._draftSelectedOfficeIds, officeId};
       _syncDraftOfficeSelection(nextSelectedOfficeIds);
     });
   }
@@ -2478,7 +2479,7 @@ class _EventOfficeSelectionSheetState
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],
-                          const SizedBox(height: 10),
+                        const SizedBox(height: 10),
                         Text(
                           'Usa la lista inferior para marcar oficinas base o deseleccionar ramas; aqui solo se muestra el resumen.',
                           style: Theme.of(context).textTheme.bodySmall,
@@ -2517,8 +2518,8 @@ class _EventOfficeSelectionSheetState
                                     _draftSelectedOfficeIds.contains(office.id);
                                 final isDirectlyExcluded =
                                     _draftExcludedOfficeIds.contains(office.id);
-                                final isIncludedBySelection = rawExpandedOfficeIds
-                                    .contains(office.id);
+                                final isIncludedBySelection =
+                                    rawExpandedOfficeIds.contains(office.id);
                                 final isIncludedByHierarchy = expandedOfficeIds
                                     .contains(office.id);
                                 final isInheritedOnly =
@@ -2578,9 +2579,7 @@ class _EventOfficeSelectionSheetState
                                     decoration: BoxDecoration(
                                       color: cardColor,
                                       borderRadius: BorderRadius.circular(18),
-                                      border: Border.all(
-                                        color: borderColor,
-                                      ),
+                                      border: Border.all(color: borderColor),
                                     ),
                                     child: Row(
                                       crossAxisAlignment:
@@ -3858,8 +3857,7 @@ Set<int> _expandOfficeSelection(
   Set<int> directOfficeIds,
   List<EventOffice> offices, {
   Set<int>? excludedOfficeIds,
-}
-) {
+}) {
   if (directOfficeIds.isEmpty) {
     return <int>{};
   }
@@ -3907,6 +3905,79 @@ bool _isOfficeCoveredByBranch(String officeCode, String branchCode) {
 
 String _normalizeOfficeCode(String code) {
   return code.trim().replaceAll(RegExp(r'\.+$'), '');
+}
+
+String _normalizeOfficeSearchText(String value) {
+  return _stripTextAccents(value.trim().toLowerCase())
+      .replaceAll(RegExp(r'\bcomision\b'), ' ')
+      .replaceAll(RegExp(r'[^a-z0-9.]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+}
+
+String _stripTextAccents(String value) {
+  return value
+      .replaceAll(RegExp(r'[áàäâã]'), 'a')
+      .replaceAll(RegExp(r'[éèëê]'), 'e')
+      .replaceAll(RegExp(r'[íìïî]'), 'i')
+      .replaceAll(RegExp(r'[óòöôõ]'), 'o')
+      .replaceAll(RegExp(r'[úùüû]'), 'u')
+      .replaceAll('ñ', 'n');
+}
+
+bool _officeTextLooksSimilar(String value, String query) {
+  if (value.isEmpty || query.isEmpty) {
+    return false;
+  }
+
+  if (value == query || value.contains(query) || query.contains(value)) {
+    return true;
+  }
+
+  final valueTokens = _officeSearchTokens(value);
+  final queryTokens = _officeSearchTokens(query);
+
+  if (valueTokens.isEmpty || queryTokens.isEmpty) {
+    return false;
+  }
+
+  final matches = queryTokens
+      .where((token) => valueTokens.any((valueToken) => valueToken == token))
+      .length;
+  final requiredMatches = queryTokens.length <= 2 ? queryTokens.length : 2;
+
+  return matches >= requiredMatches;
+}
+
+Set<String> _officeSearchTokens(String value) {
+  const ignoredTokens = {
+    'oficina',
+    'unidad',
+    'direccion',
+    'direcciones',
+    'departamento',
+    'secretaria',
+    'municipal',
+    'gobierno',
+    'autonomo',
+    'de',
+    'del',
+    'la',
+    'las',
+    'los',
+    'el',
+    'y',
+  };
+
+  return value
+      .split(' ')
+      .where(
+        (token) =>
+            token.isNotEmpty &&
+            !ignoredTokens.contains(token) &&
+            (token.length >= 3 || RegExp(r'\d').hasMatch(token)),
+      )
+      .toSet();
 }
 
 String _formatDate(DateTime date) {

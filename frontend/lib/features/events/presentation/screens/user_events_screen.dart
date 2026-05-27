@@ -901,8 +901,8 @@ List<EventRecord> _filterEventsForCurrentUser(
       : currentUser.officeId;
   final officeCode = currentUser.hasCommission
       ? ''
-      : _normalizeOfficeValue(currentUser.officeCode);
-  final officeName = _normalizeOfficeValue(
+      : _normalizeOfficeSearchText(currentUser.officeCode ?? '');
+  final officeName = _normalizeOfficeSearchText(
     currentUser.hasCommission
         ? currentUser.commissionOfficeName ?? ''
         : _resolvedOfficeName(currentUser),
@@ -919,7 +919,7 @@ List<EventRecord> _filterEventsForCurrentUser(
             return true;
           }
 
-          final eventOfficeCode = _normalizeOfficeValue(office.code);
+          final eventOfficeCode = _normalizeOfficeSearchText(office.code);
 
           if (officeCode.isNotEmpty && eventOfficeCode.isNotEmpty) {
             if (eventOfficeCode == officeCode ||
@@ -929,8 +929,11 @@ List<EventRecord> _filterEventsForCurrentUser(
             }
           }
 
-          if (officeName.isNotEmpty &&
-              _normalizeOfficeValue(office.name) == officeName) {
+          if (_eventOfficeMatchesUserOffice(
+            office,
+            userOfficeName: officeName,
+            userOfficeCode: officeCode,
+          )) {
             return true;
           }
 
@@ -938,6 +941,53 @@ List<EventRecord> _filterEventsForCurrentUser(
         });
       })
       .toList(growable: false);
+}
+
+bool _eventOfficeMatchesUserOffice(
+  EventOffice eventOffice, {
+  required String userOfficeName,
+  required String userOfficeCode,
+}) {
+  final eventOfficeName = _normalizeOfficeSearchText(eventOffice.name);
+  final eventOfficeCode = _normalizeOfficeSearchText(eventOffice.code);
+
+  if (userOfficeCode.isNotEmpty &&
+      eventOfficeCode.isNotEmpty &&
+      (eventOfficeCode == userOfficeCode ||
+          eventOfficeCode.startsWith('$userOfficeCode.') ||
+          userOfficeCode.startsWith('$eventOfficeCode.'))) {
+    return true;
+  }
+
+  if (userOfficeName.isEmpty || eventOfficeName.isEmpty) {
+    return false;
+  }
+
+  if (eventOfficeName == userOfficeName ||
+      eventOfficeName.contains(userOfficeName) ||
+      userOfficeName.contains(eventOfficeName)) {
+    return true;
+  }
+
+  final userTokens = _officeSearchTokens(userOfficeName);
+  final eventTokens = _officeSearchTokens(eventOfficeName);
+
+  if (userTokens.isEmpty || eventTokens.isEmpty) {
+    return false;
+  }
+
+  final shorterTokens = userTokens.length <= eventTokens.length
+      ? userTokens
+      : eventTokens;
+  final longerTokens = userTokens.length <= eventTokens.length
+      ? eventTokens
+      : userTokens;
+  final matches = shorterTokens
+      .where((token) => longerTokens.any((longerToken) => longerToken == token))
+      .length;
+  final requiredMatches = shorterTokens.length <= 2 ? shorterTokens.length : 2;
+
+  return matches >= requiredMatches;
 }
 
 List<EventRecord> _sortOfficeEvents(List<EventRecord> events) {
@@ -964,8 +1014,53 @@ List<EventRecord> _sortOfficeEvents(List<EventRecord> events) {
   return sortedEvents;
 }
 
-String _normalizeOfficeValue(String? value) {
-  return (value ?? '').trim().toLowerCase();
+String _normalizeOfficeSearchText(String value) {
+  return _stripTextAccents(value.trim().toLowerCase())
+      .replaceAll(RegExp(r'\bcomision\b'), ' ')
+      .replaceAll(RegExp(r'[^a-z0-9.]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+}
+
+String _stripTextAccents(String value) {
+  return value
+      .replaceAll(RegExp(r'[áàäâã]'), 'a')
+      .replaceAll(RegExp(r'[éèëê]'), 'e')
+      .replaceAll(RegExp(r'[íìïî]'), 'i')
+      .replaceAll(RegExp(r'[óòöôõ]'), 'o')
+      .replaceAll(RegExp(r'[úùüû]'), 'u')
+      .replaceAll('ñ', 'n');
+}
+
+Set<String> _officeSearchTokens(String value) {
+  const ignoredTokens = {
+    'oficina',
+    'unidad',
+    'direccion',
+    'direcciones',
+    'departamento',
+    'secretaria',
+    'municipal',
+    'gobierno',
+    'autonomo',
+    'de',
+    'del',
+    'la',
+    'las',
+    'los',
+    'el',
+    'y',
+  };
+
+  return value
+      .split(' ')
+      .where(
+        (token) =>
+            token.isNotEmpty &&
+            !ignoredTokens.contains(token) &&
+            (token.length >= 3 || RegExp(r'\d').hasMatch(token)),
+      )
+      .toSet();
 }
 
 String _resolvedOfficeName(AppUser currentUser) {
