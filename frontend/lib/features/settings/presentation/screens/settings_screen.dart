@@ -11,6 +11,7 @@ import '../../../../core/theme/app_palette.dart';
 import '../../../auth/infrastructure/services/auth_api_service.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/location_permission_settings.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../../../shared/widgets/base64_avatar.dart';
@@ -37,6 +38,112 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isSavingPhoto = false;
   bool _isDownloadingCredential = false;
   bool _isChangingPassword = false;
+  bool _isLoadingLocationPreference = true;
+  bool _isUpdatingLocationPermission = false;
+  bool _isLocationEnabled = false;
+  bool _isLocationServiceEnabled = false;
+  LocationPermission _locationPermission = LocationPermission.denied;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLocationSettings();
+  }
+
+  Future<void> _loadLocationSettings() async {
+    try {
+      final enabled = await LocationPermissionSettings.isEnabled();
+      final serviceEnabled =
+          await LocationPermissionSettings.isServiceEnabled();
+      final permission = await LocationPermissionSettings.checkPermission();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isLocationEnabled = enabled;
+        _isLocationServiceEnabled = serviceEnabled;
+        _locationPermission = permission;
+        _isLoadingLocationPreference = false;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isLoadingLocationPreference = false;
+      });
+    }
+  }
+
+  Future<void> _setLocationEnabled(bool enabled) async {
+    if (_isUpdatingLocationPermission) {
+      return;
+    }
+
+    setState(() {
+      _isUpdatingLocationPermission = true;
+    });
+
+    try {
+      var permission = await LocationPermissionSettings.checkPermission();
+      final serviceEnabled =
+          await LocationPermissionSettings.isServiceEnabled();
+
+      if (enabled && permission == LocationPermission.denied) {
+        permission = await LocationPermissionSettings.requestPermission();
+      }
+
+      await LocationPermissionSettings.setEnabled(enabled);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isLocationEnabled = enabled;
+        _isLocationServiceEnabled = serviceEnabled;
+        _locationPermission = permission;
+      });
+
+      if (!enabled) {
+        AppAlert.showSuccess(context, 'Ubicacion deshabilitada en la app.');
+      } else if (permission.isAllowed && serviceEnabled) {
+        AppAlert.showSuccess(context, 'Ubicacion habilitada.');
+      } else {
+        AppAlert.showWarning(
+          context,
+          'No se concedio el permiso de ubicacion. Revisa los ajustes del dispositivo o navegador.',
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(
+          context,
+          'No fue posible actualizar la configuracion de ubicacion.',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUpdatingLocationPermission = false;
+          _isLoadingLocationPreference = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openLocationSettings() async {
+    await LocationPermissionSettings.openLocationSettings();
+    await _loadLocationSettings();
+  }
+
+  Future<void> _openAppSettings() async {
+    await LocationPermissionSettings.openAppSettings();
+    await _loadLocationSettings();
+  }
 
   Future<AppUser> _updateProfile({
     required String nombreCompleto,
@@ -503,6 +610,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 14),
+          _LocationSettingsCard(
+            isLoading: _isLoadingLocationPreference,
+            isUpdating: _isUpdatingLocationPermission,
+            isEnabled: _isLocationEnabled,
+            isServiceEnabled: _isLocationServiceEnabled,
+            permission: _locationPermission,
+            onChanged: _setLocationEnabled,
+            onOpenLocationSettings: _openLocationSettings,
+            onOpenAppSettings: _openAppSettings,
+          ),
+          const SizedBox(height: 14),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
@@ -521,6 +639,126 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LocationSettingsCard extends StatelessWidget {
+  const _LocationSettingsCard({
+    required this.isLoading,
+    required this.isUpdating,
+    required this.isEnabled,
+    required this.isServiceEnabled,
+    required this.permission,
+    required this.onChanged,
+    required this.onOpenLocationSettings,
+    required this.onOpenAppSettings,
+  });
+
+  final bool isLoading;
+  final bool isUpdating;
+  final bool isEnabled;
+  final bool isServiceEnabled;
+  final LocationPermission permission;
+  final ValueChanged<bool> onChanged;
+  final VoidCallback onOpenLocationSettings;
+  final VoidCallback onOpenAppSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final canUseLocation = isEnabled && isServiceEnabled && permission.isAllowed;
+    final status = isLoading
+        ? 'Consultando configuracion...'
+        : canUseLocation
+        ? 'Ubicacion activa'
+        : _locationStatusLabel(isEnabled, isServiceEnabled, permission);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: AppPalette.orangeSoft,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Icon(
+                    Icons.location_on_rounded,
+                    color: AppPalette.orange,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Configuracion de ubicacion',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Controla si la app puede pedir y usar tu ubicacion para QR dinamico, asistencias y mapas.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
+                ),
+                if (isLoading || isUpdating)
+                  const SizedBox(
+                    width: 26,
+                    height: 26,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  Switch(
+                    value: isEnabled,
+                    activeThumbColor: AppPalette.orange,
+                    onChanged: onChanged,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _UserDataRow(
+              label: 'Estado',
+              value: status,
+              icon: canUseLocation
+                  ? Icons.check_circle_outline_rounded
+                  : Icons.location_off_rounded,
+            ),
+            if (!isLoading &&
+                isEnabled &&
+                (!isServiceEnabled || !permission.isAllowed)) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  if (!isServiceEnabled)
+                    OutlinedButton.icon(
+                      onPressed: onOpenLocationSettings,
+                      icon: const Icon(Icons.settings_outlined),
+                      label: const Text('Ajustes de ubicacion'),
+                    ),
+                  if (!permission.isAllowed)
+                    OutlinedButton.icon(
+                      onPressed: onOpenAppSettings,
+                      icon: const Icon(Icons.app_settings_alt_rounded),
+                      label: const Text('Permisos de la app'),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -952,6 +1190,14 @@ class _MyQrDialogState extends State<MyQrDialog> {
   }
 
   Future<_QrGenerationLocationSnapshot> _resolveCurrentLocation() async {
+    final isLocationEnabled = await LocationPermissionSettings.isEnabled();
+
+    if (!isLocationEnabled) {
+      throw StateError(
+        'Habilita la ubicacion en Configuracion para generar el QR dinamico.',
+      );
+    }
+
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
 
     if (!serviceEnabled) {
@@ -1395,6 +1641,30 @@ String _resolvedOfficeName(AppUser currentUser) {
       ? currentUser.officeName!.trim()
       : currentUser.unidad.trim();
   return officeName.isEmpty ? 'Oficina no registrada' : officeName;
+}
+
+String _locationStatusLabel(
+  bool isEnabled,
+  bool isServiceEnabled,
+  LocationPermission permission,
+) {
+  if (!isEnabled) {
+    return 'Deshabilitada en la app';
+  }
+
+  if (!isServiceEnabled) {
+    return 'El servicio de ubicacion esta apagado';
+  }
+
+  if (permission == LocationPermission.deniedForever) {
+    return 'Permiso bloqueado en el dispositivo o navegador';
+  }
+
+  if (!permission.isAllowed) {
+    return 'Permiso pendiente';
+  }
+
+  return 'Ubicacion activa';
 }
 
 class _ProfileNameDraft {

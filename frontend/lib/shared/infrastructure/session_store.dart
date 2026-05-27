@@ -44,9 +44,10 @@ class SessionStore {
   }
 
   static Future<void> saveUser(AppUser user) async {
-    _cachedUser = user;
+    final userToSave = await _withPersistableAuthToken(user);
+    _cachedUser = userToSave;
     final preferences = await SharedPreferences.getInstance();
-    await preferences.setString(_userKey, jsonEncode(user.toJson()));
+    await preferences.setString(_userKey, jsonEncode(userToSave.toJson()));
   }
 
   static Future<String?> readAuthToken() async {
@@ -71,5 +72,53 @@ class SessionStore {
     final preferences = await SharedPreferences.getInstance();
     await preferences.remove(_userKey);
     await preferences.remove(_sectionKey);
+  }
+
+  static Future<AppUser> _withPersistableAuthToken(AppUser user) async {
+    final token = user.authToken?.trim();
+
+    if (token != null && token.isNotEmpty) {
+      return user;
+    }
+
+    final persistedToken = await _readPersistedAuthToken();
+
+    if (persistedToken == null || persistedToken.isEmpty) {
+      return user;
+    }
+
+    return user.withAuthToken(persistedToken);
+  }
+
+  static Future<String?> _readPersistedAuthToken() async {
+    final cachedToken = _cachedUser?.authToken?.trim();
+
+    if (cachedToken != null && cachedToken.isNotEmpty) {
+      return cachedToken;
+    }
+
+    final preferences = await SharedPreferences.getInstance();
+    final rawUser = preferences.getString(_userKey);
+
+    if (rawUser == null || rawUser.trim().isEmpty) {
+      return null;
+    }
+
+    try {
+      final parsedUser = jsonDecode(rawUser);
+
+      if (parsedUser is! Map<String, dynamic>) {
+        return null;
+      }
+
+      final token = parsedUser['authToken'] as String?;
+      final normalizedToken = token?.trim();
+
+      return normalizedToken == null || normalizedToken.isEmpty
+          ? null
+          : normalizedToken;
+    } catch (_) {
+      return null;
+    }
   }
 }

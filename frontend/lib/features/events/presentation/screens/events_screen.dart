@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/location_permission_settings.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../domain/entities/event_record.dart';
@@ -1439,6 +1440,14 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
     });
 
     try {
+      final isLocationEnabled = await LocationPermissionSettings.isEnabled();
+
+      if (!isLocationEnabled) {
+        throw StateError(
+          'Habilita la ubicacion en Configuracion para usar tu ubicacion actual.',
+        );
+      }
+
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
 
       if (!serviceEnabled) {

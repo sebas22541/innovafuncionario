@@ -83,6 +83,38 @@ class AppUser {
   final String? qrPayload;
   final String? authToken;
 
+  AppUser withAuthToken(String? authToken) {
+    return AppUser(
+      id: id,
+      email: email,
+      role: role,
+      nombreCompleto: nombreCompleto,
+      primerApellido: primerApellido,
+      segundoApellido: segundoApellido,
+      tercerApellido: tercerApellido,
+      ci: ci,
+      tipoVinculo: tipoVinculo,
+      unidad: unidad,
+      cargo: cargo,
+      numeroItem: numeroItem,
+      activo: activo,
+      fotoUrl: fotoUrl,
+      officeId: officeId,
+      officeName: officeName,
+      officeCode: officeCode,
+      primaryOfficeId: primaryOfficeId,
+      primaryOfficeName: primaryOfficeName,
+      commissionOfficeId: commissionOfficeId,
+      commissionOfficeName: commissionOfficeName,
+      hasCommission: hasCommission,
+      nombreVisible: nombreVisible,
+      personaId: personaId,
+      qrCode: qrCode,
+      qrPayload: qrPayload,
+      authToken: authToken,
+    );
+  }
+
   factory AppUser.fromJson(Map<String, dynamic> source) {
     return AppUser(
       id: source['id'] as int?,

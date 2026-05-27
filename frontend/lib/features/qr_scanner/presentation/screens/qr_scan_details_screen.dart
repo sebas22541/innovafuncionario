@@ -3,6 +3,7 @@ import 'package:geolocator/geolocator.dart';
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/location_permission_settings.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/base64_avatar.dart';
@@ -172,6 +173,14 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
   }
 
   Future<_AttendanceLocationSnapshot> _resolveCurrentLocation() async {
+    final isLocationEnabled = await LocationPermissionSettings.isEnabled();
+
+    if (!isLocationEnabled) {
+      throw StateError(
+        'Habilita la ubicacion en Configuracion para registrar la asistencia.',
+      );
+    }
+
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
 
     if (!serviceEnabled) {

@@ -418,7 +418,11 @@ class _OfficePickerSheetState extends State<_OfficePickerSheet> {
             return true;
           }
 
-          return _normalizeSearchText(office.name).contains(query);
+          final searchableOffice = _normalizeSearchText(
+            '${office.name} ${office.code} ${office.level}',
+          );
+
+          return searchableOffice.contains(query);
         })
         .toList(growable: false);
 
@@ -462,7 +466,7 @@ class _OfficePickerSheetState extends State<_OfficePickerSheet> {
                     onChanged: (_) => setState(() {}),
                     decoration: const InputDecoration(
                       labelText: 'Buscar oficina',
-                      hintText: 'Escribe el nombre de la oficina',
+                      hintText: 'Escribe nombre, codigo o nivel',
                       prefixIcon: Icon(Icons.search_rounded),
                     ),
                   ),
@@ -873,30 +877,60 @@ String _resolvedOfficeName(AppUser user) {
 }
 
 bool _matchesOffice(AppUser user, OfficeOption office) {
-  if (user.officeId == office.id) {
+  final officeIds = <int?>{
+    user.officeId,
+    user.primaryOfficeId,
+    user.commissionOfficeId,
+  };
+
+  if (officeIds.contains(office.id)) {
     return true;
   }
 
-  final userOfficeName = _normalizeSearchText(_resolvedOfficeName(user));
-  final userUnitName = _normalizeSearchText(user.unidad);
+  final selectedOfficeCode = _normalizeSearchText(office.code);
   final selectedOfficeName = _normalizeSearchText(office.name);
 
-  if (selectedOfficeName.isEmpty) {
+  if (selectedOfficeCode.isEmpty && selectedOfficeName.isEmpty) {
     return false;
   }
 
-  return _officeNameMatches(userOfficeName, selectedOfficeName) ||
-      _officeNameMatches(userUnitName, selectedOfficeName);
+  final userOfficeValues = [
+    user.officeCode,
+    user.officeName,
+    user.primaryOfficeName,
+    user.commissionOfficeName,
+    user.unidad,
+    _resolvedOfficeName(user),
+  ].whereType<String>().map(_normalizeSearchText);
+
+  return userOfficeValues.any(
+    (value) => _officeValueMatches(
+      value,
+      selectedOfficeName: selectedOfficeName,
+      selectedOfficeCode: selectedOfficeCode,
+    ),
+  );
 }
 
-bool _officeNameMatches(String userOfficeName, String selectedOfficeName) {
-  if (userOfficeName.isEmpty) {
+bool _officeValueMatches(
+  String userOfficeValue, {
+  required String selectedOfficeName,
+  required String selectedOfficeCode,
+}) {
+  if (userOfficeValue.isEmpty) {
     return false;
   }
 
-  return userOfficeName == selectedOfficeName ||
-      userOfficeName.contains(selectedOfficeName) ||
-      selectedOfficeName.contains(userOfficeName);
+  final normalizedValue = userOfficeValue
+      .replaceFirst(RegExp(r'^comision\s*'), '')
+      .trim();
+
+  return normalizedValue == selectedOfficeCode ||
+      normalizedValue == selectedOfficeName ||
+      (selectedOfficeName.isNotEmpty &&
+          normalizedValue.contains(selectedOfficeName)) ||
+      (normalizedValue.isNotEmpty &&
+          selectedOfficeName.contains(normalizedValue));
 }
 
 String _normalizeSearchText(String value) {

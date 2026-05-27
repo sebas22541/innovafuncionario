@@ -66,7 +66,10 @@ class _UsersScreenState extends State<UsersScreen> {
           final searchableText = _normalizeSearchText(
             '${user.ci} ${user.fullName} ${user.nombreCompleto} '
             '${user.primerApellido} ${user.segundoApellido} '
-            '${user.tercerApellido} ${user.email}',
+            '${user.tercerApellido} ${user.email} '
+            '${user.officeCode} ${user.officeName} '
+            '${user.primaryOfficeName} ${user.commissionOfficeName} '
+            '${user.unidad}',
           );
 
           return searchableText.contains(query);
@@ -464,6 +467,36 @@ class _UsersScreenState extends State<UsersScreen> {
     }
   }
 
+  Future<void> _pickFilterOffice() async {
+    await _loadOfficesForFilter();
+
+    if (!mounted || _offices.isEmpty) {
+      return;
+    }
+
+    final office = await showModalBottomSheet<OfficeOption>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _OfficeSelectionSheet(
+        offices: _offices,
+        selectedOffice: _selectedFilterOffice,
+        title: 'Filtrar por oficina',
+        searchLabel: 'Buscar oficina',
+        searchHint: 'Escribe nombre, codigo o nivel',
+      ),
+    );
+
+    if (!mounted || office == null) {
+      return;
+    }
+
+    setState(() {
+      _selectedFilterOffice = office;
+      _currentPage = 0;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final visibleUsers = _visibleUsers;
@@ -579,7 +612,7 @@ class _UsersScreenState extends State<UsersScreen> {
                     },
                     decoration: InputDecoration(
                       labelText: 'Buscar usuarios',
-                      hintText: 'Busca por CI, nombre o usuario',
+                      hintText: 'Busca por CI, nombre, usuario u oficina',
                       prefixIcon: const Icon(Icons.search_rounded),
                       suffixIcon: _searchController.text.trim().isEmpty
                           ? null
@@ -596,49 +629,15 @@ class _UsersScreenState extends State<UsersScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  DropdownButtonFormField<int?>(
-                    initialValue: _selectedFilterOffice?.id,
-                    isExpanded: true,
-                    decoration: InputDecoration(
-                      labelText: 'Filtrar por oficina',
-                      prefixIcon: const Icon(Icons.account_tree_outlined),
-                      suffixIcon: _selectedFilterOffice == null
-                          ? null
-                          : IconButton(
-                              tooltip: 'Quitar filtro de oficina',
-                              onPressed: () {
-                                setState(() {
-                                  _selectedFilterOffice = null;
-                                  _currentPage = 0;
-                                });
-                              },
-                              icon: const Icon(Icons.close_rounded),
-                            ),
-                    ),
-                    items: [
-                      const DropdownMenuItem<int?>(
-                        value: null,
-                        child: Text('Todas las oficinas'),
-                      ),
-                      for (final office in _offices)
-                        DropdownMenuItem<int?>(
-                          value: office.id,
-                          child: Text(
-                            office.displayLabel,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                    ],
-                    onTap: _loadOfficesForFilter,
-                    onChanged: _offices.isEmpty
+                  _OfficeFilterField(
+                    selectedOffice: _selectedFilterOffice,
+                    isLoading: _isLoadingReferenceData,
+                    onTap: _pickFilterOffice,
+                    onClear: _selectedFilterOffice == null
                         ? null
-                        : (officeId) {
+                        : () {
                             setState(() {
-                              _selectedFilterOffice = officeId == null
-                                  ? null
-                                  : _offices.firstWhere(
-                                      (office) => office.id == officeId,
-                                    );
+                              _selectedFilterOffice = null;
                               _currentPage = 0;
                             });
                           },
@@ -1191,6 +1190,60 @@ class _NoSearchUsersState extends StatelessWidget {
               textAlign: TextAlign.center,
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OfficeFilterField extends StatelessWidget {
+  const _OfficeFilterField({
+    required this.selectedOffice,
+    required this.isLoading,
+    required this.onTap,
+    required this.onClear,
+  });
+
+  final OfficeOption? selectedOffice;
+  final bool isLoading;
+  final Future<void> Function() onTap;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final office = selectedOffice;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: isLoading ? null : onTap,
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Filtrar por oficina',
+          prefixIcon: const Icon(Icons.account_tree_outlined),
+          suffixIcon: isLoading
+              ? const Padding(
+                  padding: EdgeInsets.all(14),
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : office == null
+              ? const Icon(Icons.search_rounded)
+              : IconButton(
+                  tooltip: 'Quitar filtro de oficina',
+                  onPressed: onClear,
+                  icon: const Icon(Icons.close_rounded),
+                ),
+        ),
+        child: Text(
+          office?.displayLabel ?? 'Todas las oficinas',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+            color: office == null ? AppPalette.muted : AppPalette.night,
+          ),
         ),
       ),
     );
@@ -1829,8 +1882,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                             suffixIcon: IconButton(
                               onPressed: () {
                                 setState(() {
-                                  _hideConfirmPassword =
-                                      !_hideConfirmPassword;
+                                  _hideConfirmPassword = !_hideConfirmPassword;
                                 });
                               },
                               icon: Icon(
@@ -1955,9 +2007,9 @@ class _AccessInfoCard extends StatelessWidget {
         children: [
           Text(
             'Acceso a la app',
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
           Text(
@@ -2243,10 +2295,16 @@ class _OfficeSelectionSheet extends StatefulWidget {
   const _OfficeSelectionSheet({
     required this.offices,
     required this.selectedOffice,
+    this.title = 'Selecciona la unidad',
+    this.searchLabel = 'Buscar unidad',
+    this.searchHint = 'Escribe nombre, codigo o nivel',
   });
 
   final List<OfficeOption> offices;
   final OfficeOption? selectedOffice;
+  final String title;
+  final String searchLabel;
+  final String searchHint;
 
   @override
   State<_OfficeSelectionSheet> createState() => _OfficeSelectionSheetState();
@@ -2299,7 +2357,7 @@ class _OfficeSelectionSheetState extends State<_OfficeSelectionSheet> {
                     children: [
                       Expanded(
                         child: Text(
-                          'Selecciona la unidad',
+                          widget.title,
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                       ),
@@ -2313,10 +2371,10 @@ class _OfficeSelectionSheetState extends State<_OfficeSelectionSheet> {
                   TextField(
                     controller: _searchController,
                     onChanged: (_) => setState(() {}),
-                    decoration: const InputDecoration(
-                      labelText: 'Buscar unidad',
-                      hintText: 'Escribe nombre, codigo o nivel',
-                      prefixIcon: Icon(Icons.search_rounded),
+                    decoration: InputDecoration(
+                      labelText: widget.searchLabel,
+                      hintText: widget.searchHint,
+                      prefixIcon: const Icon(Icons.search_rounded),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -2577,9 +2635,16 @@ bool _userBelongsToOffice(AppUser user, OfficeOption office) {
     user.unidad,
   ].whereType<String>().map(_normalizeSearchText);
 
-  return userOfficeValues.any(
-    (value) => value == expectedCode || value == expectedName,
-  );
+  return userOfficeValues.any((value) {
+    final normalizedValue = value
+        .replaceFirst(RegExp(r'^comision:\s*'), '')
+        .trim();
+
+    return normalizedValue == expectedCode ||
+        normalizedValue == expectedName ||
+        (expectedName.isNotEmpty && normalizedValue.contains(expectedName)) ||
+        (normalizedValue.isNotEmpty && expectedName.contains(normalizedValue));
+  });
 }
 
 String _tipoVinculoLabel(String value) {

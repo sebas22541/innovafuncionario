@@ -9,7 +9,6 @@ class AppPermissionsService {
       return;
     }
 
-    await _requestIfNeeded(Permission.locationWhenInUse);
     await _requestIfNeeded(Permission.camera);
   }
 

@@ -5,6 +5,7 @@ import 'core/theme/app_theme.dart';
 import 'features/auth/presentation/screens/auth_screen.dart';
 import 'injection_container.dart';
 import 'shared/infrastructure/app_permissions_service.dart';
+import 'shared/infrastructure/backend_api_client.dart';
 import 'shared/infrastructure/session_store.dart';
 import 'shared/models/app_section.dart';
 import 'shared/models/app_user.dart';
@@ -44,8 +45,14 @@ class _QrWebAppState extends State<QrWebApp> {
       try {
         user = await dependencies.authApiService.fetchCurrentUser();
         await SessionStore.saveUser(user);
+      } on BackendApiException catch (error) {
+        if (error.statusCode == 401 || error.statusCode == 403) {
+          await SessionStore.clearSession();
+        } else {
+          user = storedUser;
+        }
       } catch (_) {
-        await SessionStore.clearSession();
+        user = storedUser;
       }
     }
 
@@ -60,24 +67,39 @@ class _QrWebAppState extends State<QrWebApp> {
     });
   }
 
-  void _handleAuthenticated(AppUser user) {
-    SessionStore.saveUser(user);
+  void _handleAuthenticated(AppUser user) async {
+    await SessionStore.saveUser(user);
+
+    if (!mounted) {
+      return;
+    }
+
     setState(() {
       _currentUser = user;
       _initialSection = null;
     });
   }
 
-  void _handleLogout() {
-    SessionStore.clearSession();
+  void _handleLogout() async {
+    await SessionStore.clearSession();
+
+    if (!mounted) {
+      return;
+    }
+
     setState(() {
       _currentUser = null;
       _initialSection = null;
     });
   }
 
-  void _handleCurrentUserChanged(AppUser user) {
-    SessionStore.saveUser(user);
+  void _handleCurrentUserChanged(AppUser user) async {
+    await SessionStore.saveUser(user);
+
+    if (!mounted) {
+      return;
+    }
+
     setState(() {
       _currentUser = user;
     });
