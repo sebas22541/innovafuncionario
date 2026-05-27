@@ -481,23 +481,10 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/credential") {
-      await readJsonBody(request);
-      const user = await prisma.usuarios.findUnique({
-        where: { email: authenticatedUser.email },
-        include: userWithOfficeInclude,
-      });
-
-      if (!user) {
-        throw new HttpError(404, "No se encontro el usuario seleccionado.");
-      }
-
-      if (user.activo !== true) {
-        throw new HttpError(
-          403,
-          "Tu usuario se encuentra inactivo. Solicita su activacion.",
-        );
-      }
-
+      const user = await resolveCredentialTargetUser(
+        authenticatedUser,
+        await readJsonBody(request),
+      );
       const person = await ensurePersonIdentityForUser(prisma, user);
       const credential = await generateAndStoreUserCredential(user, person);
 
@@ -508,23 +495,10 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/credential/pdf") {
-      await readJsonBody(request);
-      const user = await prisma.usuarios.findUnique({
-        where: { email: authenticatedUser.email },
-        include: userWithOfficeInclude,
-      });
-
-      if (!user) {
-        throw new HttpError(404, "No se encontro el usuario seleccionado.");
-      }
-
-      if (user.activo !== true) {
-        throw new HttpError(
-          403,
-          "Tu usuario se encuentra inactivo. Solicita su activacion.",
-        );
-      }
-
+      const user = await resolveCredentialTargetUser(
+        authenticatedUser,
+        await readJsonBody(request),
+      );
       const person = await ensurePersonIdentityForUser(prisma, user);
       const pdfBytes = await generateUserCredentialPdf(user, person);
 
@@ -2627,6 +2601,56 @@ function parseLoginInput(payload: unknown): LoginInput {
     email: readRequiredEmail(body, "email"),
     password: readRequiredString(body, "password", 6, 200),
   };
+}
+
+function readOptionalEmail(source: JsonRecord, key: string) {
+  const rawValue = readOptionalString(source, key, 5, 150);
+
+  if (rawValue == null) {
+    return null;
+  }
+
+  const value = normalizeEmailValue(rawValue);
+
+  if (!value.includes("@")) {
+    throw new HttpError(400, `El campo ${key} no tiene un correo valido.`);
+  }
+
+  return value;
+}
+
+async function resolveCredentialTargetUser(
+  authenticatedUser: AuthenticatedUser,
+  payload: unknown,
+) {
+  const body = expectRecord(payload);
+  const requestedEmail = readOptionalEmail(body, "email");
+  const targetEmail = requestedEmail ?? authenticatedUser.email;
+
+  if (requestedEmail != null && requestedEmail !== authenticatedUser.email) {
+    await assertAdminRequester(
+      authenticatedUser.email,
+      "Solo un administrador puede descargar credenciales de otros usuarios.",
+    );
+  }
+
+  const user = await prisma.usuarios.findUnique({
+    where: { email: targetEmail },
+    include: userWithOfficeInclude,
+  });
+
+  if (!user) {
+    throw new HttpError(404, "No se encontro el usuario seleccionado.");
+  }
+
+  if (user.activo !== true) {
+    throw new HttpError(
+      403,
+      "El usuario seleccionado se encuentra inactivo.",
+    );
+  }
+
+  return user;
 }
 
 function readQueryEmailFromBody(payload: unknown) {
