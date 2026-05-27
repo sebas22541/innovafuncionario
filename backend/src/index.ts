@@ -416,10 +416,10 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(404, "No se encontro el usuario seleccionado.");
       }
 
-      if (existingUser.rol === rol_usuario.OPERADOR) {
+      if (existingUser.rol !== rol_usuario.ADMIN) {
         throw new HttpError(
           403,
-          "Los usuarios externos no pueden editar su perfil.",
+          "Solo un administrador puede editar su perfil.",
         );
       }
 
@@ -2630,20 +2630,14 @@ function parseLoginInput(payload: unknown): LoginInput {
   };
 }
 
-function readOptionalEmail(source: JsonRecord, key: string) {
-  const rawValue = readOptionalString(source, key, 5, 150);
+function readOptionalLoginIdentifier(source: JsonRecord, key: string) {
+  const rawValue = readOptionalString(source, key, 3, 150);
 
   if (rawValue == null) {
     return null;
   }
 
-  const value = normalizeEmailValue(rawValue);
-
-  if (!value.includes("@")) {
-    throw new HttpError(400, `El campo ${key} no tiene un correo valido.`);
-  }
-
-  return value;
+  return normalizeEmailValue(rawValue);
 }
 
 async function resolveCredentialTargetUser(
@@ -2651,10 +2645,10 @@ async function resolveCredentialTargetUser(
   payload: unknown,
 ) {
   const body = expectRecord(payload);
-  const requestedEmail = readOptionalEmail(body, "email");
-  const targetEmail = requestedEmail ?? authenticatedUser.email;
+  const requestedLogin = readOptionalLoginIdentifier(body, "email");
+  const targetLogin = requestedLogin ?? authenticatedUser.email;
 
-  if (requestedEmail != null && requestedEmail !== authenticatedUser.email) {
+  if (requestedLogin != null && requestedLogin !== authenticatedUser.email) {
     await assertAdminRequester(
       authenticatedUser.email,
       "Solo un administrador puede descargar credenciales de otros usuarios.",
@@ -2662,7 +2656,7 @@ async function resolveCredentialTargetUser(
   }
 
   const user = await prisma.usuarios.findUnique({
-    where: { email: targetEmail },
+    where: { email: targetLogin },
     include: userWithOfficeInclude,
   });
 

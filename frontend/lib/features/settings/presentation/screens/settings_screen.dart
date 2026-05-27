@@ -55,7 +55,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _openEditProfileDialog() async {
-    if (widget.currentUser.isExternalUser ||
+    if (!widget.currentUser.isAdmin ||
         _isSavingProfile ||
         _isSavingPhoto) {
       return;
@@ -110,7 +110,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _pickProfilePhoto() async {
-    if (widget.currentUser.isExternalUser ||
+    if (!widget.currentUser.isAdmin ||
         _isSavingProfile ||
         _isSavingPhoto) {
       return;
@@ -257,7 +257,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              currentUser.isExternalUser
+                              !currentUser.isAdmin
                                   ? 'Tus datos se mantienen de solo lectura.'
                                   : 'Puedes actualizar tu foto, nombres y apellidos. El resto de los datos se mantiene de solo lectura.',
                               style: Theme.of(context).textTheme.bodyMedium,
@@ -277,7 +277,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     spacing: 12,
                     runSpacing: 12,
                     children: [
-                      if (!currentUser.isExternalUser) ...[
+                      if (currentUser.isAdmin) ...[
                         OutlinedButton.icon(
                           onPressed: _isSavingProfile || _isSavingPhoto
                               ? null
@@ -327,7 +327,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         icon: const Icon(Icons.qr_code_2_rounded),
                         label: const Text('Mi QR'),
                       ),
-                      if (!currentUser.isExternalUser)
+                      if (currentUser.isAdmin)
                         ElevatedButton.icon(
                           onPressed: _isDownloadingCredential
                               ? null
