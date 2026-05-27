@@ -39,6 +39,13 @@ class SessionStore {
     await preferences.setString(_userKey, jsonEncode(user.toJson()));
   }
 
+  static Future<String?> readAuthToken() async {
+    final user = await readUser();
+    final token = user?.authToken?.trim();
+
+    return token == null || token.isEmpty ? null : token;
+  }
+
   static Future<AppSection?> readSection() async {
     final preferences = await SharedPreferences.getInstance();
     return parseAppSection(preferences.getString(_sectionKey));

@@ -788,6 +788,12 @@ class _UserListCard extends StatelessWidget {
                         label: 'Oficina',
                         value: _resolvedOfficeName(user),
                       ),
+                      if (user.hasCommission &&
+                          (user.primaryOfficeName ?? '').trim().isNotEmpty)
+                        _UserMeta(
+                          label: 'Oficina base',
+                          value: user.primaryOfficeName!,
+                        ),
                       _UserMeta(label: 'Cargo', value: user.cargo),
                       _UserMeta(
                         label: 'Tipo',
@@ -1110,7 +1116,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
       officeCode: user.hasCommission ? null : user.officeCode,
       officeName: user.primaryOfficeName,
     );
-    _unidadController.text = _selectedOffice?.name ??
+    _unidadController.text =
+        _selectedOffice?.name ??
         user.primaryOfficeName ??
         _resolvedOfficeName(user);
     _hasCommission = user.hasCommission;
@@ -1119,9 +1126,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
       officeCode: user.hasCommission ? user.officeCode : null,
       officeName: user.commissionOfficeName,
     );
-    _commissionOfficeController.text = _selectedCommissionOffice?.name ??
-        user.commissionOfficeName ??
-        '';
+    _commissionOfficeController.text =
+        _selectedCommissionOffice?.name ?? user.commissionOfficeName ?? '';
     _selectedCargo = _findInitialCargo(user);
     _cargoController.text = _selectedCargo?.name ?? user.cargo;
   }

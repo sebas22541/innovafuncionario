@@ -875,6 +875,11 @@ class _EmptyUserEventsState extends StatelessWidget {
 }
 
 bool _hasOfficeReference(AppUser currentUser) {
+  if (currentUser.hasCommission) {
+    return currentUser.commissionOfficeId != null ||
+        currentUser.commissionOfficeName?.trim().isNotEmpty == true;
+  }
+
   if (currentUser.officeId != null) {
     return true;
   }
@@ -891,9 +896,17 @@ List<EventRecord> _filterEventsForCurrentUser(
   List<EventRecord> events,
   AppUser currentUser,
 ) {
-  final officeId = currentUser.officeId;
-  final officeCode = _normalizeOfficeValue(currentUser.officeCode);
-  final officeName = _normalizeOfficeValue(_resolvedOfficeName(currentUser));
+  final officeId = currentUser.hasCommission
+      ? currentUser.commissionOfficeId
+      : currentUser.officeId;
+  final officeCode = currentUser.hasCommission
+      ? ''
+      : _normalizeOfficeValue(currentUser.officeCode);
+  final officeName = _normalizeOfficeValue(
+    currentUser.hasCommission
+        ? currentUser.commissionOfficeName ?? ''
+        : _resolvedOfficeName(currentUser),
+  );
 
   return events
       .where((event) {

@@ -4,6 +4,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/presentation/screens/auth_screen.dart';
 import 'injection_container.dart';
+import 'shared/infrastructure/app_permissions_service.dart';
 import 'shared/infrastructure/session_store.dart';
 import 'shared/models/app_section.dart';
 import 'shared/models/app_user.dart';
@@ -46,6 +47,10 @@ class _QrWebAppState extends State<QrWebApp> {
       _initialSection = section;
       _isRestoringSession = false;
     });
+
+    if (user != null) {
+      _requestStartupPermissions(user);
+    }
   }
 
   void _handleAuthenticated(AppUser user) {
@@ -54,6 +59,7 @@ class _QrWebAppState extends State<QrWebApp> {
       _currentUser = user;
       _initialSection = null;
     });
+    _requestStartupPermissions(user);
   }
 
   void _handleLogout() {
@@ -68,6 +74,12 @@ class _QrWebAppState extends State<QrWebApp> {
     SessionStore.saveUser(user);
     setState(() {
       _currentUser = user;
+    });
+  }
+
+  void _requestStartupPermissions(AppUser user) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppPermissionsService.requestStartupPermissions(user);
     });
   }
 

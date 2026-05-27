@@ -47,6 +47,25 @@ const DYNAMIC_QR_TTL_SECONDS = clampInt(
 );
 const DYNAMIC_QR_VERSION = "DQR1";
 const DYNAMIC_QR_SIGNATURE_LENGTH = 16;
+const JWT_TTL_SECONDS = clampInt(
+  process.env.JWT_TTL_SECONDS ?? null,
+  2_592_000,
+  3_600,
+  31_536_000,
+);
+const JWT_SECRET =
+  process.env.JWT_SECRET ??
+  createHash("sha256").update(`${DATABASE_URL}:jwt`).digest("hex");
+const RATE_LIMIT_MAX_REQUESTS = clampInt(
+  process.env.RATE_LIMIT_MAX_REQUESTS ?? null,
+  100,
+  10,
+  10_000,
+);
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const ALLOWED_CORS_ORIGINS = parseAllowedCorsOrigins(
+  process.env.CORS_ALLOWED_ORIGINS,
+);
 const REFERENCE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DASHBOARD_CACHE_TTL_MS = 30 * 1000;
 const EVENT_SUMMARY_CACHE_TTL_MS = 15 * 1000;
@@ -69,6 +88,13 @@ const pool = new Pool({
 });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
+
+type AuthenticatedUser = {
+  id: number;
+  email: string;
+  rol: (typeof rol_usuario)[keyof typeof rol_usuario];
+  activo: boolean;
+};
 
 const userWithOfficeInclude = {
   oficinas: true,
@@ -151,11 +177,15 @@ let dashboardSummaryCache: CacheEntry<{
   eventos: number;
 }> | null = null;
 let eventSummaryCache: CacheEntry<any[]> | null = null;
+const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
 
 await ensureRuntimeSchema();
 
 const server = http.createServer(async (request, response) => {
-  applyCors(response);
+  if (!applyCors(request, response)) {
+    sendJson(response, 403, { error: "Origen no permitido." });
+    return;
+  }
 
   if (request.method === "OPTIONS") {
     response.writeHead(204);
@@ -174,6 +204,9 @@ const server = http.createServer(async (request, response) => {
   );
 
   try {
+    enforceRateLimit(request);
+    const authenticatedUser = await authenticateRequestIfRequired(request, url);
+
     if (request.method === "GET" && url.pathname === "/") {
       sendJson(response, 200, {
         service: "qr-backend",
@@ -316,10 +349,11 @@ const server = http.createServer(async (request, response) => {
         include: userWithOfficeInclude,
       });
       const person = await ensurePersonIdentityForUser(prisma, user);
+      const authToken = createAuthToken(user);
       invalidateDashboardSummaryCache();
 
       sendJson(response, 201, {
-        data: serializeAppUser(user, person),
+        data: serializeAppUser(user, person, authToken),
       });
       return;
     }
@@ -343,9 +377,10 @@ const server = http.createServer(async (request, response) => {
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);
+      const authToken = createAuthToken(user);
 
       sendJson(response, 200, {
-        data: serializeAppUser(user, person),
+        data: serializeAppUser(user, person, authToken),
       });
       return;
     }
@@ -353,7 +388,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "PUT" && url.pathname === "/api/auth/profile") {
       const input = parseUpdateProfileInput(await readJsonBody(request));
       const existingUser = await prisma.usuarios.findUnique({
-        where: { email: input.email },
+        where: { email: authenticatedUser.email },
         include: userWithOfficeInclude,
       });
 
@@ -371,7 +406,7 @@ const server = http.createServer(async (request, response) => {
           });
 
       const updatedUser = await prisma.usuarios.update({
-        where: { email: input.email },
+        where: { email: authenticatedUser.email },
         data: {
           nombre_completo: buildUserDisplayNameFromParts(input),
           nombres: input.nombreCompleto,
@@ -384,9 +419,10 @@ const server = http.createServer(async (request, response) => {
         include: userWithOfficeInclude,
       });
       const person = await ensurePersonIdentityForUser(prisma, updatedUser);
+      const authToken = createAuthToken(updatedUser);
 
       sendJson(response, 200, {
-        data: serializeAppUser(updatedUser, person),
+        data: serializeAppUser(updatedUser, person, authToken),
       });
       return;
     }
@@ -394,7 +430,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/auth/qr/dynamic") {
       const input = parseGenerateDynamicQrInput(await readJsonBody(request));
       const user = await prisma.usuarios.findUnique({
-        where: { email: input.email },
+        where: { email: authenticatedUser.email },
         include: userWithOfficeInclude,
       });
 
@@ -419,9 +455,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/auth/qr/dynamic") {
-      const email = readQueryEmail(url, "email");
       const user = await prisma.usuarios.findUnique({
-        where: { email },
+        where: { email: authenticatedUser.email },
         include: userWithOfficeInclude,
       });
 
@@ -446,9 +481,9 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/credential") {
-      const email = readQueryEmailFromBody(await readJsonBody(request));
+      await readJsonBody(request);
       const user = await prisma.usuarios.findUnique({
-        where: { email },
+        where: { email: authenticatedUser.email },
         include: userWithOfficeInclude,
       });
 
@@ -473,9 +508,9 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/credential/pdf") {
-      const email = readQueryEmailFromBody(await readJsonBody(request));
+      await readJsonBody(request);
       const user = await prisma.usuarios.findUnique({
-        where: { email },
+        where: { email: authenticatedUser.email },
         include: userWithOfficeInclude,
       });
 
@@ -529,9 +564,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/usuarios") {
-      const requesterEmail = readQueryEmail(url, "requesterEmail");
       await assertAdminRequester(
-        requesterEmail,
+        authenticatedUser.email,
         "Solo un administrador puede gestionar usuarios.",
       );
       const usuarios = await prisma.usuarios.findMany({
@@ -558,7 +592,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/usuarios") {
       const input = parseManagedUserInput(await readJsonBody(request));
       await assertAdminRequester(
-        input.requesterEmail,
+        authenticatedUser.email,
         "Solo un administrador puede gestionar usuarios.",
       );
       const passwordHash = hashPassword(input.password);
@@ -654,7 +688,7 @@ const server = http.createServer(async (request, response) => {
         ? parseUpdateUserStatusInput(payload)
         : parseUpdateManagedUserInput(payload);
       await assertAdminRequester(
-        input.requesterEmail,
+        authenticatedUser.email,
         "Solo un administrador puede gestionar usuarios.",
       );
 
@@ -831,7 +865,7 @@ const server = http.createServer(async (request, response) => {
       const input = parseCreateEventInput(await readJsonBody(request));
 
       const operador = await assertAdminRequester(
-        input.creatorEmail,
+        authenticatedUser.email,
         "Solo un administrador puede crear eventos.",
       );
 
@@ -906,7 +940,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "PUT" && eventId != null) {
       const input = parseUpdateEventInput(await readJsonBody(request));
       await assertAdminRequester(
-        input.requesterEmail,
+        authenticatedUser.email,
         "Solo un administrador puede editar eventos.",
       );
 
@@ -977,9 +1011,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "DELETE" && eventId != null) {
-      const requesterEmail = readQueryEmail(url, "requesterEmail");
       await assertAdminRequester(
-        requesterEmail,
+        authenticatedUser.email,
         "Solo un administrador puede borrar eventos.",
       );
 
@@ -1081,9 +1114,8 @@ const server = http.createServer(async (request, response) => {
       request.method === "GET" &&
       url.pathname === "/api/reportes/qr-generaciones"
     ) {
-      const requesterEmail = readQueryEmail(url, "requesterEmail");
       await assertAdminRequester(
-        requesterEmail,
+        authenticatedUser.email,
         "Solo un administrador puede consultar el mapa de QR.",
       );
 
@@ -1327,7 +1359,7 @@ const server = http.createServer(async (request, response) => {
         await assertPersonCanAttendEvent(persona, evento);
       }
 
-      const operador = await assertEventOperator(input.operatorEmail);
+      const operador = await assertEventOperator(authenticatedUser.email);
       const registeredAt = new Date();
       const resolvedObservation = buildAttendanceObservation(input);
       const qrSnapshot = buildAttendanceQrSnapshot(
@@ -1806,14 +1838,27 @@ type QrMapRecord = {
   registrationSource: "QR" | "CI" | null;
 };
 
-function applyCors(response: ServerResponse) {
-  response.setHeader("Access-Control-Allow-Origin", "*");
+function applyCors(request: IncomingMessage, response: ServerResponse) {
+  const origin = request.headers.origin;
+  const isAllowedOrigin =
+    origin == null ||
+    ALLOWED_CORS_ORIGINS.size === 0 ||
+    ALLOWED_CORS_ORIGINS.has(origin);
+
+  if (origin != null && isAllowedOrigin) {
+    response.setHeader("Access-Control-Allow-Origin", origin);
+    response.setHeader("Vary", "Origin");
+  }
+
   response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   response.setHeader(
     "Access-Control-Allow-Headers",
     "Content-Type, Authorization",
   );
+  response.setHeader("Access-Control-Max-Age", "86400");
   response.setHeader("Content-Type", "application/json; charset=utf-8");
+
+  return isAllowedOrigin;
 }
 
 function sendJson(
@@ -1902,6 +1947,226 @@ function invalidateDashboardSummaryCache() {
 
 function invalidateEventSummaryCache() {
   eventSummaryCache = null;
+}
+
+function parseAllowedCorsOrigins(value: string | undefined) {
+  const defaultOrigins = [
+    "https://innovafuncionario.cochabamba.bo",
+    "https://innovafuncionarioapi.cochabamba.bo",
+    "http://localhost:3000",
+    "http://localhost:4016",
+  ];
+  const origins = (value == null || value.trim().length === 0
+    ? defaultOrigins
+    : value.split(","))
+    .map((origin) => origin.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+
+  return new Set(origins);
+}
+
+function enforceRateLimit(request: IncomingMessage) {
+  const key = readClientIp(request);
+  const now = Date.now();
+  const bucket = rateLimitBuckets.get(key);
+
+  if (bucket == null || bucket.resetAt <= now) {
+    rateLimitBuckets.set(key, {
+      count: 1,
+      resetAt: now + RATE_LIMIT_WINDOW_MS,
+    });
+    return;
+  }
+
+  bucket.count += 1;
+
+  if (bucket.count > RATE_LIMIT_MAX_REQUESTS) {
+    throw new HttpError(
+      429,
+      "Demasiadas solicitudes. Intenta nuevamente en un minuto.",
+    );
+  }
+}
+
+function readClientIp(request: IncomingMessage) {
+  const forwardedFor = request.headers["x-forwarded-for"];
+  const firstForwardedIp = Array.isArray(forwardedFor)
+    ? forwardedFor[0]
+    : forwardedFor?.split(",")[0];
+
+  return (
+    firstForwardedIp?.trim() ??
+    request.socket.remoteAddress ??
+    "unknown"
+  );
+}
+
+async function authenticateRequestIfRequired(
+  request: IncomingMessage,
+  url: URL,
+): Promise<AuthenticatedUser> {
+  if (isPublicRoute(request, url)) {
+    return {
+      id: 0,
+      email: "",
+      rol: rol_usuario.OPERADOR,
+      activo: true,
+    };
+  }
+
+  const token = readBearerToken(request);
+  const payload = verifyAuthToken(token);
+  const user = await prisma.usuarios.findUnique({
+    where: { id: payload.sub },
+  });
+
+  if (!user || user.email !== payload.email || user.activo !== true) {
+    throw new HttpError(401, "Sesion invalida o expirada.");
+  }
+
+  return {
+    id: user.id,
+    email: user.email,
+    rol: user.rol,
+    activo: user.activo,
+  };
+}
+
+function isPublicRoute(request: IncomingMessage, url: URL) {
+  if (request.method === "GET" && url.pathname === "/") {
+    return true;
+  }
+
+  if (request.method === "GET" && url.pathname === "/health") {
+    return true;
+  }
+
+  if (
+    request.method === "POST" &&
+    (url.pathname === "/api/auth/login" ||
+      url.pathname === "/api/auth/register")
+  ) {
+    return true;
+  }
+
+  if (
+    request.method === "GET" &&
+    (url.pathname === "/api/oficinas" ||
+      url.pathname === "/api/cargos" ||
+      url.pathname === "/api/departamentos")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function readBearerToken(request: IncomingMessage) {
+  const authorization = request.headers.authorization ?? "";
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+
+  if (!match) {
+    throw new HttpError(401, "Debes iniciar sesion para continuar.");
+  }
+
+  return match[1].trim();
+}
+
+type AuthTokenPayload = {
+  sub: number;
+  email: string;
+  rol: string;
+  exp: number;
+};
+
+function createAuthToken(user: {
+  id: number;
+  email: string;
+  rol?: string | null;
+}) {
+  const header = base64UrlEncodeJson({ alg: "HS256", typ: "JWT" });
+  const payload = base64UrlEncodeJson({
+    sub: user.id,
+    email: user.email,
+    rol: user.rol ?? rol_usuario.OPERADOR,
+    exp: Math.floor(Date.now() / 1000) + JWT_TTL_SECONDS,
+  });
+  const unsignedToken = `${header}.${payload}`;
+  const signature = signJwt(unsignedToken);
+
+  return `${unsignedToken}.${signature}`;
+}
+
+function verifyAuthToken(token: string): AuthTokenPayload {
+  const parts = token.split(".");
+
+  if (parts.length !== 3) {
+    throw new HttpError(401, "Token de sesion invalido.");
+  }
+
+  const [header, payload, signature] = parts;
+  const unsignedToken = `${header}.${payload}`;
+  const expectedSignature = signJwt(unsignedToken);
+
+  if (!safeEqualText(signature, expectedSignature)) {
+    throw new HttpError(401, "Token de sesion invalido.");
+  }
+
+  const parsedPayload = parseBase64UrlJson(payload);
+  const sub = readFiniteNumber(parsedPayload.sub);
+  const exp = readFiniteNumber(parsedPayload.exp);
+  const email = typeof parsedPayload.email === "string"
+    ? normalizeEmailValue(parsedPayload.email)
+    : "";
+
+  if (sub == null || exp == null || !email.includes("@")) {
+    throw new HttpError(401, "Token de sesion invalido.");
+  }
+
+  if (exp <= Math.floor(Date.now() / 1000)) {
+    throw new HttpError(401, "Sesion expirada. Inicia sesion nuevamente.");
+  }
+
+  return {
+    sub,
+    email,
+    rol: typeof parsedPayload.rol === "string" ? parsedPayload.rol : "",
+    exp,
+  };
+}
+
+function signJwt(unsignedToken: string) {
+  return createHmac("sha256", JWT_SECRET)
+    .update(unsignedToken)
+    .digest("base64url");
+}
+
+function base64UrlEncodeJson(value: JsonRecord) {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+}
+
+function parseBase64UrlJson(value: string) {
+  try {
+    const parsedValue = JSON.parse(
+      Buffer.from(value, "base64url").toString("utf8"),
+    );
+
+    if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) {
+      throw new Error("Invalid payload");
+    }
+
+    return parsedValue as JsonRecord;
+  } catch {
+    throw new HttpError(401, "Token de sesion invalido.");
+  }
+}
+
+function safeEqualText(left: string, right: string) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  return leftBuffer.length === rightBuffer.length &&
+    timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 async function ensureRuntimeSchema() {
@@ -4496,6 +4761,10 @@ function resolveLinkedOfficeName(linkedUser: any) {
     return `Comision: ${commissionOfficeName}`;
   }
 
+  if (linkedUser?.oficina_comision_id != null) {
+    return "Comision";
+  }
+
   const linkedOffice = resolveLinkedOffice(linkedUser);
 
   return (
@@ -4522,7 +4791,7 @@ function resolveCommissionOfficeName(linkedUser: any) {
   return normalizeOptionalText(linkedUser?.oficina_comision?.oficina) ?? null;
 }
 
-function serializeAppUser(user: any, person?: any | null) {
+function serializeAppUser(user: any, person?: any | null, authToken?: string) {
   // El frontend recibe dos piezas equivalentes:
   // 1. `qrCode` para mostrar el ID externo en texto.
   // 2. `qrPayload` para renderizar ese mismo ID externo como imagen QR.
@@ -4551,7 +4820,7 @@ function serializeAppUser(user: any, person?: any | null) {
     oficinaPrincipalNombre: primaryOfficeName,
     oficinaComisionId: user.oficina_comision_id ?? user.oficina_comision?.id ?? null,
     oficinaComisionNombre: commissionOfficeName,
-    tieneComision: commissionOfficeName != null,
+    tieneComision: commissionOfficeName != null || user.oficina_comision_id != null,
     cargo: user.cargo ?? "",
     numeroItem: user.numero_item ?? "",
     activo: user.activo,
@@ -4559,6 +4828,7 @@ function serializeAppUser(user: any, person?: any | null) {
     qrCode,
     qrPayload: buildUserQrPayload(user, qrCode),
     personaId: linkedPerson?.id ?? null,
+    authToken,
   };
 }
 

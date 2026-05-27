@@ -52,6 +52,7 @@ class AppUser {
     this.personaId,
     this.qrCode,
     this.qrPayload,
+    this.authToken,
   });
 
   final int? id;
@@ -80,6 +81,7 @@ class AppUser {
   final int? personaId;
   final String? qrCode;
   final String? qrPayload;
+  final String? authToken;
 
   factory AppUser.fromJson(Map<String, dynamic> source) {
     return AppUser(
@@ -112,6 +114,7 @@ class AppUser {
       personaId: source['personaId'] as int?,
       qrCode: source['qrCode'] as String?,
       qrPayload: source['qrPayload'] as String?,
+      authToken: source['authToken'] as String?,
     );
   }
 
@@ -143,6 +146,7 @@ class AppUser {
       'personaId': personaId,
       'qrCode': qrCode,
       'qrPayload': qrPayload,
+      'authToken': authToken,
     };
   }
 

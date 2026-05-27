@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../../core/config/app_environment.dart';
+import 'session_store.dart';
 
 class BackendApiException implements Exception {
   const BackendApiException({required this.message, required this.statusCode});
@@ -25,7 +26,10 @@ class BackendApiClient {
 
   Future<Map<String, dynamic>> getJson(String path) async {
     try {
-      final response = await _client.get(_buildUri(path));
+      final response = await _client.get(
+        _buildUri(path),
+        headers: await _buildHeaders(),
+      );
       return _decodeResponse(response);
     } catch (error) {
       throw _mapRequestError(error);
@@ -39,7 +43,7 @@ class BackendApiClient {
     try {
       final response = await _client.post(
         _buildUri(path),
-        headers: const {'Content-Type': 'application/json'},
+        headers: await _buildHeaders(contentTypeJson: true),
         body: jsonEncode(body),
       );
 
@@ -53,7 +57,7 @@ class BackendApiClient {
     try {
       final response = await _client.post(
         _buildUri(path),
-        headers: const {'Content-Type': 'application/json'},
+        headers: await _buildHeaders(contentTypeJson: true),
         body: jsonEncode(body),
       );
 
@@ -78,7 +82,7 @@ class BackendApiClient {
     try {
       final response = await _client.put(
         _buildUri(path),
-        headers: const {'Content-Type': 'application/json'},
+        headers: await _buildHeaders(contentTypeJson: true),
         body: jsonEncode(body),
       );
 
@@ -90,7 +94,10 @@ class BackendApiClient {
 
   Future<Map<String, dynamic>> deleteJson(String path) async {
     try {
-      final response = await _client.delete(_buildUri(path));
+      final response = await _client.delete(
+        _buildUri(path),
+        headers: await _buildHeaders(),
+      );
       return _decodeResponse(response);
     } catch (error) {
       throw _mapRequestError(error);
@@ -98,6 +105,17 @@ class BackendApiClient {
   }
 
   Uri _buildUri(String path) => Uri.parse('$_baseUrl$path');
+
+  Future<Map<String, String>> _buildHeaders({
+    bool contentTypeJson = false,
+  }) async {
+    final token = await SessionStore.readAuthToken();
+
+    return {
+      if (contentTypeJson) 'Content-Type': 'application/json',
+      if (token != null) 'Authorization': 'Bearer $token',
+    };
+  }
 
   BackendApiException _mapRequestError(Object error) {
     if (error is BackendApiException) {
