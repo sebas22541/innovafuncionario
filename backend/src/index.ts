@@ -2799,8 +2799,7 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
   const cargo = readOptionalString(body, "cargo", 2, 120);
   const ci = readRequiredString(body, "ci", 3, 30);
   const primerApellido = readRequiredString(body, "primerApellido", 2, 80);
-  const loginIdentifier =
-    readOptionalLoginIdentifier(body, "email") ?? normalizeEmailValue(ci);
+  const loginIdentifier = normalizeEmailValue(normalizeCiValue(ci));
 
   if (oficinaId == null && !unidad) {
     throw new HttpError(400, "Debes seleccionar una unidad valida.");
@@ -2881,8 +2880,8 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     rol_usuario.CONTROL,
     rol_usuario.OPERADOR,
   ]) as (typeof rol_usuario)[keyof typeof rol_usuario];
-  const email = readRequiredLoginIdentifier(body, "email");
   const ci = readRequiredString(body, "ci", 3, 30);
+  const email = normalizeEmailValue(normalizeCiValue(ci));
 
   if (oficinaId == null && !unidad) {
     throw new HttpError(400, "Debes seleccionar una unidad valida.");

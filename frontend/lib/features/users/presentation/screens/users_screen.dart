@@ -2773,31 +2773,25 @@ String _normalizeOfficeSearchText(String value) {
 
 String _stripTextAccents(String value) {
   return value
-      .replaceAll(RegExp(r'[áàäâã]'), 'a')
-      .replaceAll(RegExp(r'[éèëê]'), 'e')
-      .replaceAll(RegExp(r'[íìïî]'), 'i')
-      .replaceAll(RegExp(r'[óòöôõ]'), 'o')
-      .replaceAll(RegExp(r'[úùüû]'), 'u')
-      .replaceAll('ñ', 'n');
+      .replaceAll(RegExp(r'[áàäâãÁÀÄÂÃÃ¡Ã Ã¤Ã¢Ã£]'), 'a')
+      .replaceAll(RegExp(r'[éèëêÉÈËÊÃ©Ã¨Ã«Ãª]'), 'e')
+      .replaceAll(RegExp(r'[íìïîÍÌÏÎÃ­Ã¬Ã¯Ã®]'), 'i')
+      .replaceAll(RegExp(r'[óòöôõÓÒÖÔÕÃ³Ã²Ã¶Ã´Ãµ]'), 'o')
+      .replaceAll(RegExp(r'[úùüûÚÙÜÛÃºÃ¹Ã¼Ã»]'), 'u')
+      .replaceAll(RegExp(r'[ñÑÃ±]'), 'n');
 }
 
 String _buildInitialPassword({
   required String primerApellido,
   required String ci,
 }) {
-  final prefix = primerApellido
-      .trim()
-      .toLowerCase()
-      .replaceAll(RegExp(r'[áàäâã]'), 'a')
-      .replaceAll(RegExp(r'[éèëê]'), 'e')
-      .replaceAll(RegExp(r'[íìïî]'), 'i')
-      .replaceAll(RegExp(r'[óòöôõ]'), 'o')
-      .replaceAll(RegExp(r'[úùüû]'), 'u')
-      .replaceAll('ñ', 'n')
-      .replaceAll(RegExp(r'[^a-zA-Z]'), '');
+  final prefix = _stripTextAccents(
+    primerApellido,
+  ).trim().toLowerCase().replaceAll(RegExp(r'[^a-zA-Z]'), '');
   final normalizedCi = ci.trim().replaceAll(RegExp(r'\s+'), '');
+  final passwordPrefix = prefix.length > 3 ? prefix.substring(0, 3) : prefix;
 
-  return '${prefix.length > 3 ? prefix.substring(0, 3) : prefix}$normalizedCi';
+  return '$passwordPrefix$normalizedCi';
 }
 
 class _RequiredFieldLabel extends StatelessWidget {
