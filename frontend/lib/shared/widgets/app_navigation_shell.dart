@@ -15,6 +15,7 @@ import '../../features/settings/presentation/screens/settings_screen.dart';
 import '../../features/users/presentation/screens/users_screen.dart';
 import '../models/app_section.dart';
 import '../models/app_user.dart';
+import 'app_alert.dart';
 import 'base64_avatar.dart';
 import 'role_portal_shell.dart';
 
@@ -94,7 +95,27 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       return;
     }
 
+    if (section == AppSection.settings && _currentUser.isExternalUser) {
+      _openMyQrDialog();
+      return;
+    }
+
     _selectSection(section);
+  }
+
+  Future<void> _openMyQrDialog() async {
+    if (!_currentUser.hasQr) {
+      AppAlert.showWarning(
+        context,
+        'Tu QR todavia no esta disponible. Vuelve a iniciar sesion.',
+      );
+      return;
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => MyQrDialog(currentUser: _currentUser),
+    );
   }
 
   void _openScanner() {
@@ -1046,7 +1067,6 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
     return const [
       AppSection.home,
       AppSection.events,
-      AppSection.qrScanner,
       AppSection.settings,
     ];
   }
@@ -1065,6 +1085,10 @@ AppSection _defaultSectionForUser(AppUser user) {
 
 AppSection _resolveInitialSection(AppUser user, AppSection? initialSection) {
   if (initialSection == null) {
+    return _defaultSectionForUser(user);
+  }
+
+  if (user.isExternalUser && initialSection == AppSection.settings) {
     return _defaultSectionForUser(user);
   }
 
@@ -1121,7 +1145,7 @@ String _sectionLabelForUser(AppUser user, AppSection section) {
       case AppSection.qrScanner:
         return 'Escanear QR';
       case AppSection.settings:
-        return 'Mi perfil';
+        return 'Mi QR';
       default:
         return section.label;
     }
@@ -1155,7 +1179,7 @@ IconData _sectionIconForUser(AppUser user, AppSection section) {
       case AppSection.qrScanner:
         return Icons.qr_code_scanner_rounded;
       case AppSection.settings:
-        return Icons.edit_rounded;
+        return Icons.qr_code_2_rounded;
       default:
         return section.icon;
     }

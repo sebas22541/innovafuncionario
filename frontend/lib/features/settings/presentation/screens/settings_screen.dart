@@ -183,7 +183,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     await showDialog<void>(
       context: context,
-      builder: (context) => _MyQrDialog(currentUser: widget.currentUser),
+      builder: (context) => MyQrDialog(currentUser: widget.currentUser),
     );
   }
 
@@ -451,13 +451,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-class _MyQrDialog extends StatefulWidget {
-  const _MyQrDialog({required this.currentUser});
+class MyQrDialog extends StatefulWidget {
+  const MyQrDialog({super.key, required this.currentUser});
 
   final AppUser currentUser;
 
   @override
-  State<_MyQrDialog> createState() => _MyQrDialogState();
+  State<MyQrDialog> createState() => _MyQrDialogState();
 }
 
 class _CredentialDialog extends StatefulWidget {
@@ -703,7 +703,7 @@ class _CredentialErrorView extends StatelessWidget {
   }
 }
 
-class _MyQrDialogState extends State<_MyQrDialog> {
+class _MyQrDialogState extends State<MyQrDialog> {
   static const Duration _minimumReusableQrTime = Duration(seconds: 15);
 
   Timer? _countdownTimer;

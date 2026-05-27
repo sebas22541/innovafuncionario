@@ -2598,7 +2598,7 @@ function parseLoginInput(payload: unknown): LoginInput {
   const body = expectRecord(payload);
 
   return {
-    email: readRequiredEmail(body, "email"),
+    email: readRequiredString(body, "email", 3, 150).toLowerCase(),
     password: readRequiredString(body, "password", 6, 200),
   };
 }

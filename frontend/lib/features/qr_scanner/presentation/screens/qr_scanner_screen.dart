@@ -217,12 +217,6 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
                 _ActiveEventCard(eventName: widget.activeEventName!),
                 const SizedBox(height: 12),
               ],
-              _ManualCiSearchCard(
-                controller: _ciController,
-                isSearching: _isSearchingCi,
-                onSearch: _searchByCi,
-              ),
-              const SizedBox(height: 12),
               if (isWide)
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -238,22 +232,14 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
                     const SizedBox(width: 16),
                     Expanded(
                       flex: 5,
-                      child: Column(
-                        children: [
-                          const _ScannerTipsCard(),
-                          const SizedBox(height: 12),
-                          ScannerResultPanel(
-                            lastScan: _lastScanModel?.toEntity(),
-                            onRestart: _restartScanner,
-                          ),
-                        ],
+                      child: ScannerResultPanel(
+                        lastScan: _lastScanModel?.toEntity(),
+                        onRestart: _restartScanner,
                       ),
                     ),
                   ],
                 )
               else ...[
-                const _ScannerTipsCard(),
-                const SizedBox(height: 12),
                 _ScannerViewport(
                   controller: _controller,
                   isScannerActive: _lastScanModel == null,
@@ -265,6 +251,12 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
                   onRestart: _restartScanner,
                 ),
               ],
+              const SizedBox(height: 12),
+              _ManualCiSearchCard(
+                controller: _ciController,
+                isSearching: _isSearchingCi,
+                onSearch: _searchByCi,
+              ),
             ],
           ),
         );
@@ -378,89 +370,6 @@ class _ManualCiSearchCard extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _ScannerTipsCard extends StatelessWidget {
-  const _ScannerTipsCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            Text(
-              'Sugerencias de uso',
-              style: TextStyle(
-                color: AppPalette.ink,
-                fontWeight: FontWeight.w700,
-                fontSize: 18,
-              ),
-            ),
-            SizedBox(height: 12),
-            _ScannerTipItem(
-              title: 'Alinea el codigo',
-              description: 'Mantelo dentro del marco hasta confirmar lectura.',
-            ),
-            SizedBox(height: 10),
-            _ScannerTipItem(
-              title: 'Evita reflejos',
-              description: 'Mejora el enfoque con luz uniforme sobre el QR.',
-            ),
-            SizedBox(height: 10),
-            _ScannerTipItem(
-              title: 'Revisa el detalle',
-              description:
-                  'Despues de detectar el codigo, valida la informacion.',
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ScannerTipItem extends StatelessWidget {
-  const _ScannerTipItem({required this.title, required this.description});
-
-  final String title;
-  final String description;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 28,
-          height: 28,
-          decoration: const BoxDecoration(
-            color: AppPalette.orangeSoft,
-            shape: BoxShape.circle,
-          ),
-          alignment: Alignment.center,
-          child: const Icon(
-            Icons.check_rounded,
-            size: 16,
-            color: AppPalette.orange,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 4),
-              Text(description, style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ),
-        ),
-      ],
     );
   }
 }

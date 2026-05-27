@@ -562,8 +562,8 @@ class _PortalDrawer extends StatelessWidget {
               const SizedBox(height: 10),
               if (settingsEntry != null) ...[
                 _PortalDrawerItem(
-                  icon: Icons.edit_rounded,
-                  label: 'Mi perfil',
+                  icon: settingsEntry.icon,
+                  label: settingsEntry.label,
                   isSelected: selectedSection == AppSection.settings,
                   onTap: () => onSelected(AppSection.settings),
                 ),
