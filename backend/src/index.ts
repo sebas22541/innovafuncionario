@@ -59,8 +59,8 @@ const JWT_SECRET =
 const RATE_LIMIT_MAX_REQUESTS = clampInt(
   process.env.RATE_LIMIT_MAX_REQUESTS ?? null,
   100,
-  10,
-  10_000,
+  1,
+  100,
 );
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const ALLOWED_CORS_ORIGINS = parseAllowedCorsOrigins(
@@ -169,6 +169,11 @@ type CacheEntry<T> = {
   expiresAt: number;
 };
 
+type RateLimitBucket = {
+  count: number;
+  resetAt: number;
+};
+
 let officesCache: CacheEntry<any[]> | null = null;
 let cargosCache: CacheEntry<any[]> | null = null;
 let dashboardSummaryCache: CacheEntry<{
@@ -177,7 +182,7 @@ let dashboardSummaryCache: CacheEntry<{
   eventos: number;
 }> | null = null;
 let eventSummaryCache: CacheEntry<any[]> | null = null;
-const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
+const rateLimitBuckets = new Map<string, RateLimitBucket>();
 
 await ensureRuntimeSchema();
 
@@ -204,38 +209,11 @@ const server = http.createServer(async (request, response) => {
   );
 
   try {
-    enforceRateLimit(request);
+    enforceRateLimit(request, response);
     const authenticatedUser = await authenticateRequestIfRequired(request, url);
 
     if (request.method === "GET" && url.pathname === "/") {
-      sendJson(response, 200, {
-        service: "qr-backend",
-        status: "running",
-        endpoints: [
-          "/health",
-          "/api/auth/login",
-          "/api/auth/register",
-          "/api/auth/me",
-          "/api/auth/profile",
-          "/api/auth/qr/dynamic",
-          "/api/auth/credential",
-          "/api/auth/credential/pdf",
-          "/api/usuarios",
-          "/api/usuarios/:id",
-          "/api/departamentos",
-          "/api/oficinas",
-          "/api/cargos",
-          "/api/inicio/resumen",
-          "/api/eventos",
-          "/api/eventos/:id",
-          "/api/reportes/asistencias",
-          "/api/reportes/qr-generaciones",
-          "/api/asistencias",
-          "/api/personas",
-          "/api/personas/ci/:ci",
-          "/api/personas/qr/:codigo",
-        ],
-      });
+      sendJson(response, 404, { error: "No encontrado." });
       return;
     }
 
@@ -243,7 +221,6 @@ const server = http.createServer(async (request, response) => {
       await prisma.$queryRaw`SELECT 1`;
       sendJson(response, 200, {
         status: "ok",
-        database: "connected",
       });
       return;
     }
@@ -1891,11 +1868,19 @@ type QrMapRecord = {
 };
 
 function applyCors(request: IncomingMessage, response: ServerResponse) {
-  const origin = request.headers.origin;
-  const isAllowedOrigin =
-    origin == null ||
-    ALLOWED_CORS_ORIGINS.size === 0 ||
-    ALLOWED_CORS_ORIGINS.has(origin);
+  const origin = normalizeRequestOrigin(readSingleHeader(request.headers.origin));
+  const referrerOrigin = readReferrerOrigin(request);
+  const isAllowedOrigin = origin == null || isAllowedRequestOrigin(origin);
+  const isTrustedUnsafeRequest =
+    !isUnsafeHttpMethod(request.method) ||
+    (origin != null && isAllowedRequestOrigin(origin)) ||
+    (origin == null &&
+      referrerOrigin != null &&
+      isAllowedRequestOrigin(referrerOrigin));
+
+  if (!isAllowedOrigin || !isTrustedUnsafeRequest) {
+    return false;
+  }
 
   if (origin != null && isAllowedOrigin) {
     response.setHeader("Access-Control-Allow-Origin", origin);
@@ -1911,6 +1896,36 @@ function applyCors(request: IncomingMessage, response: ServerResponse) {
   response.setHeader("Content-Type", "application/json; charset=utf-8");
 
   return isAllowedOrigin;
+}
+
+function isUnsafeHttpMethod(method: string | undefined) {
+  return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+}
+
+function isAllowedRequestOrigin(origin: string) {
+  return ALLOWED_CORS_ORIGINS.size === 0 || ALLOWED_CORS_ORIGINS.has(origin);
+}
+
+function readSingleHeader(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function normalizeRequestOrigin(value: string | undefined) {
+  return value?.trim().replace(/\/+$/, "") || null;
+}
+
+function readReferrerOrigin(request: IncomingMessage) {
+  const referrer = readSingleHeader(request.headers.referer);
+
+  if (referrer == null || referrer.trim().length === 0) {
+    return null;
+  }
+
+  try {
+    return normalizeRequestOrigin(new URL(referrer).origin);
+  } catch {
+    return null;
+  }
 }
 
 function sendJson(
@@ -2004,7 +2019,6 @@ function invalidateEventSummaryCache() {
 function parseAllowedCorsOrigins(value: string | undefined) {
   const defaultOrigins = [
     "https://innovafuncionario.cochabamba.bo",
-    "https://innovafuncionarioapi.cochabamba.bo",
     "http://localhost:3000",
     "http://localhost:4016",
   ];
@@ -2017,27 +2031,58 @@ function parseAllowedCorsOrigins(value: string | undefined) {
   return new Set(origins);
 }
 
-function enforceRateLimit(request: IncomingMessage) {
+function enforceRateLimit(request: IncomingMessage, response: ServerResponse) {
   const key = readClientIp(request);
   const now = Date.now();
+  pruneExpiredRateLimitBuckets(now);
   const bucket = rateLimitBuckets.get(key);
 
   if (bucket == null || bucket.resetAt <= now) {
-    rateLimitBuckets.set(key, {
+    const nextBucket = {
       count: 1,
       resetAt: now + RATE_LIMIT_WINDOW_MS,
-    });
+    };
+    rateLimitBuckets.set(key, nextBucket);
+    setRateLimitHeaders(response, nextBucket);
     return;
   }
 
   bucket.count += 1;
+  setRateLimitHeaders(response, bucket);
 
   if (bucket.count > RATE_LIMIT_MAX_REQUESTS) {
+    response.setHeader(
+      "Retry-After",
+      Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)).toString(),
+    );
     throw new HttpError(
       429,
       "Demasiadas solicitudes. Intenta nuevamente en un minuto.",
     );
   }
+}
+
+function pruneExpiredRateLimitBuckets(now: number) {
+  for (const [key, bucket] of rateLimitBuckets) {
+    if (bucket.resetAt <= now) {
+      rateLimitBuckets.delete(key);
+    }
+  }
+}
+
+function setRateLimitHeaders(
+  response: ServerResponse,
+  bucket: RateLimitBucket,
+) {
+  response.setHeader("X-RateLimit-Limit", RATE_LIMIT_MAX_REQUESTS.toString());
+  response.setHeader(
+    "X-RateLimit-Remaining",
+    Math.max(0, RATE_LIMIT_MAX_REQUESTS - bucket.count).toString(),
+  );
+  response.setHeader(
+    "X-RateLimit-Reset",
+    Math.ceil(bucket.resetAt / 1000).toString(),
+  );
 }
 
 function readClientIp(request: IncomingMessage) {
