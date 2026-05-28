@@ -548,26 +548,24 @@ class _UsersScreenState extends State<UsersScreen> {
                     ],
                   ),
                   const SizedBox(height: 18),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: [
-                      _UserStatCard(
+                  _UserStatsGrid(
+                    stats: [
+                      _UserStatItem(
                         label: 'Administradores',
                         value: '$_adminCount',
                         icon: Icons.verified_user_outlined,
                       ),
-                      _UserStatCard(
+                      _UserStatItem(
                         label: 'Control',
                         value: '$_controlCount',
                         icon: Icons.fact_check_outlined,
                       ),
-                      _UserStatCard(
+                      _UserStatItem(
                         label: 'Funcionarios',
                         value: '$_externalCount',
                         icon: Icons.person_outline_rounded,
                       ),
-                      _UserStatCard(
+                      _UserStatItem(
                         label: 'Activos',
                         value: '$_activeUsersCount',
                         icon: Icons.verified_user_outlined,
@@ -751,59 +749,99 @@ class _UsersPaginationBar extends StatelessWidget {
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Wrap(
-          spacing: 12,
-          runSpacing: 10,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          alignment: WrapAlignment.spaceBetween,
-          children: [
-            Text(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isCompact = constraints.maxWidth < 560;
+            final summary = Text(
               'Mostrando $firstVisible-$endIndex de $totalUsers usuarios',
+              textAlign: isCompact ? TextAlign.center : TextAlign.start,
               style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            Row(
-              mainAxisSize: MainAxisSize.min,
+            );
+            final pageLabel = _PaginationPageLabel(
+              currentPage: currentPage,
+              totalPages: totalPages,
+            );
+            final previousButton = OutlinedButton.icon(
+              onPressed: onPrevious,
+              icon: const Icon(Icons.chevron_left_rounded),
+              label: const Text('Anterior'),
+            );
+            final nextButton = OutlinedButton.icon(
+              onPressed: onNext,
+              icon: const Icon(Icons.chevron_right_rounded),
+              label: const Text('Siguiente'),
+            );
+
+            if (isCompact) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  summary,
+                  const SizedBox(height: 12),
+                  Center(child: pageLabel),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      SizedBox(width: 150, child: previousButton),
+                      SizedBox(width: 150, child: nextButton),
+                    ],
+                  ),
+                ],
+              );
+            }
+
+            return Row(
               children: [
-                OutlinedButton.icon(
-                  onPressed: onPrevious,
-                  icon: const Icon(Icons.chevron_left_rounded),
-                  label: const Text('Anterior'),
-                ),
+                Expanded(child: summary),
+                const SizedBox(width: 12),
+                previousButton,
                 const SizedBox(width: 10),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 9,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppPalette.orangeSoft,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppPalette.line),
-                  ),
-                  child: Text(
-                    'Pagina ${currentPage + 1} de $totalPages',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
+                pageLabel,
                 const SizedBox(width: 10),
-                OutlinedButton.icon(
-                  onPressed: onNext,
-                  icon: const Icon(Icons.chevron_right_rounded),
-                  label: const Text('Siguiente'),
-                ),
+                nextButton,
               ],
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
   }
 }
 
-class _UserStatCard extends StatelessWidget {
-  const _UserStatCard({
+class _PaginationPageLabel extends StatelessWidget {
+  const _PaginationPageLabel({
+    required this.currentPage,
+    required this.totalPages,
+  });
+
+  final int currentPage;
+  final int totalPages;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: AppPalette.orangeSoft,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: Text(
+        'Pagina ${currentPage + 1} de $totalPages',
+        textAlign: TextAlign.center,
+        style: Theme.of(
+          context,
+        ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+}
+
+class _UserStatItem {
+  const _UserStatItem({
     required this.label,
     required this.value,
     required this.icon,
@@ -812,11 +850,65 @@ class _UserStatCard extends StatelessWidget {
   final String label;
   final String value;
   final IconData icon;
+}
+
+class _UserStatsGrid extends StatelessWidget {
+  const _UserStatsGrid({required this.stats});
+
+  final List<_UserStatItem> stats;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = 12.0;
+        final maxWidth = constraints.maxWidth;
+        final columnCount = maxWidth >= 920
+            ? 4
+            : maxWidth >= 560
+            ? 2
+            : 1;
+        final cardWidth = columnCount == 1
+            ? maxWidth
+            : (maxWidth - (spacing * (columnCount - 1))) / columnCount;
+
+        return Wrap(
+          alignment: WrapAlignment.center,
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final stat in stats)
+              _UserStatCard(
+                width: cardWidth,
+                label: stat.label,
+                value: stat.value,
+                icon: stat.icon,
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _UserStatCard extends StatelessWidget {
+  const _UserStatCard({
+    required this.width,
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  final double width;
+  final String label;
+  final String value;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 185,
+      width: width,
+      constraints: const BoxConstraints(minHeight: 112),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppPalette.surfaceSoft,
@@ -839,7 +931,12 @@ class _UserStatCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
                 const SizedBox(height: 4),
                 Text(value, style: Theme.of(context).textTheme.titleLarge),
               ],
@@ -869,105 +966,124 @@ class _UserListCard extends StatelessWidget {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(18),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Base64Avatar(
-              size: 72,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isCompact = constraints.maxWidth < 430;
+            final avatar = Base64Avatar(
+              size: isCompact ? 64 : 72,
               fallbackLabel: user.initial,
               photoSource: user.fotoUrl,
               borderRadius: BorderRadius.circular(18),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      Text(
+            );
+            final details = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: isCompact
+                            ? constraints.maxWidth
+                            : constraints.maxWidth - 100,
+                      ),
+                      child: Text(
                         user.fullName,
+                        softWrap: true,
                         style: Theme.of(context).textTheme.titleLarge,
                       ),
-                      _RoleChip(role: user.role),
-                      _StatusChip(isActive: user.activo),
-                      OutlinedButton.icon(
-                        onPressed: isUpdating ? null : onEdit,
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 8,
-                          ),
-                          visualDensity: VisualDensity.compact,
+                    ),
+                    _RoleChip(role: user.role),
+                    _StatusChip(isActive: user.activo),
+                    OutlinedButton.icon(
+                      onPressed: isUpdating ? null : onEdit,
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
                         ),
-                        icon: const Icon(Icons.edit_outlined, size: 16),
-                        label: const Text('Editar'),
+                        visualDensity: VisualDensity.compact,
                       ),
-                      OutlinedButton.icon(
-                        onPressed: isUpdating ? null : onToggleActive,
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 8,
-                          ),
-                          side: BorderSide(
-                            color: user.activo
-                                ? const Color(0xFFD94841)
-                                : AppPalette.orange,
-                          ),
-                          visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.edit_outlined, size: 16),
+                      label: const Text('Editar'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: isUpdating ? null : onToggleActive,
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
                         ),
-                        icon: isUpdating
-                            ? const SizedBox(
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : Icon(
-                                user.activo
-                                    ? Icons.block_outlined
-                                    : Icons.check_circle_outline_rounded,
-                                size: 16,
-                              ),
-                        label: Text(user.activo ? 'Desactivar' : 'Activar'),
+                        side: BorderSide(
+                          color: user.activo
+                              ? const Color(0xFFD94841)
+                              : AppPalette.orange,
+                        ),
+                        visualDensity: VisualDensity.compact,
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 14,
-                    runSpacing: 10,
-                    children: [
-                      _UserMeta(label: 'CI', value: user.ci),
-                      _UserMeta(label: 'Usuario', value: user.email),
+                      icon: isUpdating
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              user.activo
+                                  ? Icons.block_outlined
+                                  : Icons.check_circle_outline_rounded,
+                              size: 16,
+                            ),
+                      label: Text(user.activo ? 'Desactivar' : 'Activar'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 14,
+                  runSpacing: 10,
+                  children: [
+                    _UserMeta(label: 'CI', value: user.ci),
+                    _UserMeta(label: 'Usuario', value: user.email),
+                    _UserMeta(
+                      label: 'Oficina',
+                      value: _resolvedOfficeName(user),
+                    ),
+                    if (user.hasCommission &&
+                        (user.primaryOfficeName ?? '').trim().isNotEmpty)
                       _UserMeta(
-                        label: 'Oficina',
-                        value: _resolvedOfficeName(user),
+                        label: 'Oficina base',
+                        value: user.primaryOfficeName!,
                       ),
-                      if (user.hasCommission &&
-                          (user.primaryOfficeName ?? '').trim().isNotEmpty)
-                        _UserMeta(
-                          label: 'Oficina base',
-                          value: user.primaryOfficeName!,
-                        ),
-                      _UserMeta(label: 'Cargo', value: user.cargo),
-                      _UserMeta(
-                        label: 'Tipo',
-                        value: _tipoVinculoLabel(user.tipoVinculo),
-                      ),
-                      if (user.numeroItem.trim().isNotEmpty)
-                        _UserMeta(label: 'Item', value: user.numeroItem),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
+                    _UserMeta(label: 'Cargo', value: user.cargo),
+                    _UserMeta(
+                      label: 'Tipo',
+                      value: _tipoVinculoLabel(user.tipoVinculo),
+                    ),
+                    if (user.numeroItem.trim().isNotEmpty)
+                      _UserMeta(label: 'Item', value: user.numeroItem),
+                  ],
+                ),
+              ],
+            );
+
+            if (isCompact) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [avatar, const SizedBox(height: 12), details],
+              );
+            }
+
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                avatar,
+                const SizedBox(width: 16),
+                Expanded(child: details),
+              ],
+            );
+          },
         ),
       ),
     );

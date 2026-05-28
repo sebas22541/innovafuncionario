@@ -9,6 +9,7 @@ import { rol_usuario } from "../src/generated/prisma/enums.ts";
 const DATABASE_URL = process.env.DATABASE_URL;
 const APPLY_CHANGES = process.argv.includes("--apply");
 const INCLUDE_ADMINS = process.argv.includes("--include-admins");
+const SKIP_INVALID = process.argv.includes("--skip-invalid");
 
 if (!DATABASE_URL) {
   throw new Error("DATABASE_URL no esta definido en backend/.env.");
@@ -86,8 +87,14 @@ async function main() {
     for (const error of [...new Set(errors)]) {
       console.error(`- ${error}`);
     }
-    process.exitCode = 1;
-    return;
+
+    if (!SKIP_INVALID) {
+      console.error("Usa --skip-invalid para aplicar solo usuarios validos.");
+      process.exitCode = 1;
+      return;
+    }
+
+    console.warn("Se omitiran los usuarios invalidos por --skip-invalid.");
   }
 
   console.log(
@@ -100,6 +107,9 @@ async function main() {
       ? "Incluye usuarios ADMIN."
       : "Usuarios ADMIN omitidos. Usa --include-admins para incluirlos.",
   );
+  if (SKIP_INVALID) {
+    console.log("Usuarios invalidos omitidos.");
+  }
   console.table(
     updates.map((update) => ({
       id: update.id,

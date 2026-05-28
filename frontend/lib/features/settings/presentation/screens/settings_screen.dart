@@ -32,7 +32,8 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends State<SettingsScreen>
+    with WidgetsBindingObserver {
   final ImagePicker _imagePicker = ImagePicker();
   bool _isSavingProfile = false;
   bool _isSavingPhoto = false;
@@ -47,7 +48,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadLocationSettings();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadLocationSettings();
+    }
   }
 
   Future<void> _loadLocationSettings() async {
@@ -96,21 +111,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
         permission = await LocationPermissionSettings.requestPermission();
       }
 
-      await LocationPermissionSettings.setEnabled(enabled);
+      final nextEnabled = enabled && permission.isAllowed;
+      await LocationPermissionSettings.setEnabled(nextEnabled);
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _isLocationEnabled = enabled;
+        _isLocationEnabled = nextEnabled;
         _isLocationServiceEnabled = serviceEnabled;
         _locationPermission = permission;
       });
 
       if (!enabled) {
         AppAlert.showSuccess(context, 'Ubicacion deshabilitada en la app.');
-      } else if (permission.isAllowed && serviceEnabled) {
+      } else if (nextEnabled && serviceEnabled) {
         AppAlert.showSuccess(context, 'Ubicacion habilitada.');
       } else {
         AppAlert.showWarning(
@@ -163,9 +179,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _openEditProfileDialog() async {
-    if (!widget.currentUser.isAdmin ||
-        _isSavingProfile ||
-        _isSavingPhoto) {
+    if (!widget.currentUser.isAdmin || _isSavingProfile || _isSavingPhoto) {
       return;
     }
 
@@ -218,9 +232,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _pickProfilePhoto() async {
-    if (!widget.currentUser.isAdmin ||
-        _isSavingProfile ||
-        _isSavingPhoto) {
+    if (!widget.currentUser.isAdmin || _isSavingProfile || _isSavingPhoto) {
       return;
     }
 
@@ -667,7 +679,8 @@ class _LocationSettingsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final canUseLocation = isEnabled && isServiceEnabled && permission.isAllowed;
+    final canUseLocation =
+        isEnabled && isServiceEnabled && permission.isAllowed;
     final status = isLoading
         ? 'Consultando configuracion...'
         : canUseLocation
