@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:http/http.dart' as http;
 
 import '../../core/config/app_environment.dart';
@@ -23,6 +25,9 @@ class BackendApiClient {
 
   final http.Client _client;
   final String _baseUrl;
+  static final AesGcm _payloadCipher = AesGcm.with256bits();
+  static final Random _secureRandom = Random.secure();
+  static Future<SecretKey>? _payloadSecretKey;
 
   Future<Map<String, dynamic>> getJson(String path) async {
     try {
@@ -44,7 +49,7 @@ class BackendApiClient {
       final response = await _client.post(
         _buildUri(path),
         headers: await _buildHeaders(contentTypeJson: true),
-        body: jsonEncode(body),
+        body: await _encodeJsonBody(body),
       );
 
       return _decodeResponse(response);
@@ -58,14 +63,14 @@ class BackendApiClient {
       final response = await _client.post(
         _buildUri(path),
         headers: await _buildHeaders(contentTypeJson: true),
-        body: jsonEncode(body),
+        body: await _encodeJsonBody(body),
       );
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return response.bodyBytes;
       }
 
-      _decodeResponse(response);
+      await _decodeResponse(response);
       throw const BackendApiException(
         message: 'No fue posible completar la solicitud.',
         statusCode: 0,
@@ -83,7 +88,7 @@ class BackendApiClient {
       final response = await _client.put(
         _buildUri(path),
         headers: await _buildHeaders(contentTypeJson: true),
-        body: jsonEncode(body),
+        body: await _encodeJsonBody(body),
       );
 
       return _decodeResponse(response);
@@ -105,6 +110,12 @@ class BackendApiClient {
   }
 
   Uri _buildUri(String path) => Uri.parse('$_baseUrl$path');
+
+  Future<String> _encodeJsonBody(Map<String, dynamic> body) async {
+    final envelope = await _encryptJsonPayload(body);
+
+    return jsonEncode(envelope ?? body);
+  }
 
   Future<Map<String, String>> _buildHeaders({
     bool contentTypeJson = false,
@@ -129,25 +140,97 @@ class BackendApiClient {
     );
   }
 
-  Map<String, dynamic> _decodeResponse(http.Response response) {
+  Future<Map<String, dynamic>> _decodeResponse(http.Response response) async {
     final rawBody = response.body.trim();
     final payload = rawBody.isEmpty
         ? <String, dynamic>{}
         : jsonDecode(rawBody) as Map<String, dynamic>;
+    final Map<String, dynamic> resolvedPayload = _isEncryptedEnvelope(payload)
+        ? await _decryptJsonPayload(payload)
+        : payload;
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
-      return payload;
+      return resolvedPayload;
     }
 
     final errorMessage =
-        payload['error'] as String? ??
-        payload['details'] as String? ??
+        resolvedPayload['error'] as String? ??
+        resolvedPayload['details'] as String? ??
         'No fue posible completar la solicitud.';
 
     throw BackendApiException(
       message: errorMessage,
       statusCode: response.statusCode,
     );
+  }
+
+  Future<Map<String, dynamic>?> _encryptJsonPayload(
+    Map<String, dynamic> payload,
+  ) async {
+    final secretKey = await _readPayloadSecretKey();
+
+    if (secretKey == null) {
+      return null;
+    }
+
+    final nonce = List<int>.generate(12, (_) => _secureRandom.nextInt(256));
+    final secretBox = await _payloadCipher.encrypt(
+      utf8.encode(jsonEncode(payload)),
+      secretKey: secretKey,
+      nonce: nonce,
+    );
+
+    return {
+      'encrypted': true,
+      'alg': 'AES-256-GCM',
+      'iv': base64Encode(secretBox.nonce),
+      'payload': base64Encode(secretBox.cipherText),
+      'tag': base64Encode(secretBox.mac.bytes),
+    };
+  }
+
+  Future<Map<String, dynamic>> _decryptJsonPayload(
+    Map<String, dynamic> envelope,
+  ) async {
+    final secretKey = await _readPayloadSecretKey();
+
+    if (secretKey == null) {
+      throw const BackendApiException(
+        message: 'La respuesta cifrada no esta configurada en el cliente.',
+        statusCode: 0,
+      );
+    }
+
+    final clearBytes = await _payloadCipher.decrypt(
+      SecretBox(
+        base64Decode(envelope['payload'] as String),
+        nonce: base64Decode(envelope['iv'] as String),
+        mac: Mac(base64Decode(envelope['tag'] as String)),
+      ),
+      secretKey: secretKey,
+    );
+
+    return jsonDecode(utf8.decode(clearBytes)) as Map<String, dynamic>;
+  }
+
+  bool _isEncryptedEnvelope(Map<String, dynamic> payload) {
+    return payload['encrypted'] == true &&
+        payload['alg'] == 'AES-256-GCM' &&
+        payload['iv'] is String &&
+        payload['payload'] is String &&
+        payload['tag'] is String;
+  }
+
+  Future<SecretKey?> _readPayloadSecretKey() {
+    final configuredKey = AppEnvironment.payloadEncryptionKey.trim();
+
+    if (configuredKey.isEmpty) {
+      return Future.value(null);
+    }
+
+    return _payloadSecretKey ??= Sha256()
+        .hash(utf8.encode(configuredKey))
+        .then((hash) => SecretKey(hash.bytes));
   }
 
   static String _resolveBaseUrl() {

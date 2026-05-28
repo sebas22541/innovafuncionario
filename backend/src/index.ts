@@ -1,5 +1,7 @@
 import "dotenv/config";
 import {
+  createCipheriv,
+  createDecipheriv,
   createHash,
   createHmac,
   randomBytes,
@@ -66,6 +68,13 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 const ALLOWED_CORS_ORIGINS = parseAllowedCorsOrigins(
   process.env.CORS_ALLOWED_ORIGINS,
 );
+const PAYLOAD_ENCRYPTION_KEY = normalizeOptionalEnvValue(
+  process.env.PAYLOAD_ENCRYPTION_KEY,
+);
+const PAYLOAD_ENCRYPTION_KEY_BYTES =
+  PAYLOAD_ENCRYPTION_KEY == null
+    ? null
+    : createHash("sha256").update(PAYLOAD_ENCRYPTION_KEY).digest();
 const REFERENCE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DASHBOARD_CACHE_TTL_MS = 30 * 1000;
 const EVENT_SUMMARY_CACHE_TTL_MS = 15 * 1000;
@@ -92,6 +101,7 @@ const prisma = new PrismaClient({ adapter });
 type AuthenticatedUser = {
   id: number;
   email: string;
+  ci: string | null;
   rol: (typeof rol_usuario)[keyof typeof rol_usuario];
   activo: boolean;
 };
@@ -1070,6 +1080,7 @@ const server = http.createServer(async (request, response) => {
       url.pathname === "/api/reportes/asistencias"
     ) {
       const reportQuery = parseAttendanceReportQuery(url);
+      assertAttendanceReportRequester(authenticatedUser, reportQuery.ci);
       const user = await prisma.usuarios.findFirst({
         where: {
           ci: reportQuery.ci,
@@ -1521,6 +1532,10 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/personas") {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede listar personas.",
+      );
       const limit = clampInt(url.searchParams.get("limit"), 20, 1, 100);
       const personas = await prisma.personas.findMany({
         take: limit,
@@ -1538,9 +1553,10 @@ const server = http.createServer(async (request, response) => {
       request.method === "GET" &&
       url.pathname.startsWith("/api/personas/ci/")
     ) {
-      // Fallback manual:
-      // operador -> busca CI -> backend resuelve persona real -> frontend permite
-      // registrar solo como observado sin depender del QR leido.
+      // Fallback manual para usuarios ADMIN:
+      // busca CI -> backend resuelve persona real -> frontend permite registrar
+      // solo como observado sin depender del QR leido.
+      assertPersonLookupRequester(authenticatedUser);
       const ci = decodeURIComponent(url.pathname.replace("/api/personas/ci/", ""))
         .trim();
 
@@ -1599,6 +1615,7 @@ const server = http.createServer(async (request, response) => {
       // Flujo de consulta al escanear:
       // frontend -> lookupCode -> /api/personas/qr/:codigo -> persona -> UI detalle.
       // Aqui no se registra asistencia; solo se resuelve la identidad del QR.
+      assertPersonLookupRequester(authenticatedUser);
       const codigoQr = decodeURIComponent(
         url.pathname.replace("/api/personas/qr/", ""),
       ).trim();
@@ -1933,6 +1950,13 @@ function sendJson(
   statusCode: number,
   payload: unknown,
 ) {
+  const encryptedPayload = encryptJsonPayload(payload);
+
+  if (encryptedPayload != null) {
+    response.setHeader("X-Payload-Encrypted", "AES-256-GCM");
+    payload = encryptedPayload;
+  }
+
   response.writeHead(statusCode);
   response.end(JSON.stringify(payload, null, 2));
 }
@@ -2031,6 +2055,14 @@ function parseAllowedCorsOrigins(value: string | undefined) {
   return new Set(origins);
 }
 
+function normalizeOptionalEnvValue(value: string | undefined) {
+  const normalizedValue = value?.trim();
+
+  return normalizedValue == null || normalizedValue.length === 0
+    ? null
+    : normalizedValue;
+}
+
 function enforceRateLimit(request: IncomingMessage, response: ServerResponse) {
   const key = readClientIp(request);
   const now = Date.now();
@@ -2106,6 +2138,7 @@ async function authenticateRequestIfRequired(
     return {
       id: 0,
       email: "",
+      ci: null,
       rol: rol_usuario.OPERADOR,
       activo: true,
     };
@@ -2124,6 +2157,7 @@ async function authenticateRequestIfRequired(
   return {
     id: user.id,
     email: user.email,
+    ci: user.ci,
     rol: user.rol,
     activo: user.activo,
   };
@@ -2320,11 +2354,89 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
     return {};
   }
 
+  let parsedBody: unknown;
+
   try {
-    return JSON.parse(rawBody);
+    parsedBody = JSON.parse(rawBody);
   } catch {
     throw new HttpError(400, "El cuerpo JSON no es valido.");
   }
+
+  return decryptJsonPayload(parsedBody);
+}
+
+function encryptJsonPayload(payload: unknown) {
+  if (PAYLOAD_ENCRYPTION_KEY_BYTES == null) {
+    return null;
+  }
+
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", PAYLOAD_ENCRYPTION_KEY_BYTES, iv);
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]);
+  const tag = cipher.getAuthTag();
+
+  return {
+    encrypted: true,
+    alg: "AES-256-GCM",
+    iv: iv.toString("base64"),
+    payload: encrypted.toString("base64"),
+    tag: tag.toString("base64"),
+  };
+}
+
+function decryptJsonPayload(payload: unknown) {
+  if (!isEncryptedJsonEnvelope(payload)) {
+    return payload;
+  }
+
+  if (PAYLOAD_ENCRYPTION_KEY_BYTES == null) {
+    throw new HttpError(400, "El cuerpo cifrado no esta habilitado.");
+  }
+
+  try {
+    const iv = Buffer.from(payload.iv, "base64");
+    const encrypted = Buffer.from(payload.payload, "base64");
+    const tag = Buffer.from(payload.tag, "base64");
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      PAYLOAD_ENCRYPTION_KEY_BYTES,
+      iv,
+    );
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([
+      decipher.update(encrypted),
+      decipher.final(),
+    ]).toString("utf8");
+
+    return JSON.parse(decrypted);
+  } catch {
+    throw new HttpError(400, "No fue posible descifrar el cuerpo JSON.");
+  }
+}
+
+function isEncryptedJsonEnvelope(value: unknown): value is {
+  encrypted: true;
+  alg: string;
+  iv: string;
+  payload: string;
+  tag: string;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+
+  return (
+    record.encrypted === true &&
+    record.alg === "AES-256-GCM" &&
+    typeof record.iv === "string" &&
+    typeof record.payload === "string" &&
+    typeof record.tag === "string"
+  );
 }
 
 function parseCreateEventInput(payload: unknown): CreateEventInput {
@@ -3425,6 +3537,37 @@ async function assertAdminRequester(
   }
 
   return user;
+}
+
+function isAdminUser(user: AuthenticatedUser) {
+  return user.rol === rol_usuario.ADMIN;
+}
+
+function assertPersonLookupRequester(user: AuthenticatedUser) {
+  if (!isAdminUser(user)) {
+    throw new HttpError(
+      403,
+      "Solo un administrador puede consultar datos por QR o CI.",
+    );
+  }
+}
+
+function assertAttendanceReportRequester(
+  user: AuthenticatedUser,
+  requestedCi: string,
+) {
+  if (isAdminUser(user)) {
+    return;
+  }
+
+  if (user.ci != null && sameCiValue(user.ci, requestedCi)) {
+    return;
+  }
+
+  throw new HttpError(
+    403,
+    "No tienes permiso para consultar datos de otro usuario.",
+  );
 }
 
 async function assertEventOperator(userId: number) {
