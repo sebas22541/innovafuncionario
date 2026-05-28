@@ -527,7 +527,7 @@ class _EventsScreenState extends State<EventsScreen> {
         return _EventDetailView(
           event: event,
           canManageEvents: widget.currentUser.canManageEvents,
-          canOpenScanner: widget.currentUser.isAdmin,
+          canOpenScanner: widget.currentUser.canUseEventScanner,
           onBack: _goBack,
           onEdit: () => _showEditEventDialog(event),
           onDelete: () => _deleteEvent(event),
@@ -565,7 +565,7 @@ class _EventsScreenState extends State<EventsScreen> {
           event: event,
           selectedListType: _selectedListType,
           isLoadingEventDetails: _isLoadingSelectedEvent,
-          canOpenScanner: widget.currentUser.isAdmin,
+          canOpenScanner: widget.currentUser.canUseEventScanner,
           onBack: _goBack,
           onListTypeChanged: (type) {
             setState(() {
