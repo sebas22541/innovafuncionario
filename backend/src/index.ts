@@ -249,6 +249,10 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/register") {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede crear usuarios.",
+      );
       const input = parseRegisterUserInput(await readJsonBody(request));
 
       if (isAdminEmail(input.email)) {
@@ -621,11 +625,11 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/usuarios") {
-      const input = parseManagedUserInput(await readJsonBody(request));
       await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede gestionar usuarios.",
       );
+      const input = parseManagedUserInput(await readJsonBody(request));
       const passwordHash = hashPassword(input.password);
       const selectedOffice =
         input.oficinaId == null
@@ -727,14 +731,14 @@ const server = http.createServer(async (request, response) => {
     const userId = readResourceId(url.pathname, "/api/usuarios/");
 
     if (request.method === "PUT" && userId != null) {
-      const payload = await readJsonBody(request);
-      const input = isUpdateUserStatusPayload(payload)
-        ? parseUpdateUserStatusInput(payload)
-        : parseUpdateManagedUserInput(payload);
       await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede gestionar usuarios.",
       );
+      const payload = await readJsonBody(request);
+      const input = isUpdateUserStatusPayload(payload)
+        ? parseUpdateUserStatusInput(payload)
+        : parseUpdateManagedUserInput(payload);
 
       const updatedUser = await prisma.$transaction(async (tx) => {
         const existingUser = await tx.usuarios.findUnique({
@@ -2091,8 +2095,7 @@ function isPublicRoute(request: IncomingMessage, url: URL) {
 
   if (
     request.method === "POST" &&
-    (url.pathname === "/api/auth/login" ||
-      url.pathname === "/api/auth/register")
+    url.pathname === "/api/auth/login"
   ) {
     return true;
   }
