@@ -4,6 +4,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/presentation/screens/auth_screen.dart';
 import 'injection_container.dart';
+import 'shared/infrastructure/app_image_cache.dart';
 import 'shared/infrastructure/app_permissions_service.dart';
 import 'shared/infrastructure/backend_api_client.dart';
 import 'shared/infrastructure/session_store.dart';
@@ -13,6 +14,7 @@ import 'shared/widgets/app_navigation_shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AppImageCache.configure();
   await initDependencies();
   runApp(const QrWebApp());
 }

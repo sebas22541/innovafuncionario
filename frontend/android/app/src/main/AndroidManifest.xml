@@ -5,7 +5,7 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
-        android:label="qr"
+        android:label="Innova Funcionario Cochabamba"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

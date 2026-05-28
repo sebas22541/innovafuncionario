@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -968,10 +969,17 @@ class _CredentialPreview extends StatelessWidget {
           borderRadius: BorderRadius.circular(18),
           child: AspectRatio(
             aspectRatio: 860 / 540,
-            child: Image.network(
-              credential.frontImageUrl,
+            child: CachedNetworkImage(
+              imageUrl: credential.frontImageUrl,
               fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) {
+              placeholder: (context, url) {
+                return Container(
+                  color: AppPalette.surfaceSoft,
+                  alignment: Alignment.center,
+                  child: const CircularProgressIndicator(strokeWidth: 2),
+                );
+              },
+              errorWidget: (context, url, error) {
                 return Container(
                   color: AppPalette.surfaceSoft,
                   alignment: Alignment.center,

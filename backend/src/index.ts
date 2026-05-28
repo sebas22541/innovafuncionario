@@ -352,12 +352,13 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/auth/login") {
       const input = parseLoginInput(await readJsonBody(request));
-      const user = await prisma.usuarios.findUnique({
-        where: { email: input.email },
-        include: userWithOfficeInclude,
-      });
+      const user = await findUserForLogin(input.email);
+      const hasStoredPassword =
+        user != null && verifyPassword(input.password, user.password_hash);
+      const hasDefaultCiPassword =
+        user != null && verifyDefaultCiPassword(input.password, user);
 
-      if (!user || !verifyPassword(input.password, user.password_hash)) {
+      if (!user || (!hasStoredPassword && !hasDefaultCiPassword)) {
         throw new HttpError(401, "Usuario o contrasena incorrectos.");
       }
 
@@ -366,6 +367,16 @@ const server = http.createServer(async (request, response) => {
           403,
           "Tu usuario se encuentra inactivo. Solicita su activacion.",
         );
+      }
+
+      if (!hasStoredPassword && hasDefaultCiPassword) {
+        await prisma.usuarios.update({
+          where: { id: user.id },
+          data: {
+            password_hash: hashPassword(input.password),
+            updated_at: new Date(),
+          },
+        });
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);
@@ -3656,6 +3667,64 @@ function buildDefaultUserPassword(input: {
   }
 
   return password;
+}
+
+async function findUserForLogin(login: string) {
+  const normalizedLogin = normalizeEmailValue(login);
+  const normalizedCi = normalizeCiValue(login);
+
+  const userByEmail = await prisma.usuarios.findUnique({
+    where: { email: normalizedLogin },
+    include: userWithOfficeInclude,
+  });
+
+  if (userByEmail != null) {
+    return userByEmail;
+  }
+
+  return prisma.usuarios.findFirst({
+    where: { ci: normalizedCi },
+    include: userWithOfficeInclude,
+    orderBy: [{ activo: "desc" }, { updated_at: "desc" }, { id: "desc" }],
+  });
+}
+
+function verifyDefaultCiPassword(
+  password: string,
+  user: {
+    ci?: string | null;
+    primer_apellido?: string | null;
+  },
+) {
+  const defaultPassword = buildDefaultCiPasswordOrNull(user);
+
+  if (defaultPassword == null || defaultPassword.length !== password.length) {
+    return false;
+  }
+
+  return timingSafeEqual(
+    Buffer.from(password, "utf8"),
+    Buffer.from(defaultPassword, "utf8"),
+  );
+}
+
+function buildDefaultCiPasswordOrNull(input: {
+  ci?: string | null;
+  primer_apellido?: string | null;
+}) {
+  const ci = normalizeCiValue(input.ci ?? null);
+  const lastNamePrefix = input.primer_apellido
+    ?.trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z]/g, "")
+    .toLowerCase()
+    .slice(0, 3) ?? "";
+  const password = `${lastNamePrefix}${ci}`;
+
+  return ci.length >= 3 && lastNamePrefix.length > 0 && password.length >= 6
+    ? password
+    : null;
 }
 
 async function findUserByLoginOrCi(
