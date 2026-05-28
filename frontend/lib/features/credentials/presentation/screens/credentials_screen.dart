@@ -878,13 +878,11 @@ String _resolvedOfficeName(AppUser user) {
 }
 
 bool _matchesOffice(AppUser user, OfficeOption office) {
-  final officeIds = <int?>{
-    user.officeId,
-    user.primaryOfficeId,
-    user.commissionOfficeId,
-  };
+  final effectiveOfficeId = user.hasCommission
+      ? user.commissionOfficeId ?? user.officeId
+      : user.primaryOfficeId ?? user.officeId;
 
-  if (officeIds.contains(office.id)) {
+  if (effectiveOfficeId == office.id) {
     return true;
   }
 
@@ -898,8 +896,10 @@ bool _matchesOffice(AppUser user, OfficeOption office) {
   final userOfficeValues = [
     user.officeCode,
     user.officeName,
-    user.primaryOfficeName,
-    user.commissionOfficeName,
+    if (user.hasCommission)
+      user.commissionOfficeName
+    else
+      user.primaryOfficeName,
     user.unidad,
     _resolvedOfficeName(user),
   ].whereType<String>().map(_normalizeOfficeSearchText);
