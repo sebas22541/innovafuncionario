@@ -87,14 +87,12 @@ class AuthApiService {
   }
 
   Future<DynamicQrSession> generateDynamicQr({
-    required String email,
     required double latitude,
     required double longitude,
     double? accuracy,
   }) async {
     final safeAccuracy = _sanitizeOptionalAccuracy(accuracy);
     final payload = await _apiClient.postJson('/api/auth/qr/dynamic', {
-      'email': email,
       'latitud': latitude,
       'longitud': longitude,
       'accuracy': ?safeAccuracy,
@@ -105,12 +103,8 @@ class AuthApiService {
     );
   }
 
-  Future<DynamicQrSession?> fetchActiveDynamicQr({
-    required String email,
-  }) async {
-    final payload = await _apiClient.getJson(
-      '/api/auth/qr/dynamic?email=${Uri.encodeQueryComponent(email)}',
-    );
+  Future<DynamicQrSession?> fetchActiveDynamicQr() async {
+    final payload = await _apiClient.getJson('/api/auth/qr/dynamic');
     final data = payload['data'];
 
     if (data == null) {

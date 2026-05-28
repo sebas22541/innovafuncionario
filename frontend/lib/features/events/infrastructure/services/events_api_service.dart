@@ -127,8 +127,6 @@ class EventsApiService {
     required int eventId,
     required int controlId,
     required EventListType listType,
-    required String operatorEmail,
-    required String operatorFullName,
     required double latitude,
     required double longitude,
     String? qrValue,
@@ -151,8 +149,6 @@ class EventsApiService {
       'accuracy': accuracy,
       'observacion': observation,
       'payloadFields': payloadFields,
-      'operatorEmail': operatorEmail,
-      'operatorFullName': operatorFullName,
     });
     _clearEventSummaryCache();
   }

@@ -487,7 +487,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/auth/qr/dynamic") {
       const input = parseGenerateDynamicQrInput(await readJsonBody(request));
       const user = await prisma.usuarios.findUnique({
-        where: { email: authenticatedUser.email },
+        where: { id: authenticatedUser.id },
         include: userWithOfficeInclude,
       });
 
@@ -513,7 +513,7 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/auth/qr/dynamic") {
       const user = await prisma.usuarios.findUnique({
-        where: { email: authenticatedUser.email },
+        where: { id: authenticatedUser.id },
         include: userWithOfficeInclude,
       });
 
@@ -1405,7 +1405,7 @@ const server = http.createServer(async (request, response) => {
         await assertPersonCanAttendEvent(persona, evento);
       }
 
-      const operador = await assertEventOperator(authenticatedUser.email);
+      const operador = await assertEventOperator(authenticatedUser.id);
       const registeredAt = new Date();
       const resolvedObservation = buildAttendanceObservation(input);
       const qrSnapshot = buildAttendanceQrSnapshot(
@@ -1760,8 +1760,6 @@ type RegisterAttendanceInput = {
   latitud: number | null;
   longitud: number | null;
   accuracy: number | null;
-  operatorEmail: string;
-  operatorFullName: string;
 };
 
 type EventControlInput = {
@@ -1810,7 +1808,6 @@ type UpdatePasswordInput = {
 };
 
 type GenerateDynamicQrInput = {
-  email: string;
   latitud: number;
   longitud: number;
   accuracy: number | null;
@@ -2071,7 +2068,7 @@ async function authenticateRequestIfRequired(
     where: { id: payload.sub },
   });
 
-  if (!user || user.email !== payload.email || user.activo !== true) {
+  if (!user || user.activo !== true) {
     throw new HttpError(401, "Sesion invalida o expirada.");
   }
 
@@ -2170,7 +2167,7 @@ function verifyAuthToken(token: string): AuthTokenPayload {
     ? normalizeEmailValue(parsedPayload.email)
     : "";
 
-  if (sub == null || exp == null || email.length < 3) {
+  if (sub == null || exp == null) {
     throw new HttpError(401, "Token de sesion invalido.");
   }
 
@@ -2593,13 +2590,6 @@ function parseRegisterAttendanceInput(
     "QR",
     "CI",
   ]) as "QR" | "CI";
-  const operatorEmail = readRequiredString(body, "operatorEmail", 5, 150);
-  const operatorFullName = readRequiredString(
-    body,
-    "operatorFullName",
-    3,
-    150,
-  );
   const observacion = readOptionalString(body, "observacion", 0, 500);
   const payloadFields = readOptionalRecord(body, "payloadFields");
   const scannedAt = readOptionalDate(body, "scannedAt");
@@ -2666,8 +2656,6 @@ function parseRegisterAttendanceInput(
     latitud,
     longitud,
     accuracy,
-    operatorEmail,
-    operatorFullName,
   };
 }
 
@@ -2789,7 +2777,6 @@ function parseGenerateDynamicQrInput(payload: unknown): GenerateDynamicQrInput {
   const body = expectRecord(payload);
 
   return {
-    email: readRequiredString(body, "email", 3, 150).toLowerCase(),
     latitud: readRequiredFloat(body, "latitud", -90, 90),
     longitud: readRequiredFloat(body, "longitud", -180, 180),
     accuracy: readOptionalFloatOrNull(body, "accuracy", 0, 10_000),
@@ -3392,9 +3379,9 @@ async function assertAdminRequester(
   return user;
 }
 
-async function assertEventOperator(email: string) {
+async function assertEventOperator(userId: number) {
   const user = await prisma.usuarios.findUnique({
-    where: { email: email.toLowerCase() },
+    where: { id: userId },
   });
 
   if (

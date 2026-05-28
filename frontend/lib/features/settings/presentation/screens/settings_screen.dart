@@ -1078,8 +1078,8 @@ class _MyQrDialogState extends State<MyQrDialog> {
     });
 
     try {
-      final activeDynamicQr = await dependencies.authApiService
-          .fetchActiveDynamicQr(email: widget.currentUser.email);
+      final activeDynamicQr =
+          await dependencies.authApiService.fetchActiveDynamicQr();
       final dynamicQr = _hasEnoughTimeToScan(activeDynamicQr)
           ? activeDynamicQr!
           : await _generateFreshDynamicQr();
@@ -1203,7 +1203,6 @@ class _MyQrDialogState extends State<MyQrDialog> {
   Future<DynamicQrSession> _generateFreshDynamicQr() async {
     final location = await _resolveCurrentLocation();
     return dependencies.authApiService.generateDynamicQr(
-      email: widget.currentUser.email,
       latitude: location.latitude,
       longitude: location.longitude,
       accuracy: location.accuracy,

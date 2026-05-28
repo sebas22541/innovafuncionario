@@ -121,8 +121,6 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
         qrValue: widget.manualCi == null ? widget.scanResult.value : null,
         ci: widget.manualCi,
         listType: listType,
-        operatorEmail: widget.currentUser.email,
-        operatorFullName: widget.currentUser.fullName,
         latitude: location.latitude,
         longitude: location.longitude,
         accuracy: location.accuracy,
