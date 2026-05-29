@@ -25,6 +25,7 @@ pipeline {
         BUILDKIT_PROGRESS = 'plain'
         FRONTEND_SERVICE = 'frontend'
         BACKEND_SERVICE = 'backend'
+        PAYLOAD_ENCRYPTION_KEY = credentials('payload-encryption-key-prod')
     }
 
     stages {
