@@ -1206,6 +1206,7 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
   late final Set<int> _selectedOfficeIds;
   late final Set<int> _excludedOfficeIds;
   late final Set<String> _selectedJobTitleCodes;
+  late final Map<int, Set<String>> _officeJobTitleCodes;
   bool _showValidation = false;
 
   Set<int> get _expandedOfficeIds => _expandOfficeSelection(
@@ -1257,6 +1258,11 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
       ..addAll(normalizedExcludedOfficeIds);
     _selectedJobTitleCodes = {
       ...widget.initialEvent?.selectedJobTitleCodes ?? const [],
+    };
+    _officeJobTitleCodes = {
+      for (final selection
+          in widget.initialEvent?.officeJobTitleSelections ?? const [])
+        selection.officeId: selection.jobTitleCodes.toSet(),
     };
     final initialControls = widget.initialEvent?.controls ?? const [];
     _controls = initialControls.isEmpty
@@ -1356,6 +1362,7 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
       _excludedOfficeIds
         ..clear()
         ..addAll(selectionResult.excludedOfficeIds);
+      _syncOfficeJobTitleSelections();
     });
   }
 
@@ -1375,7 +1382,23 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
     );
   }
 
-  Future<void> _pickJobTitles() async {
+  void _syncOfficeJobTitleSelections() {
+    final expandedOfficeIds = _expandedOfficeIds;
+
+    _officeJobTitleCodes.removeWhere(
+      (officeId, _) => !expandedOfficeIds.contains(officeId),
+    );
+
+    if (_officeJobTitleCodes.isEmpty && _selectedJobTitleCodes.isNotEmpty) {
+      for (final officeId in expandedOfficeIds) {
+        _officeJobTitleCodes[officeId] = {..._selectedJobTitleCodes};
+      }
+    }
+  }
+
+  Future<void> _pickOfficeJobTitles(EventOffice office) async {
+    final selectedCodes =
+        _officeJobTitleCodes[office.id] ?? const <String>{};
     final selectionResult =
         await showModalBottomSheet<_EventJobTitleSelectionResult>(
           context: context,
@@ -1383,7 +1406,8 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
           backgroundColor: Colors.transparent,
           builder: (context) => _EventJobTitleSelectionSheet(
             jobTitles: widget.jobTitles,
-            selectedJobTitleCodes: _selectedJobTitleCodes,
+            selectedJobTitleCodes: selectedCodes,
+            title: 'Cargos para ${office.name}',
           ),
         );
 
@@ -1392,15 +1416,14 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
     }
 
     setState(() {
+      _officeJobTitleCodes[office.id] = {
+        ...selectionResult.selectedJobTitleCodes,
+      };
       _selectedJobTitleCodes
         ..clear()
-        ..addAll(selectionResult.selectedJobTitleCodes);
-    });
-  }
-
-  void _removeSelectedJobTitle(String code) {
-    setState(() {
-      _selectedJobTitleCodes.remove(code);
+        ..addAll(
+          _officeJobTitleCodes.values.expand((codes) => codes),
+        );
     });
   }
 
@@ -1415,6 +1438,7 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
       _excludedOfficeIds
         ..clear()
         ..addAll(normalizedExcludedOfficeIds);
+      _syncOfficeJobTitleSelections();
     });
   }
 
@@ -1485,6 +1509,15 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
         longitude: _selectedLocation!.longitude,
         officeIds: _selectedOfficeIds.toList(growable: false),
         jobTitleCodes: _selectedJobTitleCodes.toList(growable: false),
+        officeJobTitleSelections: _expandedOfficeIds
+            .map(
+              (officeId) => EventOfficeJobTitleSelection(
+                officeId: officeId,
+                jobTitleCodes: (_officeJobTitleCodes[officeId] ?? const {})
+                    .toList(growable: false),
+              ),
+            )
+            .toList(growable: false),
         excludedOfficeIds: _excludedOfficeIds.toList(growable: false),
         controls: controls,
       ),
@@ -1611,10 +1644,6 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
     final expandedOffices = widget.offices
         .where((office) => expandedOfficeIds.contains(office.id))
         .toList(growable: false);
-    final selectedJobTitles = widget.jobTitles
-        .where((jobTitle) => _selectedJobTitleCodes.contains(jobTitle.code))
-        .toList(growable: false);
-
     return Dialog(
       backgroundColor: Colors.white,
       surfaceTintColor: Colors.white,
@@ -1962,12 +1991,12 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                       ),
                       const SizedBox(height: 14),
                       Text(
-                        'Cargos',
+                        'Cargos por oficina',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Selecciona cargos especificos o deja la opcion Todos para que cualquier cargo de las oficinas seleccionadas pueda asistir.',
+                        'Define que cargos podran asistir en cada oficina. Si dejas una oficina en Todos, no se filtrara por cargo para esa oficina.',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                       const SizedBox(height: 8),
@@ -1981,72 +2010,86 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        selectedJobTitles.isEmpty
-                                            ? 'Todos los cargos'
-                                            : '${selectedJobTitles.length} cargos seleccionados',
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.titleSmall,
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        selectedJobTitles.isEmpty
-                                            ? 'No se filtrara por cargo.'
-                                            : 'Tambien podran asistir usuarios cuyo cargo este en esta seleccion.',
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.bodySmall,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                ElevatedButton.icon(
-                                  onPressed: _pickJobTitles,
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: AppPalette.orange,
-                                    foregroundColor: Colors.white,
-                                    elevation: 0,
-                                  ),
-                                  icon: const Icon(Icons.badge_rounded),
-                                  label: Text(
-                                    selectedJobTitles.isEmpty
-                                        ? 'Seleccionar'
-                                        : 'Cambiar',
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (selectedJobTitles.isNotEmpty) ...[
-                              const SizedBox(height: 12),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: [
-                                  for (final jobTitle in selectedJobTitles)
-                                    InputChip(
-                                      label: Text(jobTitle.displayLabel),
-                                      onDeleted: () =>
-                                          _removeSelectedJobTitle(
+                            if (expandedOffices.isEmpty)
+                              Text(
+                                'Primero selecciona una oficina.',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              )
+                            else
+                              for (final office in expandedOffices) ...[
+                                Builder(
+                                  builder: (context) {
+                                    final selectedCodes =
+                                        _officeJobTitleCodes[office.id] ??
+                                        const <String>{};
+                                    final selectedTitles = widget.jobTitles
+                                        .where(
+                                          (jobTitle) => selectedCodes.contains(
                                             jobTitle.code,
                                           ),
-                                      deleteIconColor: AppPalette.muted,
-                                      backgroundColor: AppPalette.surfaceSoft,
-                                      side: const BorderSide(
-                                        color: AppPalette.line,
+                                        )
+                                        .toList(growable: false);
+
+                                    return Container(
+                                      margin: const EdgeInsets.only(bottom: 10),
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: AppPalette.surfaceSoft,
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                          color: AppPalette.line,
+                                        ),
                                       ),
-                                    ),
-                                ],
-                              ),
-                            ],
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          const Icon(
+                                            Icons.apartment_rounded,
+                                            color: AppPalette.orange,
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  office.name,
+                                                  style: Theme.of(
+                                                    context,
+                                                  ).textTheme.titleSmall,
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  selectedTitles.isEmpty
+                                                      ? 'Todos los cargos'
+                                                      : '${selectedTitles.length} cargos: ${selectedTitles.map((item) => item.name).join(', ')}',
+                                                  maxLines: 3,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: Theme.of(
+                                                    context,
+                                                  ).textTheme.bodySmall,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          TextButton.icon(
+                                            onPressed: () =>
+                                                _pickOfficeJobTitles(office),
+                                            icon: const Icon(
+                                              Icons.badge_rounded,
+                                            ),
+                                            label: const Text('Cargos'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ],
                           ],
                         ),
                       ),
@@ -2696,7 +2739,7 @@ class _EventOfficeSelectionSheetState
                                     : isDirectlyExcluded
                                     ? const Color(0xFFFFF1F0)
                                     : isInheritedOnly
-                                    ? AppPalette.surfaceSoft
+                                    ? const Color(0xFFF3F9F1)
                                     : isExcludedByParent
                                     ? const Color(0xFFFFF8F7)
                                     : Colors.white;
@@ -2704,7 +2747,9 @@ class _EventOfficeSelectionSheetState
                                     ? AppPalette.orange
                                     : isDirectlyExcluded
                                     ? const Color(0xFFD94841)
-                                    : isInheritedOnly || isExcludedByParent
+                                    : isInheritedOnly
+                                    ? const Color(0xFF2E7D32)
+                                    : isExcludedByParent
                                     ? AppPalette.muted
                                     : AppPalette.line;
                                 final leadingIcon = isDirectlySelected
@@ -2712,7 +2757,7 @@ class _EventOfficeSelectionSheetState
                                     : isDirectlyExcluded
                                     ? Icons.remove_circle_rounded
                                     : isInheritedOnly
-                                    ? Icons.account_tree_rounded
+                                    ? Icons.check_circle_outline_rounded
                                     : isExcludedByParent
                                     ? Icons.block_rounded
                                     : Icons.radio_button_unchecked_rounded;
@@ -2721,7 +2766,7 @@ class _EventOfficeSelectionSheetState
                                     : isDirectlyExcluded
                                     ? const Color(0xFFD94841)
                                     : isInheritedOnly
-                                    ? AppPalette.night
+                                    ? const Color(0xFF2E7D32)
                                     : isExcludedByParent
                                     ? const Color(0xFFD94841)
                                     : AppPalette.muted;
@@ -2786,7 +2831,7 @@ class _EventOfficeSelectionSheetState
                                               ] else if (isInheritedOnly) ...[
                                                 const SizedBox(height: 4),
                                                 Text(
-                                                  'Quedo incluida automaticamente por una oficina padre. Toca para deseleccionar esta rama del evento.',
+                                                  'Ira al evento porque esta dentro de una oficina padre seleccionada. Toca solo si quieres que esta rama no vaya.',
                                                   style: Theme.of(context)
                                                       .textTheme
                                                       .bodySmall
@@ -2861,10 +2906,12 @@ class _EventJobTitleSelectionSheet extends StatefulWidget {
   const _EventJobTitleSelectionSheet({
     required this.jobTitles,
     required this.selectedJobTitleCodes,
+    this.title = 'Selecciona cargos',
   });
 
   final List<EventJobTitle> jobTitles;
   final Set<String> selectedJobTitleCodes;
+  final String title;
 
   @override
   State<_EventJobTitleSelectionSheet> createState() =>
@@ -2963,7 +3010,7 @@ class _EventJobTitleSelectionSheetState
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Selecciona cargos',
+                              widget.title,
                               style: Theme.of(context).textTheme.titleLarge,
                             ),
                             const SizedBox(height: 6),

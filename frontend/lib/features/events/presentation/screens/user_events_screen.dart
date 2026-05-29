@@ -927,6 +927,47 @@ List<EventRecord> _filterEventsForCurrentUser(
 
   return events
       .where((event) {
+        final matchingOffice = event.offices.cast<EventOffice?>().firstWhere(
+          (office) {
+            if (office == null) {
+              return false;
+            }
+
+            if (officeId != null && office.id == officeId) {
+              return true;
+            }
+
+            return _eventOfficeMatchesUserOffice(
+              office,
+              userOfficeName: officeName,
+              userOfficeCode: officeCode,
+            );
+          },
+          orElse: () => null,
+        );
+        final hasOfficeJobTitleRules = event.officeJobTitleSelections.isNotEmpty;
+
+        if (hasOfficeJobTitleRules) {
+          if (matchingOffice == null) {
+            return false;
+          }
+
+          final officeSelection = event.officeJobTitleSelections
+              .cast<EventOfficeJobTitleSelection?>()
+              .firstWhere(
+                (selection) => selection?.officeId == matchingOffice.id,
+                orElse: () => null,
+              );
+
+          if (officeSelection == null || officeSelection.allowsAllJobTitles) {
+            return true;
+          }
+
+          return officeSelection.jobTitleCodes.any(
+            (code) => cargoCodigo.isNotEmpty && code == cargoCodigo,
+          );
+        }
+
         final matchesJobTitle = event.jobTitles.any((jobTitle) {
           if (cargoCodigo.isNotEmpty && jobTitle.code == cargoCodigo) {
             return true;

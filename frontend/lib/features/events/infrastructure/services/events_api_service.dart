@@ -88,6 +88,9 @@ class EventsApiService {
       'oficinaIds': draft.officeIds,
       'oficinaIdsExcluidos': draft.excludedOfficeIds,
       'cargoCodigos': draft.jobTitleCodes,
+      'cargoCodigosPorOficina': _serializeOfficeJobTitleSelections(
+        draft.officeJobTitleSelections,
+      ),
       'controles': draft.controls
           .map(
             (control) => {
@@ -118,6 +121,9 @@ class EventsApiService {
       'oficinaIds': draft.officeIds,
       'oficinaIdsExcluidos': draft.excludedOfficeIds,
       'cargoCodigos': draft.jobTitleCodes,
+      'cargoCodigosPorOficina': _serializeOfficeJobTitleSelections(
+        draft.officeJobTitleSelections,
+      ),
       'requesterEmail': requesterEmail,
       'controles': draft.controls
           .map(
@@ -213,6 +219,7 @@ class EventsApiService {
         source['cargoCodigosSeleccionados'],
         'cargoCodigosSeleccionados',
       ),
+      officeJobTitleSelections: _parseOfficeJobTitleSelections(source),
       selectedOfficeIds: _resolveSelectedOfficeIds(
         offices,
         source['oficinaIdsSeleccionados'],
@@ -243,6 +250,28 @@ class EventsApiService {
     }
 
     return const [];
+  }
+
+  List<EventOfficeJobTitleSelection> _parseOfficeJobTitleSelections(
+    Map<String, dynamic> source,
+  ) {
+    final sourceItems = source['cargoCodigosPorOficina'];
+
+    if (sourceItems == null) {
+      return const [];
+    }
+
+    return _readList(sourceItems, 'cargoCodigosPorOficina')
+        .map(
+          (item) => EventOfficeJobTitleSelection(
+            officeId: _readInt(item['oficinaId'], 'oficinaId'),
+            jobTitleCodes: _readStringList(
+              item['cargoCodigos'],
+              'cargoCodigos',
+            ),
+          ),
+        )
+        .toList(growable: false);
   }
 
   bool _isCacheFresh(DateTime? cachedAt, Duration ttl) {
@@ -507,6 +536,19 @@ List<String> _readStringList(dynamic source, String fieldName) {
 
 String _formatDateForApi(DateTime date) {
   return date.toIso8601String();
+}
+
+List<Map<String, dynamic>> _serializeOfficeJobTitleSelections(
+  List<EventOfficeJobTitleSelection> selections,
+) {
+  return selections
+      .map(
+        (selection) => {
+          'oficinaId': selection.officeId,
+          'cargoCodigos': selection.jobTitleCodes,
+        },
+      )
+      .toList(growable: false);
 }
 
 String _normalizeOfficeCode(String code) {

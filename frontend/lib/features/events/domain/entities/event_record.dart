@@ -69,6 +69,18 @@ class EventJobTitle {
   String get displayLabel => '$name | Cod. $code';
 }
 
+class EventOfficeJobTitleSelection {
+  const EventOfficeJobTitleSelection({
+    required this.officeId,
+    required this.jobTitleCodes,
+  });
+
+  final int officeId;
+  final List<String> jobTitleCodes;
+
+  bool get allowsAllJobTitles => jobTitleCodes.isEmpty;
+}
+
 class EventRosterEntry {
   const EventRosterEntry({
     required this.id,
@@ -107,6 +119,7 @@ class EventRecordDraft {
     required this.date,
     required this.officeIds,
     required this.jobTitleCodes,
+    this.officeJobTitleSelections = const [],
     this.excludedOfficeIds = const [],
     required this.controls,
     required this.address,
@@ -118,6 +131,7 @@ class EventRecordDraft {
   final DateTime date;
   final List<int> officeIds;
   final List<String> jobTitleCodes;
+  final List<EventOfficeJobTitleSelection> officeJobTitleSelections;
   final List<int> excludedOfficeIds;
   final List<EventControlDraft> controls;
   final String address;
@@ -140,6 +154,7 @@ class EventRecord {
     this.offices = const [],
     this.jobTitles = const [],
     this.selectedJobTitleCodes = const [],
+    this.officeJobTitleSelections = const [],
     this.selectedOfficeIds = const [],
     this.excludedOfficeIds = const [],
     this.attended = const [],
@@ -162,6 +177,7 @@ class EventRecord {
   final List<EventOffice> offices;
   final List<EventJobTitle> jobTitles;
   final List<String> selectedJobTitleCodes;
+  final List<EventOfficeJobTitleSelection> officeJobTitleSelections;
   final List<int> selectedOfficeIds;
   final List<int> excludedOfficeIds;
   final List<EventRosterEntry> attended;

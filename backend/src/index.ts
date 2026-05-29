@@ -154,6 +154,11 @@ const eventInclude = {
       cargos: true,
     },
   },
+  evento_oficina_cargos: {
+    include: {
+      cargos: true,
+    },
+  },
   asistencias: {
     include: {
       personas: {
@@ -192,6 +197,11 @@ const eventSummaryInclude = {
     },
   },
   evento_cargos: {
+    include: {
+      cargos: true,
+    },
+  },
+  evento_oficina_cargos: {
     include: {
       cargos: true,
     },
@@ -986,6 +996,12 @@ const server = http.createServer(async (request, response) => {
         });
 
         await syncEventJobTitles(tx, createdEvent.id, input.cargoCodigos);
+        await syncEventOfficeJobTitles(
+          tx,
+          createdEvent.id,
+          input.cargoCodigosPorOficina,
+          resolvedOfficeSelection.expandedOffices.map((office) => office.id),
+        );
 
         await tx.eventos.update({
           where: { id: createdEvent.id },
@@ -1080,6 +1096,12 @@ const server = http.createServer(async (request, response) => {
         });
 
         await syncEventJobTitles(tx, eventId, input.cargoCodigos);
+        await syncEventOfficeJobTitles(
+          tx,
+          eventId,
+          input.cargoCodigosPorOficina,
+          resolvedOfficeSelection.expandedOffices.map((office) => office.id),
+        );
 
         await tx.eventos.update({
           where: { id: eventId },
@@ -1414,6 +1436,11 @@ const server = http.createServer(async (request, response) => {
             },
           },
           evento_cargos: {
+            include: {
+              cargos: true,
+            },
+          },
+          evento_oficina_cargos: {
             include: {
               cargos: true,
             },
@@ -1819,6 +1846,7 @@ type CreateEventInput = {
   oficinaIds: number[];
   oficinaIdsExcluidos: number[];
   cargoCodigos: string[];
+  cargoCodigosPorOficina: EventOfficeJobTitleInput[];
   controles: EventControlInput[];
   creatorEmail: string;
   creatorFullName: string;
@@ -1833,6 +1861,7 @@ type UpdateEventInput = {
   oficinaIds: number[];
   oficinaIdsExcluidos: number[];
   cargoCodigos: string[];
+  cargoCodigosPorOficina: EventOfficeJobTitleInput[];
   controles: EventControlInput[];
   requesterEmail: string;
 };
@@ -1890,6 +1919,11 @@ type UpdateProfileInput = {
   segundoApellido: string;
   tercerApellido: string | null;
   fotoData: string | null;
+};
+
+type EventOfficeJobTitleInput = {
+  oficinaId: number;
+  cargoCodigos: string[];
 };
 
 type UpdatePasswordInput = {
@@ -2495,6 +2529,37 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS "idx_evento_cargos_cargo_codigo"
       ON "evento_cargos" ("cargo_codigo")
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "evento_oficina_cargos" (
+      "evento_id" INTEGER NOT NULL,
+      "oficina_id" INTEGER NOT NULL,
+      "cargo_codigo" VARCHAR(50) NOT NULL,
+      CONSTRAINT "evento_oficina_cargos_pkey"
+        PRIMARY KEY ("evento_id", "oficina_id", "cargo_codigo"),
+      CONSTRAINT "evento_oficina_cargos_evento_id_fkey"
+        FOREIGN KEY ("evento_id") REFERENCES "eventos" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "evento_oficina_cargos_oficina_id_fkey"
+        FOREIGN KEY ("oficina_id") REFERENCES "oficinas" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "evento_oficina_cargos_cargo_codigo_fkey"
+        FOREIGN KEY ("cargo_codigo") REFERENCES "cargos" ("codigo")
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_evento_oficina_cargos_oficina_id"
+      ON "evento_oficina_cargos" ("oficina_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_evento_oficina_cargos_cargo_codigo"
+      ON "evento_oficina_cargos" ("cargo_codigo")
+  `);
 }
 
 function getErrorMessage(error: unknown) {
@@ -2644,6 +2709,7 @@ function parseEventInputPayload(payload: unknown) {
     "oficinaIdsExcluidos",
   );
   const cargoCodigos = readOptionalStringList(body, "cargoCodigos", "cargoCodigo");
+  const cargoCodigosPorOficina = parseOfficeJobTitleInput(body);
   const controles = parseEventControlsInput(body);
 
   return {
@@ -2655,8 +2721,33 @@ function parseEventInputPayload(payload: unknown) {
     oficinaIds,
     oficinaIdsExcluidos,
     cargoCodigos,
+    cargoCodigosPorOficina,
     controles,
   };
+}
+
+function parseOfficeJobTitleInput(source: JsonRecord): EventOfficeJobTitleInput[] {
+  const rawItems = source["cargoCodigosPorOficina"];
+
+  if (rawItems == null) {
+    return [];
+  }
+
+  if (!Array.isArray(rawItems)) {
+    throw new HttpError(
+      400,
+      "El campo cargoCodigosPorOficina no tiene un formato valido.",
+    );
+  }
+
+  return rawItems.map((item) => {
+    const record = expectRecord(item);
+
+    return {
+      oficinaId: readRequiredInt(record, "oficinaId"),
+      cargoCodigos: readOptionalStringList(record, "cargoCodigos", "cargoCodigo"),
+    };
+  });
 }
 
 function parseEventControlsInput(source: JsonRecord): EventControlInput[] {
@@ -2805,6 +2896,65 @@ async function syncEventJobTitles(
       evento_id: eventId,
       cargo_codigo: cargoCodigo,
     })),
+  });
+}
+
+async function syncEventOfficeJobTitles(
+  tx: any,
+  eventId: number,
+  selections: EventOfficeJobTitleInput[],
+  allowedOfficeIds: number[],
+) {
+  await tx.evento_oficina_cargos.deleteMany({
+    where: { evento_id: eventId },
+  });
+
+  if (selections.length === 0) {
+    return;
+  }
+
+  const allowedOfficeIdSet = new Set(allowedOfficeIds);
+  const rows = selections.flatMap((selection) => {
+    if (!allowedOfficeIdSet.has(selection.oficinaId)) {
+      throw new HttpError(
+        400,
+        "Los cargos por oficina deben pertenecer a oficinas del evento.",
+      );
+    }
+
+    return [...new Set(selection.cargoCodigos)].map((cargoCodigo) => ({
+      evento_id: eventId,
+      oficina_id: selection.oficinaId,
+      cargo_codigo: cargoCodigo,
+    }));
+  });
+
+  if (rows.length === 0) {
+    return;
+  }
+
+  const uniqueCargoCodigos = [...new Set(rows.map((row) => row.cargo_codigo))];
+  const existingCargos = await tx.cargos.findMany({
+    where: {
+      codigo: {
+        in: uniqueCargoCodigos,
+      },
+    },
+    select: {
+      codigo: true,
+    },
+  });
+  const existingCargoCodes = new Set(
+    existingCargos.map((cargo: { codigo: string }) => cargo.codigo),
+  );
+
+  if (existingCargoCodes.size !== uniqueCargoCodigos.length) {
+    throw new HttpError(400, "Debes seleccionar cargos validos por oficina.");
+  }
+
+  await tx.evento_oficina_cargos.createMany({
+    data: rows,
+    skipDuplicates: true,
   });
 }
 
@@ -5344,6 +5494,7 @@ function buildSerializedEventBase(event: any) {
       cargo: item.cargos.cargo,
     }))
     .sort((left: any, right: any) => left.cargo.localeCompare(right.cargo));
+  const cargoCodigosPorOficina = buildSerializedOfficeJobTitleSelections(event);
   const controls = (event.evento_controles ?? [])
     .map(serializeEventControl)
     .sort((left: any, right: any) => left.orden - right.orden);
@@ -5369,9 +5520,35 @@ function buildSerializedEventBase(event: any) {
     oficinas: offices,
     cargos,
     cargoCodigosSeleccionados: cargos.map((cargo: any) => cargo.codigo),
+    cargoCodigosPorOficina,
     oficinaIdsSeleccionados: directOfficeIds,
     oficinaIdsExcluidos: event.oficina_ids_excluidos ?? [],
   };
+}
+
+function buildSerializedOfficeJobTitleSelections(event: any) {
+  const rows = event.evento_oficina_cargos ?? [];
+  const byOfficeId = new Map<number, Set<string>>();
+
+  for (const row of rows) {
+    const officeId = row.oficina_id;
+    const cargoCodigo = row.cargo_codigo;
+
+    if (typeof officeId !== "number" || typeof cargoCodigo !== "string") {
+      continue;
+    }
+
+    const codes = byOfficeId.get(officeId) ?? new Set<string>();
+    codes.add(cargoCodigo);
+    byOfficeId.set(officeId, codes);
+  }
+
+  return [...byOfficeId.entries()]
+    .map(([oficinaId, cargoCodigos]) => ({
+      oficinaId,
+      cargoCodigos: [...cargoCodigos].sort(),
+    }))
+    .sort((left, right) => left.oficinaId - right.oficinaId);
 }
 
 function serializeEventSummary(
@@ -5680,10 +5857,43 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
   const userCargoCodigo = normalizeOptionalText(linkedUser?.cargo_codigo);
   const userCargoName = normalizeOfficeMatchText(linkedUser?.cargo);
   const matchesOffice = userOfficeId != null && allowedOfficeIds.has(userOfficeId);
+  const officeCargoRows = event.evento_oficina_cargos ?? [];
+  const hasOfficeCargoRules = officeCargoRows.length > 0;
+  const officeCargoRules = officeCargoRows.filter(
+    (item: { oficina_id: number }) => item.oficina_id === userOfficeId,
+  );
+  const officeCargoCodes = new Set<string>(
+    officeCargoRules
+      .map((item: { cargo_codigo: string }) => item.cargo_codigo)
+      .filter((cargoCodigo: string | null) => cargoCodigo != null),
+  );
+  const officeCargoNames = new Set<string>(
+    officeCargoRules
+      .map((item: { cargos?: { cargo?: string | null } }) =>
+        normalizeOfficeMatchText(item.cargos?.cargo),
+      )
+      .filter((cargoName: string | null) => cargoName != null),
+  );
+  const matchesOfficeCargo =
+    !hasOfficeCargoRules ||
+    officeCargoRules.length === 0 ||
+    (userCargoCodigo != null && officeCargoCodes.has(userCargoCodigo)) ||
+    (userCargoName != null && officeCargoNames.has(userCargoName));
   const matchesCargo =
     allowedCargoCodigos.size > 0 &&
     ((userCargoCodigo != null && allowedCargoCodigos.has(userCargoCodigo)) ||
       (userCargoName != null && allowedCargoNames.has(userCargoName)));
+
+  if (hasOfficeCargoRules) {
+    if (!matchesOffice || !matchesOfficeCargo) {
+      throw new HttpError(
+        403,
+        "Este usuario no esta permitido asistir a este evento.",
+      );
+    }
+
+    return;
+  }
 
   if (!matchesOffice && !matchesCargo) {
     throw new HttpError(
