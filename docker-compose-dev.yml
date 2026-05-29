@@ -29,6 +29,8 @@ services:
       PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:-}
     ports:
       - "4015:4000"
+    volumes:
+      - ./logs/backend-dev:/app/logs
 
   frontend:
     build:

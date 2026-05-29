@@ -24,6 +24,13 @@ import {
 import { PrismaClient, type Prisma } from "./generated/prisma/client.ts";
 import { estado_asistencia, rol_usuario } from "./generated/prisma/enums.ts";
 import { HttpError } from "./http-error.ts";
+import {
+  logAccess,
+  logError,
+  logFatal,
+  logInfo,
+  logWarning,
+} from "./logger.ts";
 
 const DEFAULT_PORT = 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -86,7 +93,11 @@ const DYNAMIC_QR_SIGNING_SECRET =
   createHash("sha256").update(`${DATABASE_URL}:dynamic-qr`).digest("hex");
 
 if (!DATABASE_URL) {
-  throw new Error("DATABASE_URL no esta definido en backend/.env.");
+  logFatal(
+    "DATABASE_URL no esta definido en backend/.env.",
+    new Error("DATABASE_URL no esta definido en backend/.env."),
+  );
+  process.exit(1);
 }
 
 const pool = new Pool({
@@ -97,6 +108,7 @@ const pool = new Pool({
 });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
+const requestIdHeader = "X-Request-Id";
 
 type AuthenticatedUser = {
   id: number;
@@ -197,7 +209,30 @@ const rateLimitBuckets = new Map<string, RateLimitBucket>();
 await ensureRuntimeSchema();
 
 const server = http.createServer(async (request, response) => {
+  const requestStartedAt = process.hrtime.bigint();
+  const requestId = createRequestId();
+  let requestPath = request.url ?? null;
+  let authenticatedUserForLog: AuthenticatedUser | null = null;
+
+  response.setHeader(requestIdHeader, requestId);
+  response.on("finish", () => {
+    logAccess({
+      requestId,
+      method: request.method,
+      path: requestPath,
+      statusCode: response.statusCode,
+      durationMs: calculateDurationMs(requestStartedAt),
+      ip: getClientIp(request),
+      userAgent: readSingleHeader(request.headers["user-agent"]),
+      userId: authenticatedUserForLog?.id,
+      userEmail: authenticatedUserForLog?.email,
+    });
+  });
+
   if (!applyCors(request, response)) {
+    logWarning("Origen no permitido.", buildRequestLogFields(request, requestId, {
+      statusCode: 403,
+    }));
     sendJson(response, 403, { error: "Origen no permitido." });
     return;
   }
@@ -217,10 +252,12 @@ const server = http.createServer(async (request, response) => {
     request.url,
     `http://${request.headers.host ?? "localhost"}`,
   );
+  requestPath = buildSafeRequestPath(url);
 
   try {
     enforceRateLimit(request, response);
     const authenticatedUser = await authenticateRequestIfRequired(request, url);
+    authenticatedUserForLog = authenticatedUser;
 
     if (request.method === "GET" && url.pathname === "/") {
       sendJson(response, 404, { error: "No encontrado." });
@@ -1673,10 +1710,26 @@ const server = http.createServer(async (request, response) => {
     sendJson(response, 404, { error: "Ruta no encontrada." });
   } catch (error) {
     if (error instanceof HttpError) {
+      logWarning(error.message, buildRequestLogFields(request, requestId, {
+        path: requestPath,
+        statusCode: error.statusCode,
+        userId: authenticatedUserForLog?.id,
+        userEmail: authenticatedUserForLog?.email,
+      }));
       sendJson(response, error.statusCode, { error: error.message });
       return;
     }
 
+    logError("Error no controlado procesando request.", error, buildRequestLogFields(
+      request,
+      requestId,
+      {
+        path: requestPath,
+        statusCode: 500,
+        userId: authenticatedUserForLog?.id,
+        userEmail: authenticatedUserForLog?.email,
+      },
+    ));
     sendJson(response, 500, {
       error: "Error interno del servidor.",
       details: getErrorMessage(error),
@@ -1689,17 +1742,30 @@ server.headersTimeout = 66_000;
 
 server.on("error", (error: NodeJS.ErrnoException) => {
   if (error.code === "EADDRINUSE") {
-    console.error(`No se puede iniciar el backend: el puerto ${PORT} ya esta en uso.`);
-    console.error("Cierra el proceso anterior o define otro puerto con la variable PORT.");
+    logFatal(`No se puede iniciar el backend: el puerto ${PORT} ya esta en uso.`, error);
+    logFatal("Cierra el proceso anterior o define otro puerto con la variable PORT.", error);
     process.exit(1);
   }
 
-  console.error("No se pudo iniciar el backend.", error);
+  logFatal("No se pudo iniciar el backend.", error);
   process.exit(1);
 });
 
 server.listen(PORT, () => {
-  console.log(`Backend escuchando en http://localhost:${PORT}`);
+  logInfo(`Backend escuchando en http://localhost:${PORT}`, {
+    port: PORT,
+    nodeEnv: process.env.NODE_ENV ?? "development",
+  });
+});
+
+process.on("uncaughtException", (error) => {
+  logFatal("Excepcion no capturada. El proceso se cerrara.", error);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  logFatal("Promesa rechazada sin manejo. El proceso se cerrara.", reason);
+  process.exit(1);
 });
 
 process.on("SIGINT", () => {
@@ -1711,7 +1777,7 @@ process.on("SIGTERM", () => {
 });
 
 async function shutdown(signal: string) {
-  console.log(`Cerrando backend por ${signal}...`);
+  logInfo(`Cerrando backend por ${signal}...`, { signal });
   server.close();
   await prisma.$disconnect();
   await pool.end();
@@ -1925,6 +1991,49 @@ function isAllowedRequestOrigin(origin: string) {
 
 function readSingleHeader(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function createRequestId() {
+  return randomBytes(8).toString("hex");
+}
+
+function calculateDurationMs(startedAt: bigint) {
+  return Number((process.hrtime.bigint() - startedAt) / 1_000_000n);
+}
+
+function buildSafeRequestPath(url: URL) {
+  const queryKeys = [...url.searchParams.keys()];
+
+  if (queryKeys.length === 0) {
+    return url.pathname;
+  }
+
+  return `${url.pathname}?${queryKeys.map((key) => `${key}=[redacted]`).join("&")}`;
+}
+
+function getClientIp(request: IncomingMessage) {
+  const forwardedFor = readSingleHeader(request.headers["x-forwarded-for"]);
+
+  if (forwardedFor != null && forwardedFor.trim().length > 0) {
+    return forwardedFor.split(",")[0]?.trim();
+  }
+
+  return request.socket.remoteAddress;
+}
+
+function buildRequestLogFields(
+  request: IncomingMessage,
+  requestId: string,
+  fields: Record<string, unknown> = {},
+) {
+  return {
+    requestId,
+    method: request.method,
+    path: request.url,
+    ip: getClientIp(request),
+    userAgent: readSingleHeader(request.headers["user-agent"]),
+    ...fields,
+  };
 }
 
 function normalizeRequestOrigin(value: string | undefined) {
