@@ -3424,6 +3424,10 @@ function normalizeCiValue(value: string | null) {
   return (value ?? "").trim().replace(/\s+/g, "").toUpperCase();
 }
 
+function normalizeCiLookupValue(value: string | null) {
+  return normalizeCiValue(value).replace(/-/g, "");
+}
+
 function readOptionalQueryInt(url: URL, key: string) {
   const rawValue = url.searchParams.get(key)?.trim();
 
@@ -4101,7 +4105,7 @@ function buildDefaultUserPassword(input: {
 
 async function findUserForLogin(login: string) {
   const normalizedLogin = normalizeEmailValue(login);
-  const normalizedCi = normalizeCiValue(login);
+  const normalizedCi = normalizeCiLookupValue(login);
 
   const userByEmail = await prisma.usuarios.findUnique({
     where: { email: normalizedLogin },
@@ -4122,7 +4126,7 @@ async function findUserForLogin(login: string) {
     orderBy: [{ activo: "desc" }, { updated_at: "desc" }, { id: "desc" }],
   });
 
-  return users.find((user) => normalizeCiValue(user.ci) === normalizedCi) ?? null;
+  return users.find((user) => normalizeCiLookupValue(user.ci) === normalizedCi) ?? null;
 }
 
 function verifyDefaultCiPassword(
@@ -4172,7 +4176,7 @@ async function findUserByLoginOrCi(
   },
 ) {
   const normalizedLogin = normalizeEmailValue(input.login);
-  const normalizedCi = normalizeCiValue(input.ci);
+  const normalizedCi = normalizeCiLookupValue(input.ci);
   const users = await tx.usuarios.findMany({
     where:
       input.excludeUserId == null
@@ -4192,13 +4196,13 @@ async function findUserByLoginOrCi(
   return users.find((user: { email: string; ci: string | null }) => {
     return (
       normalizeEmailValue(user.email) === normalizedLogin ||
-      normalizeCiValue(user.ci) === normalizedCi
+      normalizeCiLookupValue(user.ci) === normalizedCi
     );
   }) ?? null;
 }
 
 function sameCiValue(left: string | null, right: string) {
-  return normalizeCiValue(left) === normalizeCiValue(right);
+  return normalizeCiLookupValue(left) === normalizeCiLookupValue(right);
 }
 
 function verifyPassword(password: string, storedHash: string) {
