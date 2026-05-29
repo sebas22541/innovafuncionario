@@ -82,6 +82,8 @@ const PAYLOAD_ENCRYPTION_KEY_BYTES =
   PAYLOAD_ENCRYPTION_KEY == null
     ? null
     : createHash("sha256").update(PAYLOAD_ENCRYPTION_KEY).digest();
+const PAYLOAD_RESPONSE_ENCRYPTION_ENABLED =
+  process.env.PAYLOAD_RESPONSE_ENCRYPTION === "true";
 const REFERENCE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DASHBOARD_CACHE_TTL_MS = 30 * 1000;
 const EVENT_SUMMARY_CACHE_TTL_MS = 15 * 1000;
@@ -2532,7 +2534,10 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
 }
 
 function encryptJsonPayload(payload: unknown) {
-  if (PAYLOAD_ENCRYPTION_KEY_BYTES == null) {
+  if (
+    !PAYLOAD_RESPONSE_ENCRYPTION_ENABLED ||
+    PAYLOAD_ENCRYPTION_KEY_BYTES == null
+  ) {
     return null;
   }
 
