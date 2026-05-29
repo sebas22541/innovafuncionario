@@ -39,86 +39,116 @@ pipeline {
 
         stage('Stop old containers') {
             steps {
-                withCredentials([string(credentialsId: 'payload-encryption-key-prod', variable: 'PAYLOAD_ENCRYPTION_KEY')]) {
-                    script {
+                script {
 
-                        if (params.SERVICE == 'all') {
-                            sh """
-                                docker-compose \
-                                --env-file backend/.env.prod \
-                                -f ${env.DOCKER_COMPOSE_FILE} \
-                                down --remove-orphans
-                            """
-                        } else {
-                            sh """
-                                docker-compose \
-                                --env-file backend/.env.prod \
-                                -f ${env.DOCKER_COMPOSE_FILE} \
-                                stop ${params.SERVICE}
-                            """
-                        }
-
+                    if (params.SERVICE == 'all') {
+                        sh """
+                            set +x
+                            set -a
+                            . backend/.env.prod
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
+                            docker-compose \
+                            --env-file backend/.env.prod \
+                            -f ${env.DOCKER_COMPOSE_FILE} \
+                            down --remove-orphans
+                        """
+                    } else {
+                        sh """
+                            set +x
+                            set -a
+                            . backend/.env.prod
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
+                            docker-compose \
+                            --env-file backend/.env.prod \
+                            -f ${env.DOCKER_COMPOSE_FILE} \
+                            stop ${params.SERVICE}
+                        """
                     }
+
                 }
             }
         }
 
         stage('Build') {
             steps {
-                withCredentials([string(credentialsId: 'payload-encryption-key-prod', variable: 'PAYLOAD_ENCRYPTION_KEY')]) {
-                    script {
+                script {
 
-                        if (params.SERVICE == 'all') {
+                    if (params.SERVICE == 'all') {
 
-                            sh """
-                                docker-compose \
-                                --env-file backend/.env.prod \
-                                -f ${env.DOCKER_COMPOSE_FILE} \
-                                build --parallel
-                            """
+                        sh """
+                            set +x
+                            set -a
+                            . backend/.env.prod
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
+                            docker-compose \
+                            --env-file backend/.env.prod \
+                            -f ${env.DOCKER_COMPOSE_FILE} \
+                            build --parallel
+                        """
 
-                        } else {
+                    } else {
 
-                            sh """
-                                docker-compose \
-                                --env-file backend/.env.prod \
-                                -f ${env.DOCKER_COMPOSE_FILE} \
-                                build ${params.SERVICE}
-                            """
-
-                        }
+                        sh """
+                            set +x
+                            set -a
+                            . backend/.env.prod
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
+                            docker-compose \
+                            --env-file backend/.env.prod \
+                            -f ${env.DOCKER_COMPOSE_FILE} \
+                            build ${params.SERVICE}
+                        """
 
                     }
+
                 }
             }
         }
 
         stage('Deploy') {
             steps {
-                withCredentials([string(credentialsId: 'payload-encryption-key-prod', variable: 'PAYLOAD_ENCRYPTION_KEY')]) {
-                    script {
+                script {
 
-                        if (params.SERVICE == 'all') {
+                    if (params.SERVICE == 'all') {
 
-                            sh """
-                                docker-compose \
-                                --env-file backend/.env.prod \
-                                -f ${env.DOCKER_COMPOSE_FILE} \
-                                up -d --remove-orphans
-                            """
+                        sh """
+                            set +x
+                            set -a
+                            . backend/.env.prod
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
+                            docker-compose \
+                            --env-file backend/.env.prod \
+                            -f ${env.DOCKER_COMPOSE_FILE} \
+                            up -d --remove-orphans
+                        """
 
-                        } else {
+                    } else {
 
-                            sh """
-                                docker-compose \
-                                --env-file backend/.env.prod \
-                                -f ${env.DOCKER_COMPOSE_FILE} \
-                                up -d ${params.SERVICE}
-                            """
-
-                        }
+                        sh """
+                            set +x
+                            set -a
+                            . backend/.env.prod
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
+                            docker-compose \
+                            --env-file backend/.env.prod \
+                            -f ${env.DOCKER_COMPOSE_FILE} \
+                            up -d ${params.SERVICE}
+                        """
 
                     }
+
                 }
             }
         }
