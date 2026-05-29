@@ -23,7 +23,7 @@ services:
       dockerfile: ./.infra/backend/dev/Dockerfile
     restart: unless-stopped
     env_file:
-      - ./backend/.env.prod
+      - ./backend/.env.dev
     environment:
       TZ: America/La_Paz
       PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:-}

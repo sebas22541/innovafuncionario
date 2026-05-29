@@ -265,9 +265,9 @@ const server = http.createServer(async (request, response) => {
   requestPath = buildSafeRequestPath(url);
 
   try {
-    enforceRateLimit(request, response);
     const authenticatedUser = await authenticateRequestIfRequired(request, url);
     authenticatedUserForLog = authenticatedUser;
+    enforceRateLimit(request, response, authenticatedUser);
 
     if (request.method === "GET" && url.pathname === "/") {
       sendJson(response, 404, { error: "No encontrado." });
@@ -2007,7 +2007,7 @@ function isUnsafeHttpMethod(method: string | undefined) {
 }
 
 function isAllowedRequestOrigin(origin: string) {
-  return ALLOWED_CORS_ORIGINS.size === 0 || ALLOWED_CORS_ORIGINS.has(origin);
+  return ALLOWED_CORS_ORIGINS.has(origin);
 }
 
 function readSingleHeader(value: string | string[] | undefined) {
@@ -2173,14 +2173,16 @@ function invalidateEventSummaryCache() {
 function parseAllowedCorsOrigins(value: string | undefined) {
   const defaultOrigins = [
     "https://innovafuncionario.cochabamba.bo",
+    "https://innovafuncionariodev.cochabamba.bo",
     "http://localhost:3000",
     "http://localhost:4016",
+    "http://localhost:8080",
   ];
   const origins = (value == null || value.trim().length === 0
     ? defaultOrigins
     : value.split(","))
     .map((origin) => origin.trim().replace(/\/+$/, ""))
-    .filter(Boolean);
+    .filter((origin) => origin.length > 0 && origin !== "*");
 
   return new Set(origins);
 }
@@ -2193,8 +2195,12 @@ function normalizeOptionalEnvValue(value: string | undefined) {
     : normalizedValue;
 }
 
-function enforceRateLimit(request: IncomingMessage, response: ServerResponse) {
-  const key = readClientIp(request);
+function enforceRateLimit(
+  request: IncomingMessage,
+  response: ServerResponse,
+  authenticatedUser: AuthenticatedUser,
+) {
+  const key = readRateLimitKey(request, authenticatedUser);
   const now = Date.now();
   pruneExpiredRateLimitBuckets(now);
   const bucket = rateLimitBuckets.get(key);
@@ -2222,6 +2228,17 @@ function enforceRateLimit(request: IncomingMessage, response: ServerResponse) {
       "Demasiadas solicitudes. Intenta nuevamente en un minuto.",
     );
   }
+}
+
+function readRateLimitKey(
+  request: IncomingMessage,
+  authenticatedUser: AuthenticatedUser,
+) {
+  if (authenticatedUser.id > 0) {
+    return `user:${authenticatedUser.id}`;
+  }
+
+  return `ip:${readClientIp(request)}`;
 }
 
 function pruneExpiredRateLimitBuckets(now: number) {
@@ -2305,15 +2322,6 @@ function isPublicRoute(request: IncomingMessage, url: URL) {
   if (
     request.method === "POST" &&
     url.pathname === "/api/auth/login"
-  ) {
-    return true;
-  }
-
-  if (
-    request.method === "GET" &&
-    (url.pathname === "/api/oficinas" ||
-      url.pathname === "/api/cargos" ||
-      url.pathname === "/api/departamentos")
   ) {
     return true;
   }
