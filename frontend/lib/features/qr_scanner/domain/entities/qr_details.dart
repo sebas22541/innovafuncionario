@@ -50,6 +50,7 @@ class QrDetails {
     this.officeId,
     this.officeName,
     this.officeCode,
+    this.cargoCodigo,
     this.photoUrl,
     this.eventAttendance,
   });
@@ -64,6 +65,7 @@ class QrDetails {
   final int? officeId;
   final String? officeName;
   final String? officeCode;
+  final String? cargoCodigo;
   final String? photoUrl;
   final QrEventAttendanceRecord? eventAttendance;
 }

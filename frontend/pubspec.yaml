@@ -80,6 +80,7 @@ flutter:
     - assets/images/inlogplo.png
     - assets/images/letrablan.png
     - assets/images/letragris.png
+    - assets/font-fallback/roboto/v32/KFOmCnqEu92Fr1Me4GZLCzYlKw.woff2
     - assets/font-fallback/notosanssymbols/v43/rP2up3q65FkAtHfwd-eIS2brbDN6gxP34F9jRRCe4W3gfQ8gb_VFRkzrbQ.woff2
     - assets/font-fallback/notosanssymbols2/v24/I_uyMoGduATTei9eI8daxVHDyfisHr71-gTBWXPM4Q.woff2
     - assets/font-fallback/notosanssymbols2/v24/I_uyMoGduATTei9eI8daxVHDyfisHr71-jrBWXPM4Q.woff2

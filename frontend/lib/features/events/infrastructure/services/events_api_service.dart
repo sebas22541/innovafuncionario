@@ -8,7 +8,9 @@ class EventsApiService {
   static const Duration _referenceCacheTtl = Duration(minutes: 5);
   static const Duration _eventSummaryCacheTtl = Duration(seconds: 20);
   List<EventOffice>? _officesCache;
+  List<EventJobTitle>? _jobTitlesCache;
   DateTime? _officesCacheAt;
+  DateTime? _jobTitlesCacheAt;
   List<EventRecord>? _eventSummaryCache;
   DateTime? _eventSummaryCacheAt;
 
@@ -24,6 +26,23 @@ class EventsApiService {
     _officesCacheAt = DateTime.now();
 
     return offices;
+  }
+
+  Future<List<EventJobTitle>> fetchJobTitles({
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh &&
+        _isCacheFresh(_jobTitlesCacheAt, _referenceCacheTtl)) {
+      return _jobTitlesCache ?? const [];
+    }
+
+    final payload = await _apiClient.getJson('/api/cargos');
+    final items = _readList(payload['data'], 'cargos');
+    final jobTitles = items.map(_parseJobTitle).toList(growable: false);
+    _jobTitlesCache = jobTitles;
+    _jobTitlesCacheAt = DateTime.now();
+
+    return jobTitles;
   }
 
   Future<List<EventRecord>> fetchEvents({
@@ -68,6 +87,7 @@ class EventsApiService {
       'longitud': draft.longitude,
       'oficinaIds': draft.officeIds,
       'oficinaIdsExcluidos': draft.excludedOfficeIds,
+      'cargoCodigos': draft.jobTitleCodes,
       'controles': draft.controls
           .map(
             (control) => {
@@ -97,6 +117,7 @@ class EventsApiService {
       'longitud': draft.longitude,
       'oficinaIds': draft.officeIds,
       'oficinaIdsExcluidos': draft.excludedOfficeIds,
+      'cargoCodigos': draft.jobTitleCodes,
       'requesterEmail': requesterEmail,
       'controles': draft.controls
           .map(
@@ -156,6 +177,7 @@ class EventsApiService {
   EventRecord _parseEvent(Map<String, dynamic> source) {
     final createdBy = _readMap(source['creadoPor'], 'creadoPor');
     final offices = _parseEventOffices(source);
+    final jobTitles = _parseEventJobTitles(source);
     final attended = _readList(
       source['asistieron'] ?? const [],
       'asistieron',
@@ -186,6 +208,11 @@ class EventsApiService {
         'controles',
       ).map(_parseEventControl).toList(growable: false),
       offices: offices,
+      jobTitles: jobTitles,
+      selectedJobTitleCodes: _readStringList(
+        source['cargoCodigosSeleccionados'],
+        'cargoCodigosSeleccionados',
+      ),
       selectedOfficeIds: _resolveSelectedOfficeIds(
         offices,
         source['oficinaIdsSeleccionados'],
@@ -203,6 +230,19 @@ class EventsApiService {
       hasDetailedAttendanceData:
           source['detalleCompleto'] as bool? ?? true,
     );
+  }
+
+  List<EventJobTitle> _parseEventJobTitles(Map<String, dynamic> source) {
+    final jobTitlesSource = source['cargos'];
+
+    if (jobTitlesSource is List && jobTitlesSource.isNotEmpty) {
+      return _readList(
+        jobTitlesSource,
+        'cargos',
+      ).map(_parseJobTitle).toList(growable: false);
+    }
+
+    return const [];
   }
 
   bool _isCacheFresh(DateTime? cachedAt, Duration ttl) {
@@ -279,6 +319,13 @@ class EventsApiService {
       name: _readString(source['nombre'], 'oficina.nombre'),
       code: _readString(source['codigo'], 'oficina.codigo'),
       level: _readInt(source['nivel'], 'oficina.nivel'),
+    );
+  }
+
+  EventJobTitle _parseJobTitle(Map<String, dynamic> source) {
+    return EventJobTitle(
+      code: _readString(source['codigo'], 'cargo.codigo'),
+      name: _readString(source['cargo'], 'cargo.cargo'),
     );
   }
 
@@ -441,6 +488,20 @@ List<int> _readIntList(dynamic source, String fieldName) {
 
   return source
       .map((item) => _readInt(item, fieldName))
+      .toList(growable: false);
+}
+
+List<String> _readStringList(dynamic source, String fieldName) {
+  if (source == null) {
+    return const [];
+  }
+
+  if (source is! List) {
+    throw StateError('El campo $fieldName no tiene un formato valido.');
+  }
+
+  return source
+      .map((item) => _readString(item, fieldName))
       .toList(growable: false);
 }
 

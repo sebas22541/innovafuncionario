@@ -39,6 +39,7 @@ class AppUser {
     required this.cargo,
     required this.numeroItem,
     required this.activo,
+    this.cargoCodigo,
     this.fotoUrl,
     this.officeId,
     this.officeName,
@@ -68,6 +69,7 @@ class AppUser {
   final String cargo;
   final String numeroItem;
   final bool activo;
+  final String? cargoCodigo;
   final String? fotoUrl;
   final int? officeId;
   final String? officeName;
@@ -98,6 +100,7 @@ class AppUser {
       cargo: cargo,
       numeroItem: numeroItem,
       activo: activo,
+      cargoCodigo: cargoCodigo,
       fotoUrl: fotoUrl,
       officeId: officeId,
       officeName: officeName,
@@ -133,6 +136,7 @@ class AppUser {
       cargo: _readString(source['cargo'], 'cargo'),
       numeroItem: _readString(source['numeroItem'], 'numeroItem'),
       activo: source['activo'] as bool? ?? true,
+      cargoCodigo: source['cargoCodigo'] as String?,
       fotoUrl: (source['fotoUrl'] ?? source['fotoBase64']) as String?,
       officeId: source['oficinaId'] as int?,
       officeName: source['oficinaNombre'] as String?,
@@ -163,6 +167,7 @@ class AppUser {
       'tipoVinculo': tipoVinculo,
       'unidad': unidad,
       'cargo': cargo,
+      'cargoCodigo': cargoCodigo,
       'numeroItem': numeroItem,
       'activo': activo,
       'fotoUrl': fotoUrl,

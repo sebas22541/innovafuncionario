@@ -60,6 +60,15 @@ class EventOffice {
   String get displayLabel => '$name | Cod. $code';
 }
 
+class EventJobTitle {
+  const EventJobTitle({required this.code, required this.name});
+
+  final String code;
+  final String name;
+
+  String get displayLabel => '$name | Cod. $code';
+}
+
 class EventRosterEntry {
   const EventRosterEntry({
     required this.id,
@@ -97,6 +106,7 @@ class EventRecordDraft {
     required this.name,
     required this.date,
     required this.officeIds,
+    required this.jobTitleCodes,
     this.excludedOfficeIds = const [],
     required this.controls,
     required this.address,
@@ -107,6 +117,7 @@ class EventRecordDraft {
   final String name;
   final DateTime date;
   final List<int> officeIds;
+  final List<String> jobTitleCodes;
   final List<int> excludedOfficeIds;
   final List<EventControlDraft> controls;
   final String address;
@@ -127,6 +138,8 @@ class EventRecord {
     this.longitude,
     this.controls = const [],
     this.offices = const [],
+    this.jobTitles = const [],
+    this.selectedJobTitleCodes = const [],
     this.selectedOfficeIds = const [],
     this.excludedOfficeIds = const [],
     this.attended = const [],
@@ -147,6 +160,8 @@ class EventRecord {
   final double? longitude;
   final List<EventControl> controls;
   final List<EventOffice> offices;
+  final List<EventJobTitle> jobTitles;
+  final List<String> selectedJobTitleCodes;
   final List<int> selectedOfficeIds;
   final List<int> excludedOfficeIds;
   final List<EventRosterEntry> attended;
@@ -180,6 +195,20 @@ class EventRecord {
   }
 
   String get officeNames => offices.map((office) => office.name).join(', ');
+
+  int get jobTitleCount => jobTitles.length;
+
+  String get jobTitleCountLabel {
+    if (jobTitleCount == 0) {
+      return 'Todos los cargos';
+    }
+
+    if (jobTitleCount == 1) {
+      return '1 cargo';
+    }
+
+    return '$jobTitleCount cargos';
+  }
 
   int get controlsCount => controls.length;
 

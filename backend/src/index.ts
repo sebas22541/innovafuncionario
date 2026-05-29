@@ -147,6 +147,11 @@ const eventInclude = {
       oficinas: true,
     },
   },
+  evento_cargos: {
+    include: {
+      cargos: true,
+    },
+  },
   asistencias: {
     include: {
       personas: {
@@ -182,6 +187,11 @@ const eventSummaryInclude = {
   evento_oficinas: {
     include: {
       oficinas: true,
+    },
+  },
+  evento_cargos: {
+    include: {
+      cargos: true,
     },
   },
 } as const;
@@ -970,6 +980,8 @@ const server = http.createServer(async (request, response) => {
           })),
         });
 
+        await syncEventJobTitles(tx, createdEvent.id, input.cargoCodigos);
+
         await tx.eventos.update({
           where: { id: createdEvent.id },
           data: {
@@ -1061,6 +1073,8 @@ const server = http.createServer(async (request, response) => {
             seleccion_directa: office.isDirectSelection,
           })),
         });
+
+        await syncEventJobTitles(tx, eventId, input.cargoCodigos);
 
         await tx.eventos.update({
           where: { id: eventId },
@@ -1392,6 +1406,11 @@ const server = http.createServer(async (request, response) => {
           evento_oficinas: {
             select: {
               oficina_id: true,
+            },
+          },
+          evento_cargos: {
+            include: {
+              cargos: true,
             },
           },
           evento_controles: {
@@ -1794,6 +1813,7 @@ type CreateEventInput = {
   longitud: number;
   oficinaIds: number[];
   oficinaIdsExcluidos: number[];
+  cargoCodigos: string[];
   controles: EventControlInput[];
   creatorEmail: string;
   creatorFullName: string;
@@ -1807,6 +1827,7 @@ type UpdateEventInput = {
   longitud: number;
   oficinaIds: number[];
   oficinaIdsExcluidos: number[];
+  cargoCodigos: string[];
   controles: EventControlInput[];
   requesterEmail: string;
 };
@@ -2436,6 +2457,26 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS "idx_usuarios_oficina_comision_id"
       ON "usuarios" ("oficina_comision_id")
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "evento_cargos" (
+      "evento_id" INTEGER NOT NULL,
+      "cargo_codigo" VARCHAR(50) NOT NULL,
+      CONSTRAINT "evento_cargos_pkey" PRIMARY KEY ("evento_id", "cargo_codigo"),
+      CONSTRAINT "evento_cargos_evento_id_fkey"
+        FOREIGN KEY ("evento_id") REFERENCES "eventos" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "evento_cargos_cargo_codigo_fkey"
+        FOREIGN KEY ("cargo_codigo") REFERENCES "cargos" ("codigo")
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_evento_cargos_cargo_codigo"
+      ON "evento_cargos" ("cargo_codigo")
+  `);
 }
 
 function getErrorMessage(error: unknown) {
@@ -2581,6 +2622,7 @@ function parseEventInputPayload(payload: unknown) {
     body,
     "oficinaIdsExcluidos",
   );
+  const cargoCodigos = readOptionalStringList(body, "cargoCodigos", "cargoCodigo");
   const controles = parseEventControlsInput(body);
 
   return {
@@ -2591,6 +2633,7 @@ function parseEventInputPayload(payload: unknown) {
     longitud,
     oficinaIds,
     oficinaIdsExcluidos,
+    cargoCodigos,
     controles,
   };
 }
@@ -2699,6 +2742,47 @@ async function createEventControls(
       evento_id: eventId,
       nombre: control.nombre,
       orden: control.orden,
+    })),
+  });
+}
+
+async function syncEventJobTitles(
+  tx: any,
+  eventId: number,
+  cargoCodigos: string[],
+) {
+  const uniqueCargoCodigos = [...new Set(cargoCodigos)];
+
+  await tx.evento_cargos.deleteMany({
+    where: { evento_id: eventId },
+  });
+
+  if (uniqueCargoCodigos.length === 0) {
+    return;
+  }
+
+  const existingCargos = await tx.cargos.findMany({
+    where: {
+      codigo: {
+        in: uniqueCargoCodigos,
+      },
+    },
+    select: {
+      codigo: true,
+    },
+  });
+  const existingCargoCodes = new Set(
+    existingCargos.map((cargo: { codigo: string }) => cargo.codigo),
+  );
+
+  if (existingCargoCodes.size !== uniqueCargoCodigos.length) {
+    throw new HttpError(400, "Debes seleccionar uno o mas cargos validos.");
+  }
+
+  await tx.evento_cargos.createMany({
+    data: uniqueCargoCodigos.map((cargoCodigo) => ({
+      evento_id: eventId,
+      cargo_codigo: cargoCodigo,
     })),
   });
 }
@@ -3457,6 +3541,44 @@ function readOptionalIntList(
     }
 
     return numericValue;
+  });
+
+  return [...new Set(parsedValues)];
+}
+
+function readOptionalStringList(
+  source: JsonRecord,
+  key: string,
+  itemName: string,
+) {
+  const rawValue = source[key];
+
+  if (rawValue == null) {
+    return [] as string[];
+  }
+
+  if (!Array.isArray(rawValue)) {
+    throw new HttpError(400, `El campo ${key} debe ser una lista valida.`);
+  }
+
+  const parsedValues = rawValue.map((value, index) => {
+    if (typeof value !== "string") {
+      throw new HttpError(
+        400,
+        `El valor ${index + 1} de ${key} no es valido.`,
+      );
+    }
+
+    const normalizedValue = value.trim();
+
+    if (normalizedValue.length < 1 || normalizedValue.length > 50) {
+      throw new HttpError(
+        400,
+        `El ${itemName} ${index + 1} no es valido.`,
+      );
+    }
+
+    return normalizedValue;
   });
 
   return [...new Set(parsedValues)];
@@ -5185,6 +5307,12 @@ function buildSerializedEventBase(event: any) {
   const directOfficeIds = offices
     .filter((office: any) => office.seleccionDirecta === true)
     .map((office: any) => office.id);
+  const cargos = (event.evento_cargos ?? [])
+    .map((item: any) => ({
+      codigo: item.cargos.codigo,
+      cargo: item.cargos.cargo,
+    }))
+    .sort((left: any, right: any) => left.cargo.localeCompare(right.cargo));
   const controls = (event.evento_controles ?? [])
     .map(serializeEventControl)
     .sort((left: any, right: any) => left.orden - right.orden);
@@ -5208,6 +5336,8 @@ function buildSerializedEventBase(event: any) {
     controles: controls,
     departamentos: departments,
     oficinas: offices,
+    cargos,
+    cargoCodigosSeleccionados: cargos.map((cargo: any) => cargo.codigo),
     oficinaIdsSeleccionados: directOfficeIds,
     oficinaIdsExcluidos: event.oficina_ids_excluidos ?? [],
   };
@@ -5332,6 +5462,7 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     oficinaComisionId: user.oficina_comision_id ?? user.oficina_comision?.id ?? null,
     oficinaComisionNombre: commissionOfficeName,
     tieneComision: commissionOfficeName != null || user.oficina_comision_id != null,
+    cargoCodigo: user.cargo_codigo ?? null,
     cargo: user.cargo ?? "",
     numeroItem: user.numero_item ?? "",
     activo: user.activo,
@@ -5478,6 +5609,7 @@ function serializeQrPersonDetail(
     oficinaId: resolveLinkedOfficeId(linkedUser),
     oficinaNombre: officeName,
     oficinaCodigo: resolveLinkedOfficeCode(linkedUser),
+    cargoCodigo: linkedUser?.cargo_codigo ?? null,
     cargo: linkedUser?.cargo ?? null,
     tipoVinculo: linkedUser?.tipo_vinculo ?? null,
     numeroItem: linkedUser?.numero_item ?? null,
@@ -5499,19 +5631,30 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
     resolveLinkedOfficeId(linkedUser) ??
     (await resolveOfficeForUser(prisma, linkedUser))?.id ??
     null;
-
-  if (userOfficeId == null) {
-    throw new HttpError(
-      403,
-      "Este usuario no esta permitido asistir a este evento.",
-    );
-  }
-
   const allowedOfficeIds = new Set<number>(
     (event.evento_oficinas ?? []).map((item: { oficina_id: number }) => item.oficina_id),
   );
+  const allowedCargoCodigos = new Set<string>(
+    (event.evento_cargos ?? [])
+      .map((item: { cargo_codigo: string }) => item.cargo_codigo)
+      .filter((cargoCodigo: string | null) => cargoCodigo != null),
+  );
+  const allowedCargoNames = new Set<string>(
+    (event.evento_cargos ?? [])
+      .map((item: { cargos?: { cargo?: string | null } }) =>
+        normalizeOfficeMatchText(item.cargos?.cargo),
+      )
+      .filter((cargoName: string | null) => cargoName != null),
+  );
+  const userCargoCodigo = normalizeOptionalText(linkedUser?.cargo_codigo);
+  const userCargoName = normalizeOfficeMatchText(linkedUser?.cargo);
+  const matchesOffice = userOfficeId != null && allowedOfficeIds.has(userOfficeId);
+  const matchesCargo =
+    allowedCargoCodigos.size > 0 &&
+    ((userCargoCodigo != null && allowedCargoCodigos.has(userCargoCodigo)) ||
+      (userCargoName != null && allowedCargoNames.has(userCargoName)));
 
-  if (!allowedOfficeIds.has(userOfficeId)) {
+  if (!matchesOffice && !matchesCargo) {
     throw new HttpError(
       403,
       "Este usuario no esta permitido asistir a este evento.",

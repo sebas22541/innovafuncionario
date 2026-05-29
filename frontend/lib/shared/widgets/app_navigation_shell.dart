@@ -215,6 +215,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 activeEventId: _scannerEvent?.id,
                 activeEventName: _scannerEvent?.name,
                 activeEventOffices: _scannerEvent?.offices ?? const [],
+                activeEventJobTitles: _scannerEvent?.jobTitles ?? const [],
                 activeEventControls: _scannerEvent?.controls ?? const [],
               )
             : UserEventsScreen(

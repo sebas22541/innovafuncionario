@@ -20,6 +20,7 @@ class QrScannerScreen extends StatefulWidget {
     this.activeEventId,
     this.activeEventName,
     this.activeEventOffices = const [],
+    this.activeEventJobTitles = const [],
     this.activeEventControls = const [],
   });
 
@@ -27,6 +28,7 @@ class QrScannerScreen extends StatefulWidget {
   final int? activeEventId;
   final String? activeEventName;
   final List<EventOffice> activeEventOffices;
+  final List<EventJobTitle> activeEventJobTitles;
   final List<EventControl> activeEventControls;
 
   @override
@@ -76,6 +78,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
           activeEventId: widget.activeEventId,
           activeEventName: widget.activeEventName,
           activeEventOffices: widget.activeEventOffices,
+          activeEventJobTitles: widget.activeEventJobTitles,
           activeEventControls: widget.activeEventControls,
           manualCi: manualCi,
           prefetchedQrDetails: prefetchedQrDetails,

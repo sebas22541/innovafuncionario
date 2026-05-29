@@ -75,6 +75,7 @@ class QrDetailsModel {
     this.officeId,
     this.officeName,
     this.officeCode,
+    this.cargoCodigo,
     this.photoUrl,
     this.eventAttendance,
   });
@@ -89,6 +90,7 @@ class QrDetailsModel {
   final int? officeId;
   final String? officeName;
   final String? officeCode;
+  final String? cargoCodigo;
   final String? photoUrl;
   final QrEventAttendanceRecordModel? eventAttendance;
 
@@ -104,6 +106,7 @@ class QrDetailsModel {
       officeId: map['officeId'] as int?,
       officeName: map['officeName'] as String?,
       officeCode: map['officeCode'] as String?,
+      cargoCodigo: map['cargoCodigo'] as String?,
       photoUrl: (map['photoUrl'] ?? map['photoBase64']) as String?,
       eventAttendance: null,
     );
@@ -121,6 +124,7 @@ class QrDetailsModel {
       officeId: officeId,
       officeName: officeName,
       officeCode: officeCode,
+      cargoCodigo: cargoCodigo,
       photoUrl: photoUrl,
       eventAttendance: eventAttendance?.toEntity(),
     );

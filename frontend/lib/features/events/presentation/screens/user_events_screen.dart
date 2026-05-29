@@ -124,13 +124,13 @@ class _UserEventsScreenState extends State<UserEventsScreen> {
   }
 
   Future<void> _loadOfficeEvents() async {
-    if (!_hasOfficeReference(widget.currentUser)) {
+    if (!_hasEventReference(widget.currentUser)) {
       setState(() {
         _attendedReport = null;
         _availableEvents = const [];
         _isLoading = false;
         _errorMessage =
-            'Tu usuario no tiene una oficina asociada para consultar eventos.';
+            'Tu usuario no tiene oficina ni cargo asociado para consultar eventos.';
       });
       return;
     }
@@ -232,7 +232,7 @@ class _UserEventsScreenState extends State<UserEventsScreen> {
                           Text(
                             _isAttendedView
                                 ? 'Aqui ves todos los eventos en los que tu asistencia ya fue registrada.'
-                                : 'Aqui ves todos los eventos asignados a tu oficina, con sus datos y ubicacion.',
+                                : 'Aqui ves todos los eventos asignados a tu oficina o cargo, con sus datos y ubicacion.',
                             style: Theme.of(context).textTheme.bodyMedium,
                           ),
                           const SizedBox(height: 18),
@@ -256,6 +256,15 @@ class _UserEventsScreenState extends State<UserEventsScreen> {
                                 icon: Icons.apartment_rounded,
                                 width: 390,
                               ),
+                              if (!_isAttendedView)
+                                _MiniStatCard(
+                                  label: 'Cargo',
+                                  value: widget.currentUser.cargo.trim().isEmpty
+                                      ? 'Sin cargo'
+                                      : widget.currentUser.cargo,
+                                  icon: Icons.badge_rounded,
+                                  width: 390,
+                                ),
                             ],
                           ),
                           if (_errorMessage != null) ...[
@@ -309,9 +318,9 @@ class _UserEventsScreenState extends State<UserEventsScreen> {
     if (_availableEvents.isEmpty) {
       return const _EmptyUserEventsState(
         icon: Icons.event_note_rounded,
-        title: 'No hay eventos asociados a tu oficina',
+        title: 'No hay eventos asociados a tu oficina o cargo',
         description:
-            'Cuando creen eventos para tu oficina, apareceran aqui con su informacion y minimapa.',
+            'Cuando creen eventos para tu oficina o cargo, apareceran aqui con su informacion y minimapa.',
       );
     }
 
@@ -874,6 +883,12 @@ class _EmptyUserEventsState extends StatelessWidget {
   }
 }
 
+bool _hasEventReference(AppUser currentUser) {
+  return _hasOfficeReference(currentUser) ||
+      (currentUser.cargoCodigo ?? '').trim().isNotEmpty ||
+      currentUser.cargo.trim().isNotEmpty;
+}
+
 bool _hasOfficeReference(AppUser currentUser) {
   if (currentUser.hasCommission) {
     return currentUser.commissionOfficeId != null ||
@@ -907,9 +922,31 @@ List<EventRecord> _filterEventsForCurrentUser(
         ? currentUser.commissionOfficeName ?? ''
         : _resolvedOfficeName(currentUser),
   );
+  final cargoCodigo = (currentUser.cargoCodigo ?? '').trim();
+  final cargoName = _normalizeOfficeSearchText(currentUser.cargo);
 
   return events
       .where((event) {
+        final matchesJobTitle = event.jobTitles.any((jobTitle) {
+          if (cargoCodigo.isNotEmpty && jobTitle.code == cargoCodigo) {
+            return true;
+          }
+
+          if (cargoName.isEmpty) {
+            return false;
+          }
+
+          final eventJobTitleName = _normalizeOfficeSearchText(jobTitle.name);
+
+          return eventJobTitleName == cargoName ||
+              eventJobTitleName.contains(cargoName) ||
+              cargoName.contains(eventJobTitleName);
+        });
+
+        if (matchesJobTitle) {
+          return true;
+        }
+
         if (officeId != null && event.selectedOfficeIds.contains(officeId)) {
           return true;
         }
