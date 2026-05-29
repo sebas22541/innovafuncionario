@@ -78,8 +78,6 @@ const ALLOWED_CORS_ORIGINS = parseAllowedCorsOrigins(
 const PAYLOAD_ENCRYPTION_KEY = normalizeOptionalEnvValue(
   process.env.PAYLOAD_ENCRYPTION_KEY,
 );
-const PAYLOAD_ENCRYPTION_REQUIRED =
-  process.env.PAYLOAD_ENCRYPTION_REQUIRED !== "false";
 const PAYLOAD_ENCRYPTION_KEY_BYTES =
   PAYLOAD_ENCRYPTION_KEY == null
     ? null
@@ -98,14 +96,6 @@ if (!DATABASE_URL) {
   logFatal(
     "DATABASE_URL no esta definido en backend/.env.",
     new Error("DATABASE_URL no esta definido en backend/.env."),
-  );
-  process.exit(1);
-}
-
-if (PAYLOAD_ENCRYPTION_REQUIRED && PAYLOAD_ENCRYPTION_KEY_BYTES == null) {
-  logFatal(
-    "PAYLOAD_ENCRYPTION_KEY no esta definido. El backend no puede responder datos personales sin cifrado.",
-    new Error("PAYLOAD_ENCRYPTION_KEY no esta definido."),
   );
   process.exit(1);
 }
@@ -2536,14 +2526,6 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
     parsedBody = JSON.parse(rawBody);
   } catch {
     throw new HttpError(400, "El cuerpo JSON no es valido.");
-  }
-
-  if (
-    PAYLOAD_ENCRYPTION_REQUIRED &&
-    PAYLOAD_ENCRYPTION_KEY_BYTES != null &&
-    !isEncryptedJsonEnvelope(parsedBody)
-  ) {
-    throw new HttpError(400, "El cuerpo JSON debe estar cifrado.");
   }
 
   return decryptJsonPayload(parsedBody);
