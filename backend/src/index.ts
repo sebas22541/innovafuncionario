@@ -3037,7 +3037,7 @@ function parseLoginInput(payload: unknown): LoginInput {
   const body = expectRecord(payload);
 
   return {
-    email: readRequiredString(body, "email", 3, 150).toLowerCase(),
+    email: readRequiredString(body, "email", 3, 150).trim(),
     password: readRequiredString(body, "password", 6, 200),
   };
 }
@@ -3421,7 +3421,7 @@ function normalizeEmailValue(value: string) {
 }
 
 function normalizeCiValue(value: string | null) {
-  return (value ?? "").trim().replace(/\s+/g, "");
+  return (value ?? "").trim().replace(/\s+/g, "").toUpperCase();
 }
 
 function readOptionalQueryInt(url: URL, key: string) {
@@ -4112,11 +4112,17 @@ async function findUserForLogin(login: string) {
     return userByEmail;
   }
 
-  return prisma.usuarios.findFirst({
-    where: { ci: normalizedCi },
+  const users = await prisma.usuarios.findMany({
+    where: {
+      ci: {
+        not: null,
+      },
+    },
     include: userWithOfficeInclude,
     orderBy: [{ activo: "desc" }, { updated_at: "desc" }, { id: "desc" }],
   });
+
+  return users.find((user) => normalizeCiValue(user.ci) === normalizedCi) ?? null;
 }
 
 function verifyDefaultCiPassword(

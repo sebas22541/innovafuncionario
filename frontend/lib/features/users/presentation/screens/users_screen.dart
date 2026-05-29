@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -33,6 +34,10 @@ class _UsersScreenState extends State<UsersScreen> {
   bool _isLoadingReferenceData = false;
   final Set<int> _updatingUserIds = <int>{};
   final TextEditingController _searchController = TextEditingController();
+  final Map<String, String> _userSearchIndex = <String, String>{};
+  Timer? _searchDebounce;
+  String _searchQuery = '';
+  List<AppUser>? _filteredUsersCache;
   OfficeOption? _selectedFilterOffice;
   String? _errorMessage;
   int _currentPage = 0;
@@ -42,14 +47,21 @@ class _UsersScreenState extends State<UsersScreen> {
   int get _externalCount => _users.where((user) => user.isExternalUser).length;
   int get _activeUsersCount => _users.where((user) => user.activo).length;
   List<AppUser> get _filteredUsers {
-    final query = _normalizeSearchText(_searchController.text);
+    final cachedUsers = _filteredUsersCache;
+
+    if (cachedUsers != null) {
+      return cachedUsers;
+    }
+
+    final query = _searchQuery;
     final selectedOffice = _selectedFilterOffice;
 
     if (query.isEmpty && selectedOffice == null) {
+      _filteredUsersCache = _users;
       return _users;
     }
 
-    return _users
+    final filteredUsers = _users
         .where((user) {
           final matchesOffice =
               selectedOffice == null ||
@@ -63,18 +75,12 @@ class _UsersScreenState extends State<UsersScreen> {
             return true;
           }
 
-          final searchableText = _normalizeSearchText(
-            '${user.ci} ${user.fullName} ${user.nombreCompleto} '
-            '${user.primerApellido} ${user.segundoApellido} '
-            '${user.tercerApellido} ${user.email} '
-            '${user.officeCode} ${user.officeName} '
-            '${user.primaryOfficeName} ${user.commissionOfficeName} '
-            '${user.unidad}',
-          );
-
-          return searchableText.contains(query);
+          return _searchableTextForUser(user).contains(query);
         })
         .toList(growable: false);
+
+    _filteredUsersCache = filteredUsers;
+    return filteredUsers;
   }
 
   int get _totalPages => _filteredUsers.isEmpty
@@ -99,8 +105,73 @@ class _UsersScreenState extends State<UsersScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _invalidateUserFilters({bool clearSearchIndex = false}) {
+    _filteredUsersCache = null;
+
+    if (clearSearchIndex) {
+      _userSearchIndex.clear();
+    }
+  }
+
+  void _handleSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (!mounted) {
+        return;
+      }
+
+      final nextQuery = _normalizeSearchText(value);
+
+      if (nextQuery == _searchQuery) {
+        return;
+      }
+
+      setState(() {
+        _searchQuery = nextQuery;
+        _currentPage = 0;
+        _invalidateUserFilters();
+      });
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+
+    setState(() {
+      _searchController.clear();
+      _searchQuery = '';
+      _currentPage = 0;
+      _invalidateUserFilters();
+    });
+  }
+
+  String _searchableTextForUser(AppUser user) {
+    final cacheKey =
+        '${user.id ?? 'new'}|${user.email}|${user.ci}|${user.fullName}|'
+        '${user.officeCode}|${user.officeName}|${user.primaryOfficeName}|'
+        '${user.commissionOfficeName}|${user.unidad}';
+    final cachedText = _userSearchIndex[cacheKey];
+
+    if (cachedText != null) {
+      return cachedText;
+    }
+
+    final searchableText = _normalizeSearchText(
+      '${user.ci} ${user.fullName} ${user.nombreCompleto} '
+      '${user.primerApellido} ${user.segundoApellido} '
+      '${user.tercerApellido} ${user.email} '
+      '${user.officeCode} ${user.officeName} '
+      '${user.primaryOfficeName} ${user.commissionOfficeName} '
+      '${user.unidad}',
+    );
+    _userSearchIndex[cacheKey] = searchableText;
+
+    return searchableText;
   }
 
   Future<void> _loadData() async {
@@ -124,6 +195,7 @@ class _UsersScreenState extends State<UsersScreen> {
 
       setState(() {
         _users = _sortUsers(users);
+        _invalidateUserFilters(clearSearchIndex: true);
         _currentPage = _safeCurrentPage;
       });
     } on BackendApiException catch (error) {
@@ -201,6 +273,7 @@ class _UsersScreenState extends State<UsersScreen> {
 
       setState(() {
         _users = _sortUsers([createdUser, ..._users]);
+        _invalidateUserFilters(clearSearchIndex: true);
         _currentPage = 0;
       });
 
@@ -257,6 +330,7 @@ class _UsersScreenState extends State<UsersScreen> {
           updatedUser,
           ..._users.where((item) => item.id != updatedUser.id),
         ]);
+        _invalidateUserFilters(clearSearchIndex: true);
         _currentPage = _safeCurrentPage;
       });
 
@@ -352,6 +426,7 @@ class _UsersScreenState extends State<UsersScreen> {
           updatedUser,
           ..._users.where((item) => item.id != updatedUser.id),
         ]);
+        _invalidateUserFilters(clearSearchIndex: true);
         _currentPage = _safeCurrentPage;
       });
 
@@ -494,6 +569,7 @@ class _UsersScreenState extends State<UsersScreen> {
     setState(() {
       _selectedFilterOffice = office;
       _currentPage = 0;
+      _invalidateUserFilters();
     });
   }
 
@@ -603,11 +679,7 @@ class _UsersScreenState extends State<UsersScreen> {
                   const SizedBox(height: 16),
                   TextField(
                     controller: _searchController,
-                    onChanged: (_) {
-                      setState(() {
-                        _currentPage = 0;
-                      });
-                    },
+                    onChanged: _handleSearchChanged,
                     decoration: InputDecoration(
                       labelText: 'Buscar usuarios',
                       hintText: 'Busca por CI, nombre, usuario u oficina',
@@ -616,12 +688,7 @@ class _UsersScreenState extends State<UsersScreen> {
                           ? null
                           : IconButton(
                               tooltip: 'Limpiar busqueda',
-                              onPressed: () {
-                                setState(() {
-                                  _searchController.clear();
-                                  _currentPage = 0;
-                                });
-                              },
+                              onPressed: _clearSearch,
                               icon: const Icon(Icons.close_rounded),
                             ),
                     ),
@@ -637,6 +704,7 @@ class _UsersScreenState extends State<UsersScreen> {
                             setState(() {
                               _selectedFilterOffice = null;
                               _currentPage = 0;
+                              _invalidateUserFilters();
                             });
                           },
                   ),
