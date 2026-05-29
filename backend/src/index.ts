@@ -78,6 +78,8 @@ const ALLOWED_CORS_ORIGINS = parseAllowedCorsOrigins(
 const PAYLOAD_ENCRYPTION_KEY = normalizeOptionalEnvValue(
   process.env.PAYLOAD_ENCRYPTION_KEY,
 );
+const PAYLOAD_ENCRYPTION_REQUIRED =
+  process.env.PAYLOAD_ENCRYPTION_REQUIRED !== "false";
 const PAYLOAD_ENCRYPTION_KEY_BYTES =
   PAYLOAD_ENCRYPTION_KEY == null
     ? null
@@ -96,6 +98,14 @@ if (!DATABASE_URL) {
   logFatal(
     "DATABASE_URL no esta definido en backend/.env.",
     new Error("DATABASE_URL no esta definido en backend/.env."),
+  );
+  process.exit(1);
+}
+
+if (PAYLOAD_ENCRYPTION_REQUIRED && PAYLOAD_ENCRYPTION_KEY_BYTES == null) {
+  logFatal(
+    "PAYLOAD_ENCRYPTION_KEY no esta definido. El backend no puede responder datos personales sin cifrado.",
+    new Error("PAYLOAD_ENCRYPTION_KEY no esta definido."),
   );
   process.exit(1);
 }
@@ -265,9 +275,12 @@ const server = http.createServer(async (request, response) => {
   requestPath = buildSafeRequestPath(url);
 
   try {
+    enforceRateLimit(request, response, null);
     const authenticatedUser = await authenticateRequestIfRequired(request, url);
     authenticatedUserForLog = authenticatedUser;
-    enforceRateLimit(request, response, authenticatedUser);
+    if (authenticatedUser.id > 0) {
+      enforceRateLimit(request, response, authenticatedUser);
+    }
 
     if (request.method === "GET" && url.pathname === "/") {
       sendJson(response, 404, { error: "No encontrado." });
@@ -2087,6 +2100,8 @@ function sendJson(
     payload = encryptedPayload;
   }
 
+  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Pragma", "no-cache");
   response.writeHead(statusCode);
   response.end(JSON.stringify(payload, null, 2));
 }
@@ -2198,9 +2213,10 @@ function normalizeOptionalEnvValue(value: string | undefined) {
 function enforceRateLimit(
   request: IncomingMessage,
   response: ServerResponse,
-  authenticatedUser: AuthenticatedUser,
+  authenticatedUser: AuthenticatedUser | null,
 ) {
   const key = readRateLimitKey(request, authenticatedUser);
+  const scope = authenticatedUser == null ? "ip" : "user";
   const now = Date.now();
   pruneExpiredRateLimitBuckets(now);
   const bucket = rateLimitBuckets.get(key);
@@ -2211,12 +2227,12 @@ function enforceRateLimit(
       resetAt: now + RATE_LIMIT_WINDOW_MS,
     };
     rateLimitBuckets.set(key, nextBucket);
-    setRateLimitHeaders(response, nextBucket);
+    setRateLimitHeaders(response, nextBucket, scope);
     return;
   }
 
   bucket.count += 1;
-  setRateLimitHeaders(response, bucket);
+  setRateLimitHeaders(response, bucket, scope);
 
   if (bucket.count > RATE_LIMIT_MAX_REQUESTS) {
     response.setHeader(
@@ -2232,9 +2248,9 @@ function enforceRateLimit(
 
 function readRateLimitKey(
   request: IncomingMessage,
-  authenticatedUser: AuthenticatedUser,
+  authenticatedUser: AuthenticatedUser | null,
 ) {
-  if (authenticatedUser.id > 0) {
+  if (authenticatedUser != null && authenticatedUser.id > 0) {
     return `user:${authenticatedUser.id}`;
   }
 
@@ -2252,8 +2268,10 @@ function pruneExpiredRateLimitBuckets(now: number) {
 function setRateLimitHeaders(
   response: ServerResponse,
   bucket: RateLimitBucket,
+  scope: "ip" | "user",
 ) {
   response.setHeader("X-RateLimit-Limit", RATE_LIMIT_MAX_REQUESTS.toString());
+  response.setHeader("X-RateLimit-Scope", scope);
   response.setHeader(
     "X-RateLimit-Remaining",
     Math.max(0, RATE_LIMIT_MAX_REQUESTS - bucket.count).toString(),
@@ -2518,6 +2536,14 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
     parsedBody = JSON.parse(rawBody);
   } catch {
     throw new HttpError(400, "El cuerpo JSON no es valido.");
+  }
+
+  if (
+    PAYLOAD_ENCRYPTION_REQUIRED &&
+    PAYLOAD_ENCRYPTION_KEY_BYTES != null &&
+    !isEncryptedJsonEnvelope(parsedBody)
+  ) {
+    throw new HttpError(400, "El cuerpo JSON debe estar cifrado.");
   }
 
   return decryptJsonPayload(parsedBody);

@@ -26,7 +26,7 @@ services:
       - ./backend/.env.prod
     environment:
       TZ: America/La_Paz
-      PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:-}
+      PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:?Defina PAYLOAD_ENCRYPTION_KEY en el entorno o archivo .env antes de desplegar}
     ports:
       - "4015:4000"
     volumes:
@@ -38,7 +38,7 @@ services:
       dockerfile: ./.infra/frontend/prod/Dockerfile
       args:
         BACKEND_BASE_URL: ${FRONTEND_BACKEND_BASE_URL:-https://innovafuncionarioapi.cochabamba.bo}
-        PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:-}
+        PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:?Defina PAYLOAD_ENCRYPTION_KEY en el entorno o archivo .env antes de desplegar}
     restart: unless-stopped
     
     ports:
