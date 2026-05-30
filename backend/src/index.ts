@@ -472,10 +472,9 @@ const server = http.createServer(async (request, response) => {
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);
-      const authToken = await createAuthToken(user);
 
       sendJson(response, 200, {
-        data: serializeAppUser(user, person, authToken),
+        data: serializeAppUser(user, person),
       });
       return;
     }
@@ -549,10 +548,9 @@ const server = http.createServer(async (request, response) => {
         include: userWithOfficeInclude,
       });
       const person = await ensurePersonIdentityForUser(prisma, updatedUser);
-      const authToken = await createAuthToken(updatedUser);
 
       sendJson(response, 200, {
-        data: serializeAppUser(updatedUser, person, authToken),
+        data: serializeAppUser(updatedUser, person),
       });
       return;
     }
@@ -1037,6 +1035,7 @@ const server = http.createServer(async (request, response) => {
           tx,
           input.oficinaIds,
           input.oficinaIdsExcluidos,
+          input.oficinaIdsFinales,
         );
 
         await tx.evento_oficinas.createMany({
@@ -1137,6 +1136,7 @@ const server = http.createServer(async (request, response) => {
           tx,
           input.oficinaIds,
           input.oficinaIdsExcluidos,
+          input.oficinaIdsFinales,
         );
 
         await tx.evento_oficinas.createMany({
@@ -1467,7 +1467,7 @@ const server = http.createServer(async (request, response) => {
         : extractLookupCode(scannedValue);
 
       if (!isCiRegistration) {
-        assertScannedQrIsUsable(scannedValue);
+        assertScannedQrIsDynamic(scannedValue);
       }
 
       if (!lookupCode) {
@@ -1483,8 +1483,8 @@ const server = http.createServer(async (request, response) => {
         where: { id: input.eventId },
         include: {
           evento_oficinas: {
-            select: {
-              oficina_id: true,
+            include: {
+              oficinas: true,
             },
           },
           evento_cargos: {
@@ -1765,7 +1765,7 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
-      assertScannedQrIsUsable(codigoQr);
+      assertScannedQrIsDynamic(codigoQr);
 
       const persona = await findPersonByScannedValue(codigoQr);
       const eventId = readOptionalQueryInt(url, "eventId");
@@ -1896,6 +1896,7 @@ type CreateEventInput = {
   latitud: number;
   longitud: number;
   oficinaIds: number[];
+  oficinaIdsFinales: number[];
   oficinaIdsExcluidos: number[];
   cargoCodigos: string[];
   cargoCodigosPorOficina: EventOfficeJobTitleInput[];
@@ -1911,6 +1912,7 @@ type UpdateEventInput = {
   latitud: number;
   longitud: number;
   oficinaIds: number[];
+  oficinaIdsFinales: number[];
   oficinaIdsExcluidos: number[];
   cargoCodigos: string[];
   cargoCodigosPorOficina: EventOfficeJobTitleInput[];
@@ -2834,6 +2836,10 @@ function parseEventInputPayload(payload: unknown) {
   const latitud = readRequiredFloat(body, "latitud", -90, 90);
   const longitud = readRequiredFloat(body, "longitud", -180, 180);
   const oficinaIds = readRequiredIntList(body, "oficinaIds", "oficinaId");
+  const oficinaIdsFinales = readOptionalIntList(
+    body,
+    "oficinaIdsFinales",
+  );
   const oficinaIdsExcluidos = readOptionalIntList(
     body,
     "oficinaIdsExcluidos",
@@ -2849,6 +2855,7 @@ function parseEventInputPayload(payload: unknown) {
     latitud,
     longitud,
     oficinaIds,
+    oficinaIdsFinales,
     oficinaIdsExcluidos,
     cargoCodigos,
     cargoCodigosPorOficina,
@@ -2905,14 +2912,21 @@ async function resolveExpandedEventOffices(
   tx: any,
   officeIds: number[],
   excludedOfficeIds: number[] = [],
+  finalOfficeIds: number[] = [],
 ): Promise<ResolvedEventOfficeSelection> {
   const uniqueOfficeIds = [...new Set(officeIds)];
+  const uniqueFinalOfficeIds = [...new Set(finalOfficeIds)];
   const allOffices = (await tx.oficinas.findMany()) as EventOfficeNode[];
   const officesById = new Map(allOffices.map((office) => [office.id, office]));
   const directOffices = uniqueOfficeIds.map((officeId) => officesById.get(officeId));
+  const finalOffices = uniqueFinalOfficeIds.map((officeId) => officesById.get(officeId));
 
   if (directOffices.some((office) => office == null)) {
     throw new HttpError(400, "Debes seleccionar una o mas oficinas validas.");
+  }
+
+  if (finalOffices.some((office) => office == null)) {
+    throw new HttpError(400, "Las oficinas finales del evento no son validas.");
   }
 
   const directIdSet = new Set(uniqueOfficeIds);
@@ -2945,25 +2959,29 @@ async function resolveExpandedEventOffices(
     .map((office) => normalizeOfficeCode(office.cod))
     .filter((code) => code.length > 0);
 
-  const expandedOffices = allOffices
-    .filter((office: EventOfficeNode) => {
-      const officeCode = normalizeOfficeCode(office.cod);
+  const resolvedFinalOfficeSet = new Set(uniqueFinalOfficeIds);
+  const expandedOfficesSource = uniqueFinalOfficeIds.length > 0
+    ? (finalOffices as EventOfficeNode[]).filter((office) =>
+        resolvedFinalOfficeSet.has(office.id),
+      )
+    : allOffices.filter((office: EventOfficeNode) => {
+        const officeCode = normalizeOfficeCode(office.cod);
 
-      const isIncluded = directCodes.some(
-        (selectedCode) =>
-          officeCode === selectedCode || officeCode.startsWith(`${selectedCode}.`),
-      );
-      const isExcluded = excludedCodes.some(
-        (excludedCode) =>
-          officeCode === excludedCode || officeCode.startsWith(`${excludedCode}.`),
-      );
+        const isIncluded = directCodes.some(
+          (selectedCode) =>
+            officeCode === selectedCode || officeCode.startsWith(`${selectedCode}.`),
+        );
+        const isExcluded = excludedCodes.some(
+          (excludedCode) =>
+            officeCode === excludedCode || officeCode.startsWith(`${excludedCode}.`),
+        );
 
-      return isIncluded && !isExcluded;
-    })
-    .map((office: EventOfficeNode) => ({
-      ...office,
-      isDirectSelection: directIdSet.has(office.id),
-    }));
+        return isIncluded && !isExcluded;
+      });
+  const expandedOffices = expandedOfficesSource.map((office: EventOfficeNode) => ({
+    ...office,
+    isDirectSelection: directIdSet.has(office.id),
+  }));
 
   expandedOffices.sort(compareOfficeHierarchy);
   normalizedExcludedOffices.sort(compareOfficeHierarchy);
@@ -3171,6 +3189,52 @@ function normalizeOfficeMatchText(value: unknown) {
     .replace(/\s+/g, " ")
     .trim()
     .toUpperCase();
+}
+
+function normalizeLooseMatchText(value: unknown) {
+  const text = normalizeOfficeMatchText(value);
+
+  if (text == null) {
+    return null;
+  }
+
+  return text
+    .replace(/\bCOMISION\b/g, " ")
+    .replace(/[^A-Z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function matchesCargoSelection(
+  userCargoCodigo: string | null,
+  userCargoName: string | null,
+  allowedCargoCodigos: Set<string>,
+  allowedCargoNames: Set<string>,
+) {
+  if (userCargoCodigo != null && allowedCargoCodigos.has(userCargoCodigo)) {
+    return true;
+  }
+
+  if (userCargoName == null) {
+    return false;
+  }
+
+  if (allowedCargoNames.has(userCargoName)) {
+    return true;
+  }
+
+  for (const allowedCargoName of allowedCargoNames) {
+    if (
+      allowedCargoName.length >= 4 &&
+      userCargoName.length >= 4 &&
+      (allowedCargoName.includes(userCargoName) ||
+        userCargoName.includes(allowedCargoName))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function isOfficeCoveredByBranch(officeCode: string, branchCode: string) {
@@ -4079,6 +4143,10 @@ function isAdminUser(user: AuthenticatedUser) {
   return user.rol === rol_usuario.ADMIN;
 }
 
+function canScanQrData(user: AuthenticatedUser) {
+  return user.rol === rol_usuario.ADMIN || user.rol === rol_usuario.CONTROL;
+}
+
 function assertAuthenticatedRequester(user: AuthenticatedUser) {
   if (user.id <= 0 || user.activo !== true) {
     throw new HttpError(401, "Debes iniciar sesion para continuar.");
@@ -4086,10 +4154,10 @@ function assertAuthenticatedRequester(user: AuthenticatedUser) {
 }
 
 function assertPersonLookupRequester(user: AuthenticatedUser) {
-  if (!isAdminUser(user)) {
+  if (!canScanQrData(user)) {
     throw new HttpError(
       403,
-      "Solo un administrador puede consultar datos por QR o CI.",
+      "Solo un administrador o usuario de control puede consultar datos por QR o CI.",
     );
   }
 }
@@ -4867,10 +4935,17 @@ function isDynamicQrExpired(payload: DynamicQrPayload) {
   return payload.expiresAt.getTime() <= Date.now();
 }
 
-function assertScannedQrIsUsable(scannedValue: string) {
+function assertScannedQrIsDynamic(scannedValue: string) {
   const dynamicQr = tryParseDynamicQrPayload(scannedValue);
 
-  if (dynamicQr != null && isDynamicQrExpired(dynamicQr)) {
+  if (dynamicQr == null) {
+    throw new HttpError(
+      400,
+      "Solo se puede registrar asistencia con el QR dinamico generado por el funcionario.",
+    );
+  }
+
+  if (isDynamicQrExpired(dynamicQr)) {
     throw new HttpError(
       410,
       "No se puede realizar el escaneo porque el QR esta caduco. Genera o refresca un nuevo QR e intentalo otra vez.",
@@ -6039,6 +6114,20 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
   const allowedOfficeIds = new Set<number>(
     (event.evento_oficinas ?? []).map((item: { oficina_id: number }) => item.oficina_id),
   );
+  const allowedOfficeCodes = new Set<string>(
+    (event.evento_oficinas ?? [])
+      .map((item: { oficinas?: { cod?: string | null } }) =>
+        normalizeOfficeCode(item.oficinas?.cod ?? ""),
+      )
+      .filter((officeCode: string) => officeCode.length > 0),
+  );
+  const allowedOfficeNames = new Set<string>(
+    (event.evento_oficinas ?? [])
+      .map((item: { oficinas?: { oficina?: string | null } }) =>
+        normalizeLooseMatchText(item.oficinas?.oficina),
+      )
+      .filter((officeName: string | null) => officeName != null),
+  );
   const allowedCargoCodigos = new Set<string>(
     (event.evento_cargos ?? [])
       .map((item: { cargo_codigo: string }) => item.cargo_codigo)
@@ -6047,17 +6136,36 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
   const allowedCargoNames = new Set<string>(
     (event.evento_cargos ?? [])
       .map((item: { cargos?: { cargo?: string | null } }) =>
-        normalizeOfficeMatchText(item.cargos?.cargo),
+        normalizeLooseMatchText(item.cargos?.cargo),
       )
       .filter((cargoName: string | null) => cargoName != null),
   );
   const userCargoCodigo = normalizeOptionalText(linkedUser?.cargo_codigo);
-  const userCargoName = normalizeOfficeMatchText(linkedUser?.cargo);
-  const matchesOffice = userOfficeId != null && allowedOfficeIds.has(userOfficeId);
+  const userCargoName = normalizeLooseMatchText(linkedUser?.cargo);
+  const userOfficeCode = normalizeOfficeCode(resolveLinkedOfficeCode(linkedUser) ?? "");
+  const userOfficeName = normalizeLooseMatchText(resolveLinkedOfficeName(linkedUser));
+  const matchingOfficeIds = new Set<number>(
+    (event.evento_oficinas ?? [])
+      .filter((item: { oficina_id: number; oficinas?: { cod?: string | null; oficina?: string | null } }) => {
+        const eventOfficeCode = normalizeOfficeCode(item.oficinas?.cod ?? "");
+        const eventOfficeName = normalizeLooseMatchText(item.oficinas?.oficina);
+
+        return (
+          (userOfficeId != null && item.oficina_id === userOfficeId) ||
+          (userOfficeCode.length > 0 && allowedOfficeCodes.has(userOfficeCode) && eventOfficeCode === userOfficeCode) ||
+          (userOfficeName != null && allowedOfficeNames.has(userOfficeName) && eventOfficeName === userOfficeName)
+        );
+      })
+      .map((item: { oficina_id: number }) => item.oficina_id),
+  );
+  const matchesOffice =
+    (userOfficeId != null && allowedOfficeIds.has(userOfficeId)) ||
+    (userOfficeCode.length > 0 && allowedOfficeCodes.has(userOfficeCode)) ||
+    (userOfficeName != null && allowedOfficeNames.has(userOfficeName));
   const officeCargoRows = event.evento_oficina_cargos ?? [];
   const hasOfficeCargoRules = officeCargoRows.length > 0;
   const officeCargoRules = officeCargoRows.filter(
-    (item: { oficina_id: number }) => item.oficina_id === userOfficeId,
+    (item: { oficina_id: number }) => matchingOfficeIds.has(item.oficina_id),
   );
   const officeCargoCodes = new Set<string>(
     officeCargoRules
@@ -6067,19 +6175,17 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
   const officeCargoNames = new Set<string>(
     officeCargoRules
       .map((item: { cargos?: { cargo?: string | null } }) =>
-        normalizeOfficeMatchText(item.cargos?.cargo),
+        normalizeLooseMatchText(item.cargos?.cargo),
       )
       .filter((cargoName: string | null) => cargoName != null),
   );
   const matchesOfficeCargo =
     !hasOfficeCargoRules ||
     officeCargoRules.length === 0 ||
-    (userCargoCodigo != null && officeCargoCodes.has(userCargoCodigo)) ||
-    (userCargoName != null && officeCargoNames.has(userCargoName));
+    matchesCargoSelection(userCargoCodigo, userCargoName, officeCargoCodes, officeCargoNames);
   const matchesCargo =
     allowedCargoCodigos.size > 0 &&
-    ((userCargoCodigo != null && allowedCargoCodigos.has(userCargoCodigo)) ||
-      (userCargoName != null && allowedCargoNames.has(userCargoName)));
+    matchesCargoSelection(userCargoCodigo, userCargoName, allowedCargoCodigos, allowedCargoNames);
 
   if (hasOfficeCargoRules) {
     if (!matchesOffice || !matchesOfficeCargo) {

@@ -1604,6 +1604,7 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
         latitude: _selectedLocation!.latitude,
         longitude: _selectedLocation!.longitude,
         officeIds: _selectedOfficeIds.toList(growable: false),
+        finalOfficeIds: _expandedOfficeIds.toList(growable: false),
         jobTitleCodes: _selectedJobTitleCodes.toList(growable: false),
         officeJobTitleSelections: _expandedOfficeIds
             .map(

@@ -85,6 +85,7 @@ class EventsApiService {
       'latitud': draft.latitude,
       'longitud': draft.longitude,
       'oficinaIds': draft.officeIds,
+      'oficinaIdsFinales': draft.finalOfficeIds,
       'oficinaIdsExcluidos': draft.excludedOfficeIds,
       'cargoCodigos': draft.jobTitleCodes,
       'cargoCodigosPorOficina': _serializeOfficeJobTitleSelections(
@@ -118,6 +119,7 @@ class EventsApiService {
       'latitud': draft.latitude,
       'longitud': draft.longitude,
       'oficinaIds': draft.officeIds,
+      'oficinaIdsFinales': draft.finalOfficeIds,
       'oficinaIdsExcluidos': draft.excludedOfficeIds,
       'cargoCodigos': draft.jobTitleCodes,
       'cargoCodigosPorOficina': _serializeOfficeJobTitleSelections(

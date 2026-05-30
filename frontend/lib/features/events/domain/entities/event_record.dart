@@ -115,6 +115,7 @@ class EventRecordDraft {
     required this.name,
     required this.date,
     required this.officeIds,
+    this.finalOfficeIds = const [],
     required this.jobTitleCodes,
     this.officeJobTitleSelections = const [],
     this.excludedOfficeIds = const [],
@@ -127,6 +128,7 @@ class EventRecordDraft {
   final String name;
   final DateTime date;
   final List<int> officeIds;
+  final List<int> finalOfficeIds;
   final List<String> jobTitleCodes;
   final List<EventOfficeJobTitleSelection> officeJobTitleSelections;
   final List<int> excludedOfficeIds;
