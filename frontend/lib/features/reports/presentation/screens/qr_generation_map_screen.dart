@@ -53,7 +53,6 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
     _rangeStart = _buildDefaultRangeStart();
     _rangeEnd = _buildDefaultRangeEnd();
     _ciController.addListener(_handleSearchChanged);
-    _loadEventOptions();
   }
 
   @override
@@ -379,6 +378,10 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
         _ciController.clear();
       }
     });
+
+    if (mode == _MapSearchMode.event) {
+      _ensureEventOptionsLoaded();
+    }
   }
 
   void _setSource(QrGenerationMapSource source) {
@@ -399,6 +402,10 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
       _hasSearched = false;
       _errorMessage = null;
     });
+
+    if (source == QrGenerationMapSource.eventScans) {
+      _ensureEventOptionsLoaded();
+    }
   }
 
   void _selectRecord(
@@ -499,6 +506,14 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
     }
   }
 
+  Future<void> _ensureEventOptionsLoaded() async {
+    if (_events.isNotEmpty || _isLoadingEvents) {
+      return;
+    }
+
+    await _loadEventOptions();
+  }
+
   EventRecord? _findEventById(int? eventId) {
     if (eventId == null) {
       return null;
@@ -529,6 +544,12 @@ class _QrGenerationMapScreenState extends State<QrGenerationMapScreen> {
 
   Future<void> _openEventPicker() async {
     if (_isLoadingEvents) {
+      return;
+    }
+
+    await _ensureEventOptionsLoaded();
+
+    if (!mounted || _isLoadingEvents) {
       return;
     }
 

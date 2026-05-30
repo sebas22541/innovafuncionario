@@ -71,21 +71,9 @@ class _EventsScreenState extends State<EventsScreen> {
     });
 
     try {
-      final results = await Future.wait([
-        dependencies.eventsApiService.fetchOffices(
-          forceRefresh: showRefreshState,
-        ),
-        dependencies.eventsApiService.fetchJobTitles(
-          forceRefresh: showRefreshState,
-        ),
-        dependencies.eventsApiService.fetchEvents(
-          forceRefresh: showRefreshState,
-        ),
-      ]);
-
-      final offices = results[0] as List<EventOffice>;
-      final jobTitles = results[1] as List<EventJobTitle>;
-      final events = results[2] as List<EventRecord>;
+      final events = await dependencies.eventsApiService.fetchEvents(
+        forceRefresh: showRefreshState,
+      );
       final selectedEventId = _selectedEvent?.id;
       EventRecord? refreshedSelectedEvent;
 
@@ -99,8 +87,6 @@ class _EventsScreenState extends State<EventsScreen> {
       }
 
       setState(() {
-        _offices = offices;
-        _jobTitles = jobTitles;
         _events = events;
         _selectedEvent = refreshedSelectedEvent;
         if (_selectedEvent == null && _page != _EventsPage.overview) {
@@ -130,7 +116,13 @@ class _EventsScreenState extends State<EventsScreen> {
       return;
     }
 
-    if (_offices.isEmpty) {
+    final referencesLoaded = await _ensureEventReferencesLoaded();
+
+    if (!mounted) {
+      return;
+    }
+
+    if (!referencesLoaded) {
       AppAlert.showWarning(
         context,
         'No hay oficinas disponibles en la base de datos.',
@@ -196,7 +188,13 @@ class _EventsScreenState extends State<EventsScreen> {
       return;
     }
 
-    if (_offices.isEmpty) {
+    final referencesLoaded = await _ensureEventReferencesLoaded();
+
+    if (!mounted) {
+      return;
+    }
+
+    if (!referencesLoaded) {
       AppAlert.showWarning(
         context,
         'No hay oficinas disponibles en la base de datos.',
@@ -204,14 +202,25 @@ class _EventsScreenState extends State<EventsScreen> {
       return;
     }
 
+    final detailedEvent = event.hasDetailedAttendanceData
+        ? event
+        : await _fetchEventDetailForEditing(event.id);
+
+    if (detailedEvent == null) {
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+
     final draft = await showDialog<EventRecordDraft>(
       context: context,
-      builder: (context) =>
-          _CreateEventDialog(
-            offices: _offices,
-            jobTitles: _jobTitles,
-            initialEvent: event,
-          ),
+      builder: (context) => _CreateEventDialog(
+        offices: _offices,
+        jobTitles: _jobTitles,
+        initialEvent: detailedEvent,
+      ),
     );
 
     if (draft == null) {
@@ -263,6 +272,53 @@ class _EventsScreenState extends State<EventsScreen> {
         });
       }
     }
+  }
+
+  Future<bool> _ensureEventReferencesLoaded() async {
+    if (_offices.isNotEmpty) {
+      return true;
+    }
+
+    setState(() {
+      _isReloading = true;
+    });
+
+    try {
+      final results = await Future.wait([
+        dependencies.eventsApiService.fetchOffices(),
+        dependencies.eventsApiService.fetchJobTitles(),
+      ]);
+
+      if (!mounted) {
+        return false;
+      }
+
+      final offices = results[0] as List<EventOffice>;
+      final jobTitles = results[1] as List<EventJobTitle>;
+
+      setState(() {
+        _offices = offices;
+        _jobTitles = jobTitles;
+      });
+
+      return offices.isNotEmpty;
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        AppAlert.showError(context, error.message);
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar oficinas y cargos.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isReloading = false;
+        });
+      }
+    }
+
+    return false;
   }
 
   Future<void> _deleteEvent(EventRecord event) async {
@@ -333,6 +389,49 @@ class _EventsScreenState extends State<EventsScreen> {
       _selectedEvent = event;
       _page = _EventsPage.detail;
     });
+
+    if (!event.hasDetailedAttendanceData) {
+      _loadSelectedEventDetail(event.id);
+    }
+  }
+
+  Future<EventRecord?> _fetchEventDetailForEditing(int eventId) async {
+    setState(() {
+      _isLoadingSelectedEvent = true;
+    });
+
+    try {
+      final detailedEvent = await dependencies.eventsApiService.fetchEventById(
+        eventId,
+      );
+
+      if (mounted) {
+        setState(() {
+          _events = _upsertEvent(_events, detailedEvent);
+          if (_selectedEvent?.id == detailedEvent.id) {
+            _selectedEvent = detailedEvent;
+          }
+        });
+      }
+
+      return detailedEvent;
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        AppAlert.showError(context, error.message);
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar el evento.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingSelectedEvent = false;
+        });
+      }
+    }
+
+    return null;
   }
 
   Future<void> _openLists(EventRecord event) async {
@@ -1397,8 +1496,7 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
   }
 
   Future<void> _pickOfficeJobTitles(EventOffice office) async {
-    final selectedCodes =
-        _officeJobTitleCodes[office.id] ?? const <String>{};
+    final selectedCodes = _officeJobTitleCodes[office.id] ?? const <String>{};
     final selectionResult =
         await showModalBottomSheet<_EventJobTitleSelectionResult>(
           context: context,
@@ -1421,9 +1519,7 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
       };
       _selectedJobTitleCodes
         ..clear()
-        ..addAll(
-          _officeJobTitleCodes.values.expand((codes) => codes),
-        );
+        ..addAll(_officeJobTitleCodes.values.expand((codes) => codes));
     });
   }
 
@@ -3048,7 +3144,9 @@ class _EventJobTitleSelectionSheetState
                     child: Ink(
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: allSelected ? AppPalette.orangeSoft : Colors.white,
+                        color: allSelected
+                            ? AppPalette.orangeSoft
+                            : Colors.white,
                         borderRadius: BorderRadius.circular(18),
                         border: Border.all(
                           color: allSelected
@@ -3062,8 +3160,9 @@ class _EventJobTitleSelectionSheetState
                             allSelected
                                 ? Icons.check_circle_rounded
                                 : Icons.radio_button_unchecked_rounded,
-                            color:
-                                allSelected ? AppPalette.orange : AppPalette.muted,
+                            color: allSelected
+                                ? AppPalette.orange
+                                : AppPalette.muted,
                           ),
                           const SizedBox(width: 12),
                           Expanded(
@@ -3129,7 +3228,8 @@ class _EventJobTitleSelectionSheetState
                                         Icon(
                                           isSelected
                                               ? Icons.check_circle_rounded
-                                              : Icons.radio_button_unchecked_rounded,
+                                              : Icons
+                                                    .radio_button_unchecked_rounded,
                                           color: isSelected
                                               ? AppPalette.orange
                                               : AppPalette.muted,

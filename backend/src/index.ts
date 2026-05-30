@@ -54,6 +54,13 @@ const DYNAMIC_QR_TTL_SECONDS = clampInt(
   30,
   3600,
 );
+const DYNAMIC_QR_MIN_REUSE_SECONDS = 15;
+const DYNAMIC_QR_HISTORY_LIMIT = clampInt(
+  process.env.QR_DYNAMIC_HISTORY_LIMIT ?? null,
+  20,
+  1,
+  100,
+);
 const DYNAMIC_QR_VERSION = "DQR1";
 const DYNAMIC_QR_SIGNATURE_LENGTH = 16;
 const JWT_TTL_SECONDS = clampInt(
@@ -71,7 +78,19 @@ const RATE_LIMIT_MAX_REQUESTS = clampInt(
   1,
   100,
 );
+const IP_RATE_LIMIT_MAX_REQUESTS = clampInt(
+  process.env.IP_RATE_LIMIT_MAX_REQUESTS ?? null,
+  60,
+  1,
+  100,
+);
 const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_BAN_MS = clampInt(
+  process.env.RATE_LIMIT_BAN_SECONDS ?? null,
+  300,
+  60,
+  3600,
+) * 1000;
 const ALLOWED_CORS_ORIGINS = parseAllowedCorsOrigins(
   process.env.CORS_ALLOWED_ORIGINS,
 );
@@ -192,18 +211,20 @@ const eventSummaryInclude = {
     },
   },
   evento_oficinas: {
-    include: {
-      oficinas: true,
+    select: {
+      oficina_id: true,
+      seleccion_directa: true,
     },
   },
   evento_cargos: {
-    include: {
-      cargos: true,
+    select: {
+      cargo_codigo: true,
     },
   },
   evento_oficina_cargos: {
-    include: {
-      cargos: true,
+    select: {
+      oficina_id: true,
+      cargo_codigo: true,
     },
   },
 } as const;
@@ -216,6 +237,7 @@ type CacheEntry<T> = {
 type RateLimitBucket = {
   count: number;
   resetAt: number;
+  bannedUntil?: number;
 };
 
 let officesCache: CacheEntry<any[]> | null = null;
@@ -277,8 +299,25 @@ const server = http.createServer(async (request, response) => {
   requestPath = buildSafeRequestPath(url);
 
   try {
-    enforceRateLimit(request, response, null);
-    const authenticatedUser = await authenticateRequestIfRequired(request, url);
+    const shouldRateLimitIpBeforeAuth =
+      isPublicRoute(request, url) || readOptionalBearerToken(request) == null;
+
+    if (shouldRateLimitIpBeforeAuth) {
+      enforceRateLimit(request, response, null);
+    }
+
+    let authenticatedUser: AuthenticatedUser;
+
+    try {
+      authenticatedUser = await authenticateRequestIfRequired(request, url);
+    } catch (error) {
+      if (!shouldRateLimitIpBeforeAuth) {
+        enforceRateLimit(request, response, null);
+      }
+
+      throw error;
+    }
+
     authenticatedUserForLog = authenticatedUser;
     if (authenticatedUser.id > 0) {
       enforceRateLimit(request, response, authenticatedUser);
@@ -394,7 +433,7 @@ const server = http.createServer(async (request, response) => {
         include: userWithOfficeInclude,
       });
       const person = await ensurePersonIdentityForUser(prisma, user);
-      const authToken = createAuthToken(user);
+      const authToken = await createAuthToken(user);
       invalidateDashboardSummaryCache();
 
       sendJson(response, 201, {
@@ -433,10 +472,19 @@ const server = http.createServer(async (request, response) => {
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);
-      const authToken = createAuthToken(user);
+      const authToken = await createAuthToken(user);
 
       sendJson(response, 200, {
         data: serializeAppUser(user, person, authToken),
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/auth/logout") {
+      await revokeUserSessions(authenticatedUser.id);
+
+      sendJson(response, 200, {
+        data: { revoked: true },
       });
       return;
     }
@@ -452,7 +500,7 @@ const server = http.createServer(async (request, response) => {
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);
-      const authToken = createAuthToken(user);
+      const authToken = await createAuthToken(user);
 
       sendJson(response, 200, {
         data: serializeAppUser(user, person, authToken),
@@ -501,7 +549,7 @@ const server = http.createServer(async (request, response) => {
         include: userWithOfficeInclude,
       });
       const person = await ensurePersonIdentityForUser(prisma, updatedUser);
-      const authToken = createAuthToken(updatedUser);
+      const authToken = await createAuthToken(updatedUser);
 
       sendJson(response, 200, {
         data: serializeAppUser(updatedUser, person, authToken),
@@ -634,6 +682,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/oficinas") {
+      assertAuthenticatedRequester(authenticatedUser);
+
       sendJson(response, 200, {
         data: await loadSerializedOffices(),
       });
@@ -641,6 +691,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/cargos") {
+      assertAuthenticatedRequester(authenticatedUser);
+
       sendJson(response, 200, {
         data: await loadSerializedJobTitles(),
       });
@@ -2243,9 +2295,23 @@ function enforceRateLimit(
 ) {
   const key = readRateLimitKey(request, authenticatedUser);
   const scope = authenticatedUser == null ? "ip" : "user";
+  const maxRequests =
+    scope === "ip" ? IP_RATE_LIMIT_MAX_REQUESTS : RATE_LIMIT_MAX_REQUESTS;
   const now = Date.now();
   pruneExpiredRateLimitBuckets(now);
   const bucket = rateLimitBuckets.get(key);
+
+  if (bucket?.bannedUntil != null && bucket.bannedUntil > now) {
+    setRateLimitHeaders(response, bucket, scope, maxRequests);
+    response.setHeader(
+      "Retry-After",
+      Math.max(1, Math.ceil((bucket.bannedUntil - now) / 1000)).toString(),
+    );
+    throw new HttpError(
+      429,
+      "Demasiadas solicitudes. Intenta nuevamente mas tarde.",
+    );
+  }
 
   if (bucket == null || bucket.resetAt <= now) {
     const nextBucket = {
@@ -2253,21 +2319,22 @@ function enforceRateLimit(
       resetAt: now + RATE_LIMIT_WINDOW_MS,
     };
     rateLimitBuckets.set(key, nextBucket);
-    setRateLimitHeaders(response, nextBucket, scope);
+    setRateLimitHeaders(response, nextBucket, scope, maxRequests);
     return;
   }
 
   bucket.count += 1;
-  setRateLimitHeaders(response, bucket, scope);
+  setRateLimitHeaders(response, bucket, scope, maxRequests);
 
-  if (bucket.count > RATE_LIMIT_MAX_REQUESTS) {
+  if (bucket.count > maxRequests) {
+    bucket.bannedUntil = now + RATE_LIMIT_BAN_MS;
     response.setHeader(
       "Retry-After",
-      Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)).toString(),
+      Math.max(1, Math.ceil(RATE_LIMIT_BAN_MS / 1000)).toString(),
     );
     throw new HttpError(
       429,
-      "Demasiadas solicitudes. Intenta nuevamente en un minuto.",
+      "Demasiadas solicitudes. Intenta nuevamente mas tarde.",
     );
   }
 }
@@ -2285,7 +2352,7 @@ function readRateLimitKey(
 
 function pruneExpiredRateLimitBuckets(now: number) {
   for (const [key, bucket] of rateLimitBuckets) {
-    if (bucket.resetAt <= now) {
+    if (bucket.resetAt <= now && (bucket.bannedUntil == null || bucket.bannedUntil <= now)) {
       rateLimitBuckets.delete(key);
     }
   }
@@ -2295,12 +2362,13 @@ function setRateLimitHeaders(
   response: ServerResponse,
   bucket: RateLimitBucket,
   scope: "ip" | "user",
+  maxRequests: number,
 ) {
-  response.setHeader("X-RateLimit-Limit", RATE_LIMIT_MAX_REQUESTS.toString());
+  response.setHeader("X-RateLimit-Limit", maxRequests.toString());
   response.setHeader("X-RateLimit-Scope", scope);
   response.setHeader(
     "X-RateLimit-Remaining",
-    Math.max(0, RATE_LIMIT_MAX_REQUESTS - bucket.count).toString(),
+    Math.max(0, maxRequests - bucket.count).toString(),
   );
   response.setHeader(
     "X-RateLimit-Reset",
@@ -2345,6 +2413,8 @@ async function authenticateRequestIfRequired(
     throw new HttpError(401, "Sesion invalida o expirada.");
   }
 
+  await assertTokenSessionIsCurrent(user.id, payload.sv);
+
   return {
     id: user.id,
     email: user.email,
@@ -2374,11 +2444,21 @@ function isPublicRoute(request: IncomingMessage, url: URL) {
 }
 
 function readBearerToken(request: IncomingMessage) {
+  const token = readOptionalBearerToken(request);
+
+  if (token == null) {
+    throw new HttpError(401, "Debes iniciar sesion para continuar.");
+  }
+
+  return token;
+}
+
+function readOptionalBearerToken(request: IncomingMessage) {
   const authorization = request.headers.authorization ?? "";
   const match = authorization.match(/^Bearer\s+(.+)$/i);
 
   if (!match) {
-    throw new HttpError(401, "Debes iniciar sesion para continuar.");
+    return null;
   }
 
   return match[1].trim();
@@ -2389,19 +2469,24 @@ type AuthTokenPayload = {
   email: string;
   rol: string;
   exp: number;
+  iat: number;
+  sv: number;
 };
 
-function createAuthToken(user: {
+async function createAuthToken(user: {
   id: number;
   email: string;
   rol?: string | null;
 }) {
+  const issuedAt = Math.floor(Date.now() / 1000);
   const header = base64UrlEncodeJson({ alg: "HS256", typ: "JWT" });
   const payload = base64UrlEncodeJson({
     sub: user.id,
     email: user.email,
     rol: user.rol ?? rol_usuario.OPERADOR,
-    exp: Math.floor(Date.now() / 1000) + JWT_TTL_SECONDS,
+    iat: issuedAt,
+    exp: issuedAt + JWT_TTL_SECONDS,
+    sv: await readUserSessionVersion(user.id),
   });
   const unsignedToken = `${header}.${payload}`;
   const signature = signJwt(unsignedToken);
@@ -2427,6 +2512,8 @@ function verifyAuthToken(token: string): AuthTokenPayload {
   const parsedPayload = parseBase64UrlJson(payload);
   const sub = readFiniteNumber(parsedPayload.sub);
   const exp = readFiniteNumber(parsedPayload.exp);
+  const iat = readFiniteNumber(parsedPayload.iat) ?? 0;
+  const sv = readFiniteNumber(parsedPayload.sv) ?? 0;
   const email = typeof parsedPayload.email === "string"
     ? normalizeEmailValue(parsedPayload.email)
     : "";
@@ -2444,7 +2531,45 @@ function verifyAuthToken(token: string): AuthTokenPayload {
     email,
     rol: typeof parsedPayload.rol === "string" ? parsedPayload.rol : "",
     exp,
+    iat,
+    sv,
   };
+}
+
+async function assertTokenSessionIsCurrent(
+  userId: number,
+  tokenSessionVersion: number,
+) {
+  const currentSessionVersion = await readUserSessionVersion(userId);
+
+  if (currentSessionVersion !== tokenSessionVersion) {
+    throw new HttpError(401, "Sesion cerrada. Inicia sesion nuevamente.");
+  }
+}
+
+async function readUserSessionVersion(userId: number) {
+  const result = await pool.query<{ session_version: number | string | null }>(
+    `SELECT "session_version" FROM "usuarios" WHERE "id" = $1`,
+    [userId],
+  );
+  const value = result.rows[0]?.session_version;
+  const version = typeof value === "number"
+    ? value
+    : Number.parseInt(value ?? "0", 10);
+
+  return Number.isInteger(version) && version >= 0 ? version : 0;
+}
+
+async function revokeUserSessions(userId: number) {
+  await pool.query(
+    `
+      UPDATE "usuarios"
+      SET "session_version" = COALESCE("session_version", 0) + 1,
+          "updated_at" = NOW()
+      WHERE "id" = $1
+    `,
+    [userId],
+  );
 }
 
 function signJwt(unsignedToken: string) {
@@ -2484,7 +2609,12 @@ function safeEqualText(left: string, right: string) {
 async function ensureRuntimeSchema() {
   await pool.query(`
     ALTER TABLE "usuarios"
-      ADD COLUMN IF NOT EXISTS "oficina_comision_id" INTEGER
+    ADD COLUMN IF NOT EXISTS "oficina_comision_id" INTEGER
+  `);
+
+  await pool.query(`
+    ALTER TABLE "usuarios"
+      ADD COLUMN IF NOT EXISTS "session_version" INTEGER NOT NULL DEFAULT 0
   `);
 
   await pool.query(`
@@ -3949,6 +4079,12 @@ function isAdminUser(user: AuthenticatedUser) {
   return user.rol === rol_usuario.ADMIN;
 }
 
+function assertAuthenticatedRequester(user: AuthenticatedUser) {
+  if (user.id <= 0 || user.activo !== true) {
+    throw new HttpError(401, "Debes iniciar sesion para continuar.");
+  }
+}
+
 function assertPersonLookupRequester(user: AuthenticatedUser) {
   if (!isAdminUser(user)) {
     throw new HttpError(
@@ -4033,6 +4169,17 @@ async function ensurePersonIdentityForUser(tx: any, user: any) {
   };
 
   if (matchedPerson) {
+    const isAlreadySynced =
+      matchedPerson.nombre_completo === data.nombre_completo &&
+      matchedPerson.ci === data.ci &&
+      matchedPerson.codigo_qr === data.codigo_qr &&
+      matchedPerson.activo === data.activo &&
+      matchedPerson.usuario_id === data.usuario_id;
+
+    if (isAlreadySynced) {
+      return matchedPerson;
+    }
+
     return tx.personas.update({
       where: { id: matchedPerson.id },
       data,
@@ -4145,6 +4292,12 @@ async function issueDynamicQrForUser(
   user: any,
   input: GenerateDynamicQrInput,
 ) {
+  const activeDynamicQr = readActiveDynamicQrSession(person, user);
+
+  if (isReusableDynamicQrSession(activeDynamicQr)) {
+    return activeDynamicQr;
+  }
+
   const qrCode = person.codigo_qr ?? buildUserQrCode(user);
   const issuedAt = new Date();
   const expiresAt = new Date(
@@ -4186,6 +4339,16 @@ async function issueDynamicQrForUser(
       accuracy: input.accuracy,
     },
   };
+}
+
+function isReusableDynamicQrSession(
+  session: ReturnType<typeof readActiveDynamicQrSession>,
+) {
+  return (
+    session != null &&
+    new Date(session.expiresAt).getTime() - Date.now() >
+      DYNAMIC_QR_MIN_REUSE_SECONDS * 1000
+  );
 }
 
 function readActiveDynamicQrSession(person: any, user: any) {
@@ -4967,7 +5130,7 @@ function buildNextDynamicQrMetadata(
     lastExpiresAt: dynamicIssue.expiresAt.toISOString(),
     lastTokenHash: historyEntry.tokenHash,
     lastLocation: historyEntry.location,
-    history: [historyEntry, ...previousHistory],
+    history: [historyEntry, ...previousHistory].slice(0, DYNAMIC_QR_HISTORY_LIMIT),
   };
 }
 
@@ -5560,9 +5723,43 @@ function serializeEventSummary(
     observed: 0,
     total: 0,
   };
+  const controls = (event.evento_controles ?? [])
+    .map(serializeEventControl)
+    .sort((left: any, right: any) => left.orden - right.orden);
+  const directOfficeIds = (event.evento_oficinas ?? [])
+    .filter((item: any) => item.seleccion_directa === true)
+    .map((item: any) => item.oficina_id);
+  const selectedCargoCodes = (event.evento_cargos ?? [])
+    .map((item: any) => item.cargo_codigo)
+    .filter((value: unknown) => typeof value === "string")
+    .sort();
 
   return {
-    ...buildSerializedEventBase(event),
+    id: event.id,
+    nombre: event.nombre,
+    fechaEvento: serializeLocalEventDate(event.fecha_evento),
+    descripcion: event.descripcion,
+    direccion: event.direccion ?? event.descripcion,
+    latitud: event.latitud,
+    longitud: event.longitud,
+    estado: event.estado,
+    createdAt: event.created_at.toISOString(),
+    updatedAt: event.updated_at.toISOString(),
+    creadoPor: {
+      id: event.usuarios.id,
+      nombreCompleto: buildUserDisplayName(event.usuarios),
+      email: event.usuarios.email,
+    },
+    controles: controls,
+    departamentos: [],
+    oficinas: [],
+    cargos: [],
+    cargoCodigosSeleccionados: selectedCargoCodes,
+    cargoCodigosPorOficina: buildSerializedOfficeJobTitleSelections(event),
+    oficinaIdsSeleccionados: directOfficeIds,
+    oficinaIdsExcluidos: event.oficina_ids_excluidos ?? [],
+    oficinasCount: event.evento_oficinas?.length ?? 0,
+    cargosCount: selectedCargoCodes.length,
     asistieron: [],
     observaron: [],
     asistieronCount: resolvedCounts.attended,

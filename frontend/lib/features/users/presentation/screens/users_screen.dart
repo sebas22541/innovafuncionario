@@ -2810,67 +2810,21 @@ bool _userBelongsToOffice(AppUser user, OfficeOption office) {
     return true;
   }
 
-  final expectedCode = _normalizeOfficeSearchText(office.code);
-  final expectedName = _normalizeOfficeSearchText(office.name);
-  final userOfficeValues = [
-    user.officeCode,
-    user.officeName,
-    if (user.hasCommission)
-      user.commissionOfficeName
-    else
-      user.primaryOfficeName,
-    user.unidad,
-  ].whereType<String>().map(_normalizeOfficeSearchText);
+  final expectedCode = _normalizeExactOfficeValue(office.code);
+  final userCode = _normalizeExactOfficeValue(user.officeCode ?? '');
 
-  return userOfficeValues.any((value) {
-    return _officeTextMatches(
-      value,
-      expectedOfficeName: expectedName,
-      expectedOfficeCode: expectedCode,
-    );
-  });
-}
-
-bool _officeTextMatches(
-  String userOfficeValue, {
-  required String expectedOfficeName,
-  required String expectedOfficeCode,
-}) {
-  if (userOfficeValue.isEmpty) {
-    return false;
-  }
-
-  if (userOfficeValue == expectedOfficeCode ||
-      userOfficeValue == expectedOfficeName ||
-      (expectedOfficeName.isNotEmpty &&
-          userOfficeValue.contains(expectedOfficeName)) ||
-      (userOfficeValue.isNotEmpty &&
-          expectedOfficeName.contains(userOfficeValue))) {
+  if (expectedCode.isNotEmpty && userCode == expectedCode) {
     return true;
   }
 
-  if (expectedOfficeCode.isNotEmpty &&
-      (userOfficeValue.startsWith('$expectedOfficeCode ') ||
-          userOfficeValue.startsWith('$expectedOfficeCode.') ||
-          expectedOfficeCode.startsWith('$userOfficeValue '))) {
-    return true;
-  }
+  final expectedName = _normalizeExactOfficeValue(office.name);
+  final userOfficeName = _normalizeExactOfficeValue(
+    user.hasCommission
+        ? user.commissionOfficeName ?? ''
+        : user.primaryOfficeName ?? user.officeName ?? user.unidad,
+  );
 
-  final userTokens = _officeSearchTokens(userOfficeValue);
-  final expectedTokens = _officeSearchTokens(expectedOfficeName);
-
-  if (userTokens.isEmpty || expectedTokens.isEmpty) {
-    return false;
-  }
-
-  final matches = expectedTokens
-      .where((token) => userTokens.any((userToken) => userToken == token))
-      .length;
-  final requiredMatches = expectedTokens.length <= 2
-      ? expectedTokens.length
-      : 2;
-
-  return matches >= requiredMatches;
+  return expectedName.isNotEmpty && userOfficeName == expectedName;
 }
 
 bool _officeTextLooksSimilar(String value, String query) {
@@ -2926,6 +2880,12 @@ Set<String> _officeSearchTokens(String value) {
             (token.length >= 3 || RegExp(r'\d').hasMatch(token)),
       )
       .toSet();
+}
+
+String _normalizeExactOfficeValue(String value) {
+  return _stripTextAccents(value.trim().toLowerCase())
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
 }
 
 String _tipoVinculoLabel(String value) {

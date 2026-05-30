@@ -83,6 +83,12 @@ class _QrWebAppState extends State<QrWebApp> {
   }
 
   void _handleLogout() async {
+    try {
+      await dependencies.authApiService.logout();
+    } catch (_) {
+      // Si el backend no responde, igual se limpia la sesion local.
+    }
+
     await SessionStore.clearSession();
 
     if (!mounted) {

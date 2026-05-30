@@ -54,6 +54,10 @@ class AuthApiService {
     return AppUser.fromJson(_readMap(payload['data'], 'usuario'));
   }
 
+  Future<void> logout() async {
+    await _apiClient.postJson('/api/auth/logout', {});
+  }
+
   Future<AppUser> updateProfileNames({
     required String email,
     required String nombreCompleto,

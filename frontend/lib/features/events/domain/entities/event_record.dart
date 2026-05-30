@@ -13,10 +13,7 @@ class EventControl {
 }
 
 class EventControlDraft {
-  const EventControlDraft({
-    required this.name,
-    this.id,
-  });
+  const EventControlDraft({required this.name, this.id});
 
   final int? id;
   final String name;
@@ -161,6 +158,8 @@ class EventRecord {
     this.observed = const [],
     this.attendedCount,
     this.observedCount,
+    this.officeCountOverride,
+    this.jobTitleCountOverride,
     this.hasDetailedAttendanceData = true,
   });
 
@@ -184,6 +183,8 @@ class EventRecord {
   final List<EventRosterEntry> observed;
   final int? attendedCount;
   final int? observedCount;
+  final int? officeCountOverride;
+  final int? jobTitleCountOverride;
   final bool hasDetailedAttendanceData;
 
   int get resolvedAttendedCount => attendedCount ?? attended.length;
@@ -192,7 +193,7 @@ class EventRecord {
 
   int get totalTrackedPeople => resolvedAttendedCount + resolvedObservedCount;
 
-  int get officeCount => offices.length;
+  int get officeCount => officeCountOverride ?? offices.length;
 
   String get officeCountLabel {
     if (officeCount == 1) {
@@ -212,7 +213,7 @@ class EventRecord {
 
   String get officeNames => offices.map((office) => office.name).join(', ');
 
-  int get jobTitleCount => jobTitles.length;
+  int get jobTitleCount => jobTitleCountOverride ?? jobTitles.length;
 
   String get jobTitleCountLabel {
     if (jobTitleCount == 0) {

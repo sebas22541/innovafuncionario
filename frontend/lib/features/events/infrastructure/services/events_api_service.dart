@@ -31,8 +31,7 @@ class EventsApiService {
   Future<List<EventJobTitle>> fetchJobTitles({
     bool forceRefresh = false,
   }) async {
-    if (!forceRefresh &&
-        _isCacheFresh(_jobTitlesCacheAt, _referenceCacheTtl)) {
+    if (!forceRefresh && _isCacheFresh(_jobTitlesCacheAt, _referenceCacheTtl)) {
       return _jobTitlesCache ?? const [];
     }
 
@@ -234,8 +233,9 @@ class EventsApiService {
           _readNullableInt(source['asistieronCount']) ?? attended.length,
       observedCount:
           _readNullableInt(source['observaronCount']) ?? observed.length,
-      hasDetailedAttendanceData:
-          source['detalleCompleto'] as bool? ?? true,
+      officeCountOverride: _readNullableInt(source['oficinasCount']),
+      jobTitleCountOverride: _readNullableInt(source['cargosCount']),
+      hasDetailedAttendanceData: source['detalleCompleto'] as bool? ?? true,
     );
   }
 
