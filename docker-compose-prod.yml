@@ -27,6 +27,7 @@ services:
     environment:
       TZ: America/La_Paz
       PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:?Defina PAYLOAD_ENCRYPTION_KEY en el entorno o archivo .env antes de desplegar}
+      PAYLOAD_RESPONSE_ENCRYPTION: "true"
     ports:
       - "4015:4000"
     volumes:

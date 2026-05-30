@@ -102,7 +102,8 @@ const PAYLOAD_ENCRYPTION_KEY_BYTES =
     ? null
     : createHash("sha256").update(PAYLOAD_ENCRYPTION_KEY).digest();
 const PAYLOAD_RESPONSE_ENCRYPTION_ENABLED =
-  process.env.PAYLOAD_RESPONSE_ENCRYPTION === "true";
+  PAYLOAD_ENCRYPTION_KEY_BYTES != null &&
+  process.env.PAYLOAD_RESPONSE_ENCRYPTION !== "false";
 const REFERENCE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DASHBOARD_CACHE_TTL_MS = 30 * 1000;
 const EVENT_SUMMARY_CACHE_TTL_MS = 15 * 1000;
@@ -299,24 +300,9 @@ const server = http.createServer(async (request, response) => {
   requestPath = buildSafeRequestPath(url);
 
   try {
-    const shouldRateLimitIpBeforeAuth =
-      isPublicRoute(request, url) || readOptionalBearerToken(request) == null;
+    enforceRateLimit(request, response, null);
 
-    if (shouldRateLimitIpBeforeAuth) {
-      enforceRateLimit(request, response, null);
-    }
-
-    let authenticatedUser: AuthenticatedUser;
-
-    try {
-      authenticatedUser = await authenticateRequestIfRequired(request, url);
-    } catch (error) {
-      if (!shouldRateLimitIpBeforeAuth) {
-        enforceRateLimit(request, response, null);
-      }
-
-      throw error;
-    }
+    const authenticatedUser = await authenticateRequestIfRequired(request, url);
 
     authenticatedUserForLog = authenticatedUser;
     if (authenticatedUser.id > 0) {
