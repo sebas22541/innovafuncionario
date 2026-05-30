@@ -4,11 +4,17 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/presentation/screens/auth_screen.dart';
 import 'injection_container.dart';
+import 'shared/infrastructure/app_image_cache.dart';
+import 'shared/infrastructure/app_permissions_service.dart';
+import 'shared/infrastructure/backend_api_client.dart';
+import 'shared/infrastructure/session_store.dart';
+import 'shared/models/app_section.dart';
 import 'shared/models/app_user.dart';
 import 'shared/widgets/app_navigation_shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AppImageCache.configure();
   await initDependencies();
   runApp(const QrWebApp());
 }
@@ -22,16 +28,94 @@ class QrWebApp extends StatefulWidget {
 
 class _QrWebAppState extends State<QrWebApp> {
   AppUser? _currentUser;
+  AppSection? _initialSection;
+  bool _isRestoringSession = true;
 
-  void _handleAuthenticated(AppUser user) {
+  @override
+  void initState() {
+    super.initState();
+    _requestStartupPermissions();
+    _restoreSession();
+  }
+
+  Future<void> _restoreSession() async {
+    final section = await SessionStore.readSection();
+    final storedUser = await SessionStore.readUser();
+    AppUser? user;
+
+    if (storedUser != null) {
+      try {
+        user = await dependencies.authApiService.fetchCurrentUser();
+        await SessionStore.saveUser(user);
+      } on BackendApiException catch (error) {
+        if (error.statusCode == 401 || error.statusCode == 403) {
+          await SessionStore.clearSession();
+        } else {
+          user = storedUser;
+        }
+      } catch (_) {
+        user = storedUser;
+      }
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _currentUser = user;
+      _initialSection = section;
+      _isRestoringSession = false;
+    });
+  }
+
+  void _handleAuthenticated(AppUser user) async {
+    await SessionStore.saveUser(user);
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _currentUser = user;
+      _initialSection = null;
+    });
+  }
+
+  void _handleLogout() async {
+    try {
+      await dependencies.authApiService.logout();
+    } catch (_) {
+      // Si el backend no responde, igual se limpia la sesion local.
+    }
+
+    await SessionStore.clearSession();
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _currentUser = null;
+      _initialSection = null;
+    });
+  }
+
+  void _handleCurrentUserChanged(AppUser user) async {
+    await SessionStore.saveUser(user);
+
+    if (!mounted) {
+      return;
+    }
+
     setState(() {
       _currentUser = user;
     });
   }
 
-  void _handleLogout() {
-    setState(() {
-      _currentUser = null;
+  void _requestStartupPermissions() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppPermissionsService.requestStartupPermissions();
     });
   }
 
@@ -42,28 +126,30 @@ class _QrWebAppState extends State<QrWebApp> {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       locale: const Locale('es', 'BO'),
-      supportedLocales: const [
-        Locale('es'),
-        Locale('es', 'BO'),
-      ],
+      supportedLocales: const [Locale('es'), Locale('es', 'BO')],
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 260),
-        child: _currentUser == null
-            ? AuthScreen(
-                key: const ValueKey('auth-screen'),
-                onAuthenticated: _handleAuthenticated,
-              )
-            : AppNavigationShell(
-                key: const ValueKey('app-shell'),
-                currentUser: _currentUser!,
-                onLogout: _handleLogout,
-              ),
-      ),
+      home: _isRestoringSession
+          ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+          : AnimatedSwitcher(
+              duration: const Duration(milliseconds: 260),
+              child: _currentUser == null
+                  ? AuthScreen(
+                      key: const ValueKey('auth-screen'),
+                      onAuthenticated: _handleAuthenticated,
+                    )
+                  : AppNavigationShell(
+                      key: const ValueKey('app-shell'),
+                      currentUser: _currentUser!,
+                      initialSection: _initialSection,
+                      onCurrentUserChanged: _handleCurrentUserChanged,
+                      onSectionChanged: SessionStore.saveSection,
+                      onLogout: _handleLogout,
+                    ),
+            ),
     );
   }
 }

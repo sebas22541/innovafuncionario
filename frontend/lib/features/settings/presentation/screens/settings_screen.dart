@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -11,6 +12,7 @@ import '../../../../core/theme/app_palette.dart';
 import '../../../auth/infrastructure/services/auth_api_service.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/location_permission_settings.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../../../shared/widgets/base64_avatar.dart';
@@ -31,11 +33,134 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends State<SettingsScreen>
+    with WidgetsBindingObserver {
   final ImagePicker _imagePicker = ImagePicker();
   bool _isSavingProfile = false;
   bool _isSavingPhoto = false;
   bool _isDownloadingCredential = false;
+  bool _isChangingPassword = false;
+  bool _isLoadingLocationPreference = true;
+  bool _isUpdatingLocationPermission = false;
+  bool _isLocationEnabled = false;
+  bool _isLocationServiceEnabled = false;
+  LocationPermission _locationPermission = LocationPermission.denied;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadLocationSettings();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadLocationSettings();
+    }
+  }
+
+  Future<void> _loadLocationSettings() async {
+    try {
+      final enabled = await LocationPermissionSettings.isEnabled();
+      final serviceEnabled =
+          await LocationPermissionSettings.isServiceEnabled();
+      final permission = await LocationPermissionSettings.checkPermission();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isLocationEnabled = enabled;
+        _isLocationServiceEnabled = serviceEnabled;
+        _locationPermission = permission;
+        _isLoadingLocationPreference = false;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isLoadingLocationPreference = false;
+      });
+    }
+  }
+
+  Future<void> _setLocationEnabled(bool enabled) async {
+    if (_isUpdatingLocationPermission) {
+      return;
+    }
+
+    setState(() {
+      _isUpdatingLocationPermission = true;
+    });
+
+    try {
+      var permission = await LocationPermissionSettings.checkPermission();
+      final serviceEnabled =
+          await LocationPermissionSettings.isServiceEnabled();
+
+      if (enabled && permission == LocationPermission.denied) {
+        permission = await LocationPermissionSettings.requestPermission();
+      }
+
+      final nextEnabled = enabled && permission.isAllowed;
+      await LocationPermissionSettings.setEnabled(nextEnabled);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isLocationEnabled = nextEnabled;
+        _isLocationServiceEnabled = serviceEnabled;
+        _locationPermission = permission;
+      });
+
+      if (!enabled) {
+        AppAlert.showSuccess(context, 'Ubicacion deshabilitada en la app.');
+      } else if (nextEnabled && serviceEnabled) {
+        AppAlert.showSuccess(context, 'Ubicacion habilitada.');
+      } else {
+        AppAlert.showWarning(
+          context,
+          'No se concedio el permiso de ubicacion. Revisa los ajustes del dispositivo o navegador.',
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(
+          context,
+          'No fue posible actualizar la configuracion de ubicacion.',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUpdatingLocationPermission = false;
+          _isLoadingLocationPreference = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openLocationSettings() async {
+    await LocationPermissionSettings.openLocationSettings();
+    await _loadLocationSettings();
+  }
+
+  Future<void> _openAppSettings() async {
+    await LocationPermissionSettings.openAppSettings();
+    await _loadLocationSettings();
+  }
 
   Future<AppUser> _updateProfile({
     required String nombreCompleto,
@@ -55,7 +180,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _openEditProfileDialog() async {
-    if (_isSavingProfile || _isSavingPhoto) {
+    if (!widget.currentUser.isAdmin || _isSavingProfile || _isSavingPhoto) {
       return;
     }
 
@@ -108,7 +233,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _pickProfilePhoto() async {
-    if (_isSavingProfile || _isSavingPhoto) {
+    if (!widget.currentUser.isAdmin || _isSavingProfile || _isSavingPhoto) {
       return;
     }
 
@@ -172,6 +297,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _openChangePasswordDialog() async {
+    if (_isChangingPassword) {
+      return;
+    }
+
+    final draft = await showDialog<_PasswordChangeDraft>(
+      context: context,
+      builder: (context) => const _ChangePasswordDialog(),
+    );
+
+    if (draft == null) {
+      return;
+    }
+
+    setState(() {
+      _isChangingPassword = true;
+    });
+
+    try {
+      await dependencies.authApiService.updatePassword(
+        currentPassword: draft.currentPassword,
+        newPassword: draft.newPassword,
+        confirmPassword: draft.confirmPassword,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      AppAlert.showSuccess(context, 'Contrasena actualizada.');
+    } on BackendApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      AppAlert.showError(context, error.message);
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      AppAlert.showError(context, 'No fue posible cambiar la contrasena.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isChangingPassword = false;
+        });
+      }
+    }
+  }
+
   Future<void> _openMyQrDialog() async {
     if (!widget.currentUser.hasQr) {
       AppAlert.showWarning(
@@ -183,7 +359,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     await showDialog<void>(
       context: context,
-      builder: (context) => _MyQrDialog(currentUser: widget.currentUser),
+      builder: (context) => MyQrDialog(currentUser: widget.currentUser),
     );
   }
 
@@ -253,7 +429,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              currentUser.isExternalUser
+                              !currentUser.isAdmin
                                   ? 'Tus datos se mantienen de solo lectura.'
                                   : 'Puedes actualizar tu foto, nombres y apellidos. El resto de los datos se mantiene de solo lectura.',
                               style: Theme.of(context).textTheme.bodyMedium,
@@ -273,7 +449,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     spacing: 12,
                     runSpacing: 12,
                     children: [
-                      if (!currentUser.isExternalUser) ...[
+                      if (currentUser.isAdmin) ...[
                         OutlinedButton.icon(
                           onPressed: _isSavingProfile || _isSavingPhoto
                               ? null
@@ -323,7 +499,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         icon: const Icon(Icons.qr_code_2_rounded),
                         label: const Text('Mi QR'),
                       ),
-                      if (!currentUser.isExternalUser)
+                      OutlinedButton.icon(
+                        onPressed: _isChangingPassword
+                            ? null
+                            : _openChangePasswordDialog,
+                        icon: _isChangingPassword
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.lock_reset_rounded),
+                        label: Text(
+                          _isChangingPassword
+                              ? 'Actualizando...'
+                              : 'Cambiar contrasena',
+                        ),
+                      ),
+                      if (currentUser.isAdmin)
                         ElevatedButton.icon(
                           onPressed: _isDownloadingCredential
                               ? null
@@ -419,13 +614,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   const SizedBox(height: 14),
                   _UserDataRow(
-                    label: 'Correo electronico',
+                    label: 'Usuario de acceso',
                     value: currentUser.email,
                     icon: Icons.alternate_email_rounded,
                   ),
                 ],
               ),
             ),
+          ),
+          const SizedBox(height: 14),
+          _LocationSettingsCard(
+            isLoading: _isLoadingLocationPreference,
+            isUpdating: _isUpdatingLocationPermission,
+            isEnabled: _isLocationEnabled,
+            isServiceEnabled: _isLocationServiceEnabled,
+            permission: _locationPermission,
+            onChanged: _setLocationEnabled,
+            onOpenLocationSettings: _openLocationSettings,
+            onOpenAppSettings: _openAppSettings,
           ),
           const SizedBox(height: 14),
           SizedBox(
@@ -451,13 +657,134 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-class _MyQrDialog extends StatefulWidget {
-  const _MyQrDialog({required this.currentUser});
+class _LocationSettingsCard extends StatelessWidget {
+  const _LocationSettingsCard({
+    required this.isLoading,
+    required this.isUpdating,
+    required this.isEnabled,
+    required this.isServiceEnabled,
+    required this.permission,
+    required this.onChanged,
+    required this.onOpenLocationSettings,
+    required this.onOpenAppSettings,
+  });
+
+  final bool isLoading;
+  final bool isUpdating;
+  final bool isEnabled;
+  final bool isServiceEnabled;
+  final LocationPermission permission;
+  final ValueChanged<bool> onChanged;
+  final VoidCallback onOpenLocationSettings;
+  final VoidCallback onOpenAppSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final canUseLocation =
+        isEnabled && isServiceEnabled && permission.isAllowed;
+    final status = isLoading
+        ? 'Consultando configuracion...'
+        : canUseLocation
+        ? 'Ubicacion activa'
+        : _locationStatusLabel(isEnabled, isServiceEnabled, permission);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: AppPalette.orangeSoft,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Icon(
+                    Icons.location_on_rounded,
+                    color: AppPalette.orange,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Configuracion de ubicacion',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Controla si la app puede pedir y usar tu ubicacion para QR dinamico, asistencias y mapas.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
+                ),
+                if (isLoading || isUpdating)
+                  const SizedBox(
+                    width: 26,
+                    height: 26,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  Switch(
+                    value: isEnabled,
+                    activeThumbColor: AppPalette.orange,
+                    onChanged: onChanged,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _UserDataRow(
+              label: 'Estado',
+              value: status,
+              icon: canUseLocation
+                  ? Icons.check_circle_outline_rounded
+                  : Icons.location_off_rounded,
+            ),
+            if (!isLoading &&
+                isEnabled &&
+                (!isServiceEnabled || !permission.isAllowed)) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  if (!isServiceEnabled)
+                    OutlinedButton.icon(
+                      onPressed: onOpenLocationSettings,
+                      icon: const Icon(Icons.settings_outlined),
+                      label: const Text('Ajustes de ubicacion'),
+                    ),
+                  if (!permission.isAllowed)
+                    OutlinedButton.icon(
+                      onPressed: onOpenAppSettings,
+                      icon: const Icon(Icons.app_settings_alt_rounded),
+                      label: const Text('Permisos de la app'),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class MyQrDialog extends StatefulWidget {
+  const MyQrDialog({super.key, required this.currentUser});
 
   final AppUser currentUser;
 
   @override
-  State<_MyQrDialog> createState() => _MyQrDialogState();
+  State<MyQrDialog> createState() => _MyQrDialogState();
 }
 
 class _CredentialDialog extends StatefulWidget {
@@ -642,10 +969,17 @@ class _CredentialPreview extends StatelessWidget {
           borderRadius: BorderRadius.circular(18),
           child: AspectRatio(
             aspectRatio: 860 / 540,
-            child: Image.network(
-              credential.frontImageUrl,
+            child: CachedNetworkImage(
+              imageUrl: credential.frontImageUrl,
               fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) {
+              placeholder: (context, url) {
+                return Container(
+                  color: AppPalette.surfaceSoft,
+                  alignment: Alignment.center,
+                  child: const CircularProgressIndicator(strokeWidth: 2),
+                );
+              },
+              errorWidget: (context, url, error) {
                 return Container(
                   color: AppPalette.surfaceSoft,
                   alignment: Alignment.center,
@@ -703,7 +1037,7 @@ class _CredentialErrorView extends StatelessWidget {
   }
 }
 
-class _MyQrDialogState extends State<_MyQrDialog> {
+class _MyQrDialogState extends State<MyQrDialog> {
   static const Duration _minimumReusableQrTime = Duration(seconds: 15);
 
   Timer? _countdownTimer;
@@ -744,8 +1078,8 @@ class _MyQrDialogState extends State<_MyQrDialog> {
     });
 
     try {
-      final activeDynamicQr = await dependencies.authApiService
-          .fetchActiveDynamicQr(email: widget.currentUser.email);
+      final activeDynamicQr =
+          await dependencies.authApiService.fetchActiveDynamicQr();
       final dynamicQr = _hasEnoughTimeToScan(activeDynamicQr)
           ? activeDynamicQr!
           : await _generateFreshDynamicQr();
@@ -869,7 +1203,6 @@ class _MyQrDialogState extends State<_MyQrDialog> {
   Future<DynamicQrSession> _generateFreshDynamicQr() async {
     final location = await _resolveCurrentLocation();
     return dependencies.authApiService.generateDynamicQr(
-      email: widget.currentUser.email,
       latitude: location.latitude,
       longitude: location.longitude,
       accuracy: location.accuracy,
@@ -877,6 +1210,14 @@ class _MyQrDialogState extends State<_MyQrDialog> {
   }
 
   Future<_QrGenerationLocationSnapshot> _resolveCurrentLocation() async {
+    final isLocationEnabled = await LocationPermissionSettings.isEnabled();
+
+    if (!isLocationEnabled) {
+      throw StateError(
+        'Habilita la ubicacion en Configuracion para generar el QR dinamico.',
+      );
+    }
+
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
 
     if (!serviceEnabled) {
@@ -1322,6 +1663,30 @@ String _resolvedOfficeName(AppUser currentUser) {
   return officeName.isEmpty ? 'Oficina no registrada' : officeName;
 }
 
+String _locationStatusLabel(
+  bool isEnabled,
+  bool isServiceEnabled,
+  LocationPermission permission,
+) {
+  if (!isEnabled) {
+    return 'Deshabilitada en la app';
+  }
+
+  if (!isServiceEnabled) {
+    return 'El servicio de ubicacion esta apagado';
+  }
+
+  if (permission == LocationPermission.deniedForever) {
+    return 'Permiso bloqueado en el dispositivo o navegador';
+  }
+
+  if (!permission.isAllowed) {
+    return 'Permiso pendiente';
+  }
+
+  return 'Ubicacion activa';
+}
+
 class _ProfileNameDraft {
   const _ProfileNameDraft({
     required this.nombreCompleto,
@@ -1477,6 +1842,180 @@ class _EditProfileDialogState extends State<_EditProfileDialog> {
   }
 }
 
+class _PasswordChangeDraft {
+  const _PasswordChangeDraft({
+    required this.currentPassword,
+    required this.newPassword,
+    required this.confirmPassword,
+  });
+
+  final String currentPassword;
+  final String newPassword;
+  final String confirmPassword;
+}
+
+class _ChangePasswordDialog extends StatefulWidget {
+  const _ChangePasswordDialog();
+
+  @override
+  State<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
+}
+
+class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  final TextEditingController _currentPasswordController =
+      TextEditingController();
+  final TextEditingController _newPasswordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+      TextEditingController();
+  bool _hideCurrentPassword = true;
+  bool _hideNewPassword = true;
+  bool _hideConfirmPassword = true;
+
+  @override
+  void dispose() {
+    _currentPasswordController.dispose();
+    _newPasswordController.dispose();
+    _confirmPasswordController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final form = _formKey.currentState;
+
+    if (form == null || !form.validate()) {
+      return;
+    }
+
+    Navigator.of(context).pop(
+      _PasswordChangeDraft(
+        currentPassword: _currentPasswordController.text.trim(),
+        newPassword: _newPasswordController.text.trim(),
+        confirmPassword: _confirmPasswordController.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Cambiar contrasena'),
+      content: SizedBox(
+        width: 440,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _currentPasswordController,
+                obscureText: _hideCurrentPassword,
+                textInputAction: TextInputAction.next,
+                decoration: InputDecoration(
+                  labelText: 'Contrasena actual',
+                  suffixIcon: IconButton(
+                    onPressed: () {
+                      setState(() {
+                        _hideCurrentPassword = !_hideCurrentPassword;
+                      });
+                    },
+                    icon: Icon(
+                      _hideCurrentPassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                  ),
+                ),
+                validator: _passwordValidator,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _newPasswordController,
+                obscureText: _hideNewPassword,
+                textInputAction: TextInputAction.next,
+                decoration: InputDecoration(
+                  labelText: 'Nueva contrasena',
+                  suffixIcon: IconButton(
+                    onPressed: () {
+                      setState(() {
+                        _hideNewPassword = !_hideNewPassword;
+                      });
+                    },
+                    icon: Icon(
+                      _hideNewPassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                  ),
+                ),
+                validator: (value) {
+                  final message = _passwordValidator(value);
+
+                  if (message != null) {
+                    return message;
+                  }
+
+                  if ((value ?? '').trim() ==
+                      _currentPasswordController.text.trim()) {
+                    return 'La nueva contrasena debe ser diferente.';
+                  }
+
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _confirmPasswordController,
+                obscureText: _hideConfirmPassword,
+                textInputAction: TextInputAction.done,
+                decoration: InputDecoration(
+                  labelText: 'Confirmar nueva contrasena',
+                  suffixIcon: IconButton(
+                    onPressed: () {
+                      setState(() {
+                        _hideConfirmPassword = !_hideConfirmPassword;
+                      });
+                    },
+                    icon: Icon(
+                      _hideConfirmPassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                  ),
+                ),
+                validator: (value) {
+                  if ((value ?? '').trim() !=
+                      _newPasswordController.text.trim()) {
+                    return 'Las contrasenas no coinciden.';
+                  }
+
+                  return null;
+                },
+                onFieldSubmitted: (_) => _submit(),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        ElevatedButton(
+          onPressed: _submit,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppPalette.orange,
+            foregroundColor: Colors.white,
+            elevation: 0,
+          ),
+          child: const Text('Guardar'),
+        ),
+      ],
+    );
+  }
+}
+
 class _UserDataRow extends StatelessWidget {
   const _UserDataRow({
     required this.label,
@@ -1549,4 +2088,12 @@ String? Function(String?) _requiredValidator(String message) {
 
     return null;
   };
+}
+
+String? _passwordValidator(String? value) {
+  if ((value ?? '').trim().length < 6) {
+    return 'La contrasena debe tener al menos 6 caracteres.';
+  }
+
+  return null;
 }

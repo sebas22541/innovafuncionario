@@ -17,6 +17,8 @@
     "prisma:studio:local": "node --env-file=.env.local ./node_modules/prisma/build/index.js studio",
     "seed": "node --no-warnings=ExperimentalWarning --loader ts-node/esm prisma/seed.ts",
     "seed:local": "node --env-file=.env.local --no-warnings=ExperimentalWarning --loader ts-node/esm prisma/seed.ts",
+    "users:login-ci": "node --no-warnings=ExperimentalWarning --loader ts-node/esm prisma/migrate-user-logins-to-ci.ts",
+    "users:login-ci:local": "node --env-file=.env.local --no-warnings=ExperimentalWarning --loader ts-node/esm prisma/migrate-user-logins-to-ci.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "prisma": {

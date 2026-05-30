@@ -12,11 +12,16 @@ COPY frontend/assets ./assets
 COPY frontend/web ./web
 
 ARG BACKEND_BASE_URL=
-RUN if [ -n "$BACKEND_BASE_URL" ]; then \
-      flutter build web --release --no-wasm-dry-run --dart-define=BACKEND_BASE_URL="$BACKEND_BASE_URL"; \
+ARG PAYLOAD_ENCRYPTION_KEY=
+RUN if [ -n "$BACKEND_BASE_URL" ] || [ -n "$PAYLOAD_ENCRYPTION_KEY" ]; then \
+      flutter build web --release --no-wasm-dry-run \
+        --no-web-resources-cdn \
+        --dart-define=BACKEND_BASE_URL="$BACKEND_BASE_URL" \
+        --dart-define=PAYLOAD_ENCRYPTION_KEY="$PAYLOAD_ENCRYPTION_KEY"; \
     else \
-      flutter build web --release --no-wasm-dry-run; \
+      flutter build web --release --no-wasm-dry-run --no-web-resources-cdn; \
     fi
+RUN sed -i 's#https://unpkg.com/@zxing/library@0.21.3#vendor/zxing-library-0.21.3.js#g' /app/build/web/main.dart.js
 
 FROM nginx:alpine
 

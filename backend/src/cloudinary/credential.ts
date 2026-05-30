@@ -35,6 +35,9 @@ type CredentialUser = {
   oficinas?: {
     oficina?: string | null;
   } | null;
+  oficina_comision?: {
+    oficina?: string | null;
+  } | null;
 };
 
 type CredentialPerson = {
@@ -663,6 +666,12 @@ function splitFallbackName(value: string | null | undefined) {
 }
 
 function resolveOfficeName(user: CredentialUser) {
+  const commissionOfficeName = normalizeText(user.oficina_comision?.oficina);
+
+  if (commissionOfficeName != null) {
+    return `Comision: ${commissionOfficeName}`;
+  }
+
   return normalizeText(user.oficinas?.oficina) ?? normalizeText(user.unidad);
 }
 

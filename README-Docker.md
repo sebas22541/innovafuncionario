@@ -48,3 +48,24 @@ docker compose -f docker-compose-prod.yml --env-file .env.docker up -d
 ```
 
 Las migraciones de Prisma se ejecutan automaticamente al iniciar el contenedor del backend con `npx prisma migrate deploy`.
+
+## Logs del backend
+
+En Docker los logs persistentes quedan en:
+
+- Produccion: `./logs/backend/`
+- Desarrollo: `./logs/backend-dev/`
+
+Archivos principales:
+
+- `backend-access.log`: una linea JSON por request con `requestId`, ruta, metodo, estado HTTP, duracion, IP y usuario.
+- `backend-error.log`: errores HTTP 4xx/5xx, errores internos con `stack`, promesas rechazadas y excepciones no capturadas.
+- `backend-app.log`: eventos generales del backend, como arranque y apagado.
+
+Para verlos en el servidor:
+
+```bash
+tail -f logs/backend/backend-error.log
+tail -f logs/backend/backend-access.log
+docker compose -f docker-compose-prod.yml --env-file .env.docker logs -f backend
+```

@@ -3,6 +3,7 @@ import 'package:geolocator/geolocator.dart';
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/location_permission_settings.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/base64_avatar.dart';
@@ -18,6 +19,7 @@ class QrScanDetailsScreen extends StatefulWidget {
     this.activeEventId,
     this.activeEventName,
     this.activeEventOffices = const [],
+    this.activeEventJobTitles = const [],
     this.activeEventControls = const [],
     this.manualCi,
     this.prefetchedQrDetails,
@@ -28,6 +30,7 @@ class QrScanDetailsScreen extends StatefulWidget {
   final int? activeEventId;
   final String? activeEventName;
   final List<EventOffice> activeEventOffices;
+  final List<EventJobTitle> activeEventJobTitles;
   final List<EventControl> activeEventControls;
   final String? manualCi;
   final QrDetails? prefetchedQrDetails;
@@ -120,8 +123,6 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
         qrValue: widget.manualCi == null ? widget.scanResult.value : null,
         ci: widget.manualCi,
         listType: listType,
-        operatorEmail: widget.currentUser.email,
-        operatorFullName: widget.currentUser.fullName,
         latitude: location.latitude,
         longitude: location.longitude,
         accuracy: location.accuracy,
@@ -172,6 +173,14 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
   }
 
   Future<_AttendanceLocationSnapshot> _resolveCurrentLocation() async {
+    final isLocationEnabled = await LocationPermissionSettings.isEnabled();
+
+    if (!isLocationEnabled) {
+      throw StateError(
+        'Habilita la ubicacion en Configuracion para registrar la asistencia.',
+      );
+    }
+
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
 
     if (!serviceEnabled) {
@@ -288,19 +297,34 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
       return null;
     }
 
-    if (!_hasActiveEventContext || widget.activeEventOffices.isEmpty) {
+    if (!_hasActiveEventContext ||
+        (widget.activeEventOffices.isEmpty &&
+            widget.activeEventJobTitles.isEmpty)) {
       return null;
     }
 
-    if (qrDetails == null || qrDetails.officeId == null) {
+    if (qrDetails == null) {
       return 'Este usuario no esta permitido asistir a este evento.';
     }
 
     final allowedOfficeIds = widget.activeEventOffices
         .map((office) => office.id)
         .toSet();
+    final allowedCargoCodes = widget.activeEventJobTitles
+        .map((jobTitle) => jobTitle.code)
+        .toSet();
+    final allowedCargoNames = widget.activeEventJobTitles
+        .map((jobTitle) => _normalizeQrRestrictionText(jobTitle.name))
+        .toSet();
+    final userCargoName = _normalizeQrRestrictionText(
+      qrDetails.fields['Cargo'] ?? '',
+    );
 
-    if (allowedOfficeIds.contains(qrDetails.officeId)) {
+    if ((qrDetails.officeId != null &&
+            allowedOfficeIds.contains(qrDetails.officeId)) ||
+        (qrDetails.cargoCodigo != null &&
+            allowedCargoCodes.contains(qrDetails.cargoCodigo)) ||
+        (userCargoName.isNotEmpty && allowedCargoNames.contains(userCargoName))) {
       return null;
     }
 
@@ -312,19 +336,21 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
       return null;
     }
 
-    if (!_hasActiveEventContext || widget.activeEventOffices.isEmpty) {
+    if (!_hasActiveEventContext ||
+        (widget.activeEventOffices.isEmpty &&
+            widget.activeEventJobTitles.isEmpty)) {
       return null;
     }
 
     if (qrDetails == null) {
-      return 'No se encontro una persona registrada con una oficina valida para compararla contra este evento.';
+      return 'No se encontro una persona registrada con oficina o cargo valido para compararla contra este evento.';
     }
 
-    if (qrDetails.officeId == null) {
-      return 'La persona escaneada no tiene una oficina asociada en la base de datos.';
+    if (qrDetails.officeId == null && qrDetails.cargoCodigo == null) {
+      return 'La persona escaneada no tiene oficina ni cargo asociado en la base de datos.';
     }
 
-    return 'La oficina del usuario no esta asociada a este evento.';
+    return 'La oficina o cargo del usuario no esta asociado a este evento.';
   }
 
   QrEventControlRecord? _findExistingControlRecord(
@@ -758,6 +784,10 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
       ),
     );
   }
+}
+
+String _normalizeQrRestrictionText(String value) {
+  return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
 }
 
 class _AttendanceLocationSnapshot {

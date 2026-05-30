@@ -124,13 +124,13 @@ class _UserEventsScreenState extends State<UserEventsScreen> {
   }
 
   Future<void> _loadOfficeEvents() async {
-    if (!_hasOfficeReference(widget.currentUser)) {
+    if (!_hasEventReference(widget.currentUser)) {
       setState(() {
         _attendedReport = null;
         _availableEvents = const [];
         _isLoading = false;
         _errorMessage =
-            'Tu usuario no tiene una oficina asociada para consultar eventos.';
+            'Tu usuario no tiene oficina ni cargo asociado para consultar eventos.';
       });
       return;
     }
@@ -232,7 +232,7 @@ class _UserEventsScreenState extends State<UserEventsScreen> {
                           Text(
                             _isAttendedView
                                 ? 'Aqui ves todos los eventos en los que tu asistencia ya fue registrada.'
-                                : 'Aqui ves todos los eventos asignados a tu oficina, con sus datos y ubicacion.',
+                                : 'Aqui ves todos los eventos asignados a tu oficina o cargo, con sus datos y ubicacion.',
                             style: Theme.of(context).textTheme.bodyMedium,
                           ),
                           const SizedBox(height: 18),
@@ -256,6 +256,15 @@ class _UserEventsScreenState extends State<UserEventsScreen> {
                                 icon: Icons.apartment_rounded,
                                 width: 390,
                               ),
+                              if (!_isAttendedView)
+                                _MiniStatCard(
+                                  label: 'Cargo',
+                                  value: widget.currentUser.cargo.trim().isEmpty
+                                      ? 'Sin cargo'
+                                      : widget.currentUser.cargo,
+                                  icon: Icons.badge_rounded,
+                                  width: 390,
+                                ),
                             ],
                           ),
                           if (_errorMessage != null) ...[
@@ -309,9 +318,9 @@ class _UserEventsScreenState extends State<UserEventsScreen> {
     if (_availableEvents.isEmpty) {
       return const _EmptyUserEventsState(
         icon: Icons.event_note_rounded,
-        title: 'No hay eventos asociados a tu oficina',
+        title: 'No hay eventos asociados a tu oficina o cargo',
         description:
-            'Cuando creen eventos para tu oficina, apareceran aqui con su informacion y minimapa.',
+            'Cuando creen eventos para tu oficina o cargo, apareceran aqui con su informacion y minimapa.',
       );
     }
 
@@ -874,7 +883,18 @@ class _EmptyUserEventsState extends StatelessWidget {
   }
 }
 
+bool _hasEventReference(AppUser currentUser) {
+  return _hasOfficeReference(currentUser) ||
+      (currentUser.cargoCodigo ?? '').trim().isNotEmpty ||
+      currentUser.cargo.trim().isNotEmpty;
+}
+
 bool _hasOfficeReference(AppUser currentUser) {
+  if (currentUser.hasCommission) {
+    return currentUser.commissionOfficeId != null ||
+        currentUser.commissionOfficeName?.trim().isNotEmpty == true;
+  }
+
   if (currentUser.officeId != null) {
     return true;
   }
@@ -891,12 +911,83 @@ List<EventRecord> _filterEventsForCurrentUser(
   List<EventRecord> events,
   AppUser currentUser,
 ) {
-  final officeId = currentUser.officeId;
-  final officeCode = _normalizeOfficeValue(currentUser.officeCode);
-  final officeName = _normalizeOfficeValue(_resolvedOfficeName(currentUser));
+  final officeId = currentUser.hasCommission
+      ? currentUser.commissionOfficeId
+      : currentUser.officeId;
+  final officeCode = currentUser.hasCommission
+      ? ''
+      : _normalizeOfficeSearchText(currentUser.officeCode ?? '');
+  final officeName = _normalizeOfficeSearchText(
+    currentUser.hasCommission
+        ? currentUser.commissionOfficeName ?? ''
+        : _resolvedOfficeName(currentUser),
+  );
+  final cargoCodigo = (currentUser.cargoCodigo ?? '').trim();
+  final cargoName = _normalizeOfficeSearchText(currentUser.cargo);
 
   return events
       .where((event) {
+        final matchingOffice = event.offices.cast<EventOffice?>().firstWhere(
+          (office) {
+            if (office == null) {
+              return false;
+            }
+
+            if (officeId != null && office.id == officeId) {
+              return true;
+            }
+
+            return _eventOfficeMatchesUserOffice(
+              office,
+              userOfficeName: officeName,
+              userOfficeCode: officeCode,
+            );
+          },
+          orElse: () => null,
+        );
+        final hasOfficeJobTitleRules = event.officeJobTitleSelections.isNotEmpty;
+
+        if (hasOfficeJobTitleRules) {
+          if (matchingOffice == null) {
+            return false;
+          }
+
+          final officeSelection = event.officeJobTitleSelections
+              .cast<EventOfficeJobTitleSelection?>()
+              .firstWhere(
+                (selection) => selection?.officeId == matchingOffice.id,
+                orElse: () => null,
+              );
+
+          if (officeSelection == null || officeSelection.allowsAllJobTitles) {
+            return true;
+          }
+
+          return officeSelection.jobTitleCodes.any(
+            (code) => cargoCodigo.isNotEmpty && code == cargoCodigo,
+          );
+        }
+
+        final matchesJobTitle = event.jobTitles.any((jobTitle) {
+          if (cargoCodigo.isNotEmpty && jobTitle.code == cargoCodigo) {
+            return true;
+          }
+
+          if (cargoName.isEmpty) {
+            return false;
+          }
+
+          final eventJobTitleName = _normalizeOfficeSearchText(jobTitle.name);
+
+          return eventJobTitleName == cargoName ||
+              eventJobTitleName.contains(cargoName) ||
+              cargoName.contains(eventJobTitleName);
+        });
+
+        if (matchesJobTitle) {
+          return true;
+        }
+
         if (officeId != null && event.selectedOfficeIds.contains(officeId)) {
           return true;
         }
@@ -906,7 +997,7 @@ List<EventRecord> _filterEventsForCurrentUser(
             return true;
           }
 
-          final eventOfficeCode = _normalizeOfficeValue(office.code);
+          final eventOfficeCode = _normalizeOfficeSearchText(office.code);
 
           if (officeCode.isNotEmpty && eventOfficeCode.isNotEmpty) {
             if (eventOfficeCode == officeCode ||
@@ -916,8 +1007,11 @@ List<EventRecord> _filterEventsForCurrentUser(
             }
           }
 
-          if (officeName.isNotEmpty &&
-              _normalizeOfficeValue(office.name) == officeName) {
+          if (_eventOfficeMatchesUserOffice(
+            office,
+            userOfficeName: officeName,
+            userOfficeCode: officeCode,
+          )) {
             return true;
           }
 
@@ -925,6 +1019,53 @@ List<EventRecord> _filterEventsForCurrentUser(
         });
       })
       .toList(growable: false);
+}
+
+bool _eventOfficeMatchesUserOffice(
+  EventOffice eventOffice, {
+  required String userOfficeName,
+  required String userOfficeCode,
+}) {
+  final eventOfficeName = _normalizeOfficeSearchText(eventOffice.name);
+  final eventOfficeCode = _normalizeOfficeSearchText(eventOffice.code);
+
+  if (userOfficeCode.isNotEmpty &&
+      eventOfficeCode.isNotEmpty &&
+      (eventOfficeCode == userOfficeCode ||
+          eventOfficeCode.startsWith('$userOfficeCode.') ||
+          userOfficeCode.startsWith('$eventOfficeCode.'))) {
+    return true;
+  }
+
+  if (userOfficeName.isEmpty || eventOfficeName.isEmpty) {
+    return false;
+  }
+
+  if (eventOfficeName == userOfficeName ||
+      eventOfficeName.contains(userOfficeName) ||
+      userOfficeName.contains(eventOfficeName)) {
+    return true;
+  }
+
+  final userTokens = _officeSearchTokens(userOfficeName);
+  final eventTokens = _officeSearchTokens(eventOfficeName);
+
+  if (userTokens.isEmpty || eventTokens.isEmpty) {
+    return false;
+  }
+
+  final shorterTokens = userTokens.length <= eventTokens.length
+      ? userTokens
+      : eventTokens;
+  final longerTokens = userTokens.length <= eventTokens.length
+      ? eventTokens
+      : userTokens;
+  final matches = shorterTokens
+      .where((token) => longerTokens.any((longerToken) => longerToken == token))
+      .length;
+  final requiredMatches = shorterTokens.length <= 2 ? shorterTokens.length : 2;
+
+  return matches >= requiredMatches;
 }
 
 List<EventRecord> _sortOfficeEvents(List<EventRecord> events) {
@@ -951,8 +1092,53 @@ List<EventRecord> _sortOfficeEvents(List<EventRecord> events) {
   return sortedEvents;
 }
 
-String _normalizeOfficeValue(String? value) {
-  return (value ?? '').trim().toLowerCase();
+String _normalizeOfficeSearchText(String value) {
+  return _stripTextAccents(value.trim().toLowerCase())
+      .replaceAll(RegExp(r'\bcomision\b'), ' ')
+      .replaceAll(RegExp(r'[^a-z0-9.]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+}
+
+String _stripTextAccents(String value) {
+  return value
+      .replaceAll(RegExp(r'[áàäâã]'), 'a')
+      .replaceAll(RegExp(r'[éèëê]'), 'e')
+      .replaceAll(RegExp(r'[íìïî]'), 'i')
+      .replaceAll(RegExp(r'[óòöôõ]'), 'o')
+      .replaceAll(RegExp(r'[úùüû]'), 'u')
+      .replaceAll('ñ', 'n');
+}
+
+Set<String> _officeSearchTokens(String value) {
+  const ignoredTokens = {
+    'oficina',
+    'unidad',
+    'direccion',
+    'direcciones',
+    'departamento',
+    'secretaria',
+    'municipal',
+    'gobierno',
+    'autonomo',
+    'de',
+    'del',
+    'la',
+    'las',
+    'los',
+    'el',
+    'y',
+  };
+
+  return value
+      .split(' ')
+      .where(
+        (token) =>
+            token.isNotEmpty &&
+            !ignoredTokens.contains(token) &&
+            (token.length >= 3 || RegExp(r'\d').hasMatch(token)),
+      )
+      .toSet();
 }
 
 String _resolvedOfficeName(AppUser currentUser) {

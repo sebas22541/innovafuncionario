@@ -39,14 +39,21 @@ class AppUser {
     required this.cargo,
     required this.numeroItem,
     required this.activo,
+    this.cargoCodigo,
     this.fotoUrl,
     this.officeId,
     this.officeName,
     this.officeCode,
+    this.primaryOfficeId,
+    this.primaryOfficeName,
+    this.commissionOfficeId,
+    this.commissionOfficeName,
+    this.hasCommission = false,
     this.nombreVisible,
     this.personaId,
     this.qrCode,
     this.qrPayload,
+    this.authToken,
   });
 
   final int? id;
@@ -62,14 +69,54 @@ class AppUser {
   final String cargo;
   final String numeroItem;
   final bool activo;
+  final String? cargoCodigo;
   final String? fotoUrl;
   final int? officeId;
   final String? officeName;
   final String? officeCode;
+  final int? primaryOfficeId;
+  final String? primaryOfficeName;
+  final int? commissionOfficeId;
+  final String? commissionOfficeName;
+  final bool hasCommission;
   final String? nombreVisible;
   final int? personaId;
   final String? qrCode;
   final String? qrPayload;
+  final String? authToken;
+
+  AppUser withAuthToken(String? authToken) {
+    return AppUser(
+      id: id,
+      email: email,
+      role: role,
+      nombreCompleto: nombreCompleto,
+      primerApellido: primerApellido,
+      segundoApellido: segundoApellido,
+      tercerApellido: tercerApellido,
+      ci: ci,
+      tipoVinculo: tipoVinculo,
+      unidad: unidad,
+      cargo: cargo,
+      numeroItem: numeroItem,
+      activo: activo,
+      cargoCodigo: cargoCodigo,
+      fotoUrl: fotoUrl,
+      officeId: officeId,
+      officeName: officeName,
+      officeCode: officeCode,
+      primaryOfficeId: primaryOfficeId,
+      primaryOfficeName: primaryOfficeName,
+      commissionOfficeId: commissionOfficeId,
+      commissionOfficeName: commissionOfficeName,
+      hasCommission: hasCommission,
+      nombreVisible: nombreVisible,
+      personaId: personaId,
+      qrCode: qrCode,
+      qrPayload: qrPayload,
+      authToken: authToken,
+    );
+  }
 
   factory AppUser.fromJson(Map<String, dynamic> source) {
     return AppUser(
@@ -89,15 +136,55 @@ class AppUser {
       cargo: _readString(source['cargo'], 'cargo'),
       numeroItem: _readString(source['numeroItem'], 'numeroItem'),
       activo: source['activo'] as bool? ?? true,
+      cargoCodigo: source['cargoCodigo'] as String?,
       fotoUrl: (source['fotoUrl'] ?? source['fotoBase64']) as String?,
       officeId: source['oficinaId'] as int?,
       officeName: source['oficinaNombre'] as String?,
       officeCode: source['oficinaCodigo'] as String?,
+      primaryOfficeId: source['oficinaPrincipalId'] as int?,
+      primaryOfficeName: source['oficinaPrincipalNombre'] as String?,
+      commissionOfficeId: source['oficinaComisionId'] as int?,
+      commissionOfficeName: source['oficinaComisionNombre'] as String?,
+      hasCommission: source['tieneComision'] as bool? ?? false,
       nombreVisible: source['nombreVisible'] as String?,
       personaId: source['personaId'] as int?,
       qrCode: source['qrCode'] as String?,
       qrPayload: source['qrPayload'] as String?,
+      authToken: source['authToken'] as String?,
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'email': email,
+      'rol': role.apiValue,
+      'nombreCompleto': nombreCompleto,
+      'primerApellido': primerApellido,
+      'segundoApellido': segundoApellido,
+      'tercerApellido': tercerApellido,
+      'ci': ci,
+      'tipoVinculo': tipoVinculo,
+      'unidad': unidad,
+      'cargo': cargo,
+      'cargoCodigo': cargoCodigo,
+      'numeroItem': numeroItem,
+      'activo': activo,
+      'fotoUrl': fotoUrl,
+      'oficinaId': officeId,
+      'oficinaNombre': officeName,
+      'oficinaCodigo': officeCode,
+      'oficinaPrincipalId': primaryOfficeId,
+      'oficinaPrincipalNombre': primaryOfficeName,
+      'oficinaComisionId': commissionOfficeId,
+      'oficinaComisionNombre': commissionOfficeName,
+      'tieneComision': hasCommission,
+      'nombreVisible': nombreVisible,
+      'personaId': personaId,
+      'qrCode': qrCode,
+      'qrPayload': qrPayload,
+      'authToken': authToken,
+    };
   }
 
   String get fullName {

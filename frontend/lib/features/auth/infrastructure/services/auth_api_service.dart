@@ -48,6 +48,16 @@ class AuthApiService {
     return AppUser.fromJson(_readMap(payload['data'], 'usuario'));
   }
 
+  Future<AppUser> fetchCurrentUser() async {
+    final payload = await _apiClient.getJson('/api/auth/me');
+
+    return AppUser.fromJson(_readMap(payload['data'], 'usuario'));
+  }
+
+  Future<void> logout() async {
+    await _apiClient.postJson('/api/auth/logout', {});
+  }
+
   Future<AppUser> updateProfileNames({
     required String email,
     required String nombreCompleto,
@@ -68,36 +78,46 @@ class AuthApiService {
     return AppUser.fromJson(_readMap(payload['data'], 'usuario'));
   }
 
+  Future<void> updatePassword({
+    required String currentPassword,
+    required String newPassword,
+    required String confirmPassword,
+  }) async {
+    await _apiClient.putJson('/api/auth/password', {
+      'currentPassword': currentPassword,
+      'newPassword': newPassword,
+      'confirmPassword': confirmPassword,
+    });
+  }
+
   Future<DynamicQrSession> generateDynamicQr({
-    required String email,
     required double latitude,
     required double longitude,
     double? accuracy,
   }) async {
     final safeAccuracy = _sanitizeOptionalAccuracy(accuracy);
     final payload = await _apiClient.postJson('/api/auth/qr/dynamic', {
-      'email': email,
       'latitud': latitude,
       'longitud': longitude,
       'accuracy': ?safeAccuracy,
     });
 
-    return DynamicQrSession.fromJson(_readMap(payload['data'], 'qrDinamico'));
+    return DynamicQrSession.fromJson(
+      _readDataMap(payload['data'], nestedFieldName: 'qrDinamico'),
+    );
   }
 
-  Future<DynamicQrSession?> fetchActiveDynamicQr({
-    required String email,
-  }) async {
-    final payload = await _apiClient.getJson(
-      '/api/auth/qr/dynamic?email=${Uri.encodeQueryComponent(email)}',
-    );
+  Future<DynamicQrSession?> fetchActiveDynamicQr() async {
+    final payload = await _apiClient.getJson('/api/auth/qr/dynamic');
     final data = payload['data'];
 
     if (data == null) {
       return null;
     }
 
-    return DynamicQrSession.fromJson(_readMap(data, 'qrDinamicoActivo'));
+    return DynamicQrSession.fromJson(
+      _readDataMap(data, nestedFieldName: 'qrDinamicoActivo'),
+    );
   }
 
   Future<UserCredential> generateCredential({required String email}) async {
@@ -105,7 +125,9 @@ class AuthApiService {
       'email': email,
     });
 
-    return UserCredential.fromJson(_readMap(payload['data'], 'credencial'));
+    return UserCredential.fromJson(
+      _readDataMap(payload['data'], nestedFieldName: 'credencial'),
+    );
   }
 
   Future<Uint8List> downloadCredentialPdf({required String email}) {
@@ -122,6 +144,7 @@ class AuthApiService {
     required String ci,
     required String tipoVinculo,
     required int? oficinaId,
+    int? oficinaComisionId,
     required String? cargoCodigo,
     required String unidad,
     required String cargo,
@@ -139,6 +162,7 @@ class AuthApiService {
       'ci': ci,
       'tipoVinculo': tipoVinculo,
       'oficinaId': oficinaId,
+      'oficinaComisionId': oficinaComisionId,
       'cargoCodigo': cargoCodigo,
       'unidad': unidad,
       'cargo': cargo,
@@ -165,7 +189,6 @@ class AuthApiService {
     required String requesterEmail,
     required AppUserRole role,
     required String email,
-    required String password,
     required String nombreCompleto,
     required String primerApellido,
     required String segundoApellido,
@@ -173,6 +196,7 @@ class AuthApiService {
     required String ci,
     required String tipoVinculo,
     required int? oficinaId,
+    int? oficinaComisionId,
     required String? cargoCodigo,
     required String unidad,
     required String cargo,
@@ -184,7 +208,6 @@ class AuthApiService {
       'requesterEmail': requesterEmail,
       'rol': role.apiValue,
       'email': email,
-      'password': password,
       'nombreCompleto': nombreCompleto,
       'primerApellido': primerApellido,
       'segundoApellido': segundoApellido,
@@ -192,6 +215,7 @@ class AuthApiService {
       'ci': ci,
       'tipoVinculo': tipoVinculo,
       'oficinaId': oficinaId,
+      'oficinaComisionId': oficinaComisionId,
       'cargoCodigo': cargoCodigo,
       'unidad': unidad,
       'cargo': cargo,
@@ -231,6 +255,7 @@ class AuthApiService {
     required String ci,
     required String tipoVinculo,
     required int? oficinaId,
+    int? oficinaComisionId,
     required String? cargoCodigo,
     required String unidad,
     required String cargo,
@@ -250,6 +275,7 @@ class AuthApiService {
       'ci': ci,
       'tipoVinculo': tipoVinculo,
       'oficinaId': oficinaId,
+      'oficinaComisionId': oficinaComisionId,
       'cargoCodigo': cargoCodigo,
       'unidad': unidad,
       'cargo': cargo,
@@ -411,6 +437,20 @@ Map<String, dynamic> _readMap(dynamic source, String fieldName) {
   }
 
   return source;
+}
+
+Map<String, dynamic> _readDataMap(
+  dynamic source, {
+  required String nestedFieldName,
+}) {
+  final data = _readMap(source, nestedFieldName);
+  final nestedValue = data[nestedFieldName];
+
+  if (nestedValue == null) {
+    return data;
+  }
+
+  return _readMap(nestedValue, nestedFieldName);
 }
 
 List<Map<String, dynamic>> _readList(dynamic source, String fieldName) {

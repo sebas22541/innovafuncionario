@@ -69,8 +69,6 @@ class _AuthScreenState extends State<AuthScreen> {
   @override
   void initState() {
     super.initState();
-    _loadOffices();
-    _loadCargos();
   }
 
   @override
@@ -713,19 +711,19 @@ class _AuthFormCard extends StatelessWidget {
           _AuthField(
             controller: emailController,
             focusNode: emailFocusNode,
-            label: 'Correo',
-            hint: 'Correo',
-            keyboardType: TextInputType.emailAddress,
+            label: 'CI',
+            hint: 'Ingresa tu CI',
+            keyboardType: TextInputType.text,
             textInputAction: TextInputAction.next,
             enableSuggestions: false,
             autocorrect: false,
             enableIMEPersonalizedLearning: false,
             onFieldSubmitted: (_) => passwordFocusNode.requestFocus(),
             validator: (value) {
-              final email = value?.trim() ?? '';
+              final login = value?.trim() ?? '';
 
-              if (email.isEmpty || !email.contains('@')) {
-                return 'Ingresa un correo valido.';
+              if (login.length < 3) {
+                return 'Ingresa un CI valido.';
               }
 
               return null;

@@ -60,6 +60,7 @@ class ApiQrDetailsDataSource implements QrDetailsDataSource {
     final officeId = source['oficinaId'] as int?;
     final officeName = source['oficinaNombre'] as String?;
     final officeCode = source['oficinaCodigo'] as String?;
+    final cargoCodigo = source['cargoCodigo'] as String?;
     final updatedAt =
         (source['updatedAt'] as String?) ?? DateTime.now().toIso8601String();
     final eventAttendance = source['eventoRegistro'] as Map<String, dynamic>?;
@@ -98,6 +99,7 @@ class ApiQrDetailsDataSource implements QrDetailsDataSource {
       officeId: officeId,
       officeName: resolvedOfficeName,
       officeCode: officeCode,
+      cargoCodigo: cargoCodigo,
       photoUrl: (source['fotoUrl'] ?? source['fotoBase64']) as String?,
       eventAttendance: eventAttendance == null
           ? null
