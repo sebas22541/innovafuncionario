@@ -28,6 +28,8 @@ class BackendApiClient {
   static final AesGcm _payloadCipher = AesGcm.with256bits();
   static final Random _secureRandom = Random.secure();
   static Future<SecretKey>? _payloadSecretKey;
+  static const int _encryptedNonceLength = 12;
+  static const int _encryptedTagLength = 16;
 
   Future<Map<String, dynamic>> getJson(String path) async {
     try {
@@ -181,11 +183,11 @@ class BackendApiClient {
     );
 
     return {
-      'encrypted': true,
-      'alg': 'AES-256-GCM',
-      'iv': base64Encode(secretBox.nonce),
-      'payload': base64Encode(secretBox.cipherText),
-      'tag': base64Encode(secretBox.mac.bytes),
+      'd': base64Encode([
+        ...secretBox.nonce,
+        ...secretBox.cipherText,
+        ...secretBox.mac.bytes,
+      ]),
     };
   }
 
@@ -201,6 +203,36 @@ class BackendApiClient {
       );
     }
 
+    final compactEnvelope = envelope['d'];
+
+    if (compactEnvelope is String && compactEnvelope.trim().isNotEmpty) {
+      final encryptedEnvelope = base64Decode(compactEnvelope);
+
+      if (encryptedEnvelope.length <=
+          _encryptedNonceLength + _encryptedTagLength) {
+        throw const BackendApiException(
+          message: 'La respuesta cifrada no tiene un formato valido.',
+          statusCode: 0,
+        );
+      }
+
+      final nonce = encryptedEnvelope.sublist(0, _encryptedNonceLength);
+      final cipherText = encryptedEnvelope.sublist(
+        _encryptedNonceLength,
+        encryptedEnvelope.length - _encryptedTagLength,
+      );
+      final tag = encryptedEnvelope.sublist(
+        encryptedEnvelope.length - _encryptedTagLength,
+      );
+
+      final clearBytes = await _payloadCipher.decrypt(
+        SecretBox(cipherText, nonce: nonce, mac: Mac(tag)),
+        secretKey: secretKey,
+      );
+
+      return jsonDecode(utf8.decode(clearBytes)) as Map<String, dynamic>;
+    }
+
     final clearBytes = await _payloadCipher.decrypt(
       SecretBox(
         base64Decode(envelope['payload'] as String),
@@ -214,11 +246,12 @@ class BackendApiClient {
   }
 
   bool _isEncryptedEnvelope(Map<String, dynamic> payload) {
-    return payload['encrypted'] == true &&
-        payload['alg'] == 'AES-256-GCM' &&
-        payload['iv'] is String &&
-        payload['payload'] is String &&
-        payload['tag'] is String;
+    return payload['d'] is String ||
+        payload['encrypted'] == true &&
+            payload['alg'] == 'AES-256-GCM' &&
+            payload['iv'] is String &&
+            payload['payload'] is String &&
+            payload['tag'] is String;
   }
 
   Future<SecretKey?> _readPayloadSecretKey() {

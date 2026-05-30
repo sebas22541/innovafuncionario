@@ -2162,7 +2162,6 @@ function sendJson(
   const encryptedPayload = encryptJsonPayload(payload);
 
   if (encryptedPayload != null) {
-    response.setHeader("X-Payload-Encrypted", "AES-256-GCM");
     payload = encryptedPayload;
   }
 
@@ -2733,15 +2732,36 @@ function encryptJsonPayload(payload: unknown) {
   const tag = cipher.getAuthTag();
 
   return {
-    encrypted: true,
-    alg: "AES-256-GCM",
-    iv: iv.toString("base64"),
-    payload: encrypted.toString("base64"),
-    tag: tag.toString("base64"),
+    d: Buffer.concat([iv, encrypted, tag]).toString("base64"),
   };
 }
 
 function decryptJsonPayload(payload: unknown) {
+  if (isCompactEncryptedJsonEnvelope(payload)) {
+    if (PAYLOAD_ENCRYPTION_KEY_BYTES == null) {
+      throw new HttpError(400, "El cuerpo cifrado no esta habilitado.");
+    }
+
+    try {
+      const encryptedEnvelope = Buffer.from(payload.d, "base64");
+
+      if (encryptedEnvelope.length <= 28) {
+        throw new Error("Invalid encrypted envelope");
+      }
+
+      const iv = encryptedEnvelope.subarray(0, 12);
+      const tag = encryptedEnvelope.subarray(encryptedEnvelope.length - 16);
+      const encrypted = encryptedEnvelope.subarray(
+        12,
+        encryptedEnvelope.length - 16,
+      );
+
+      return decryptEncryptedJsonPayload(iv, encrypted, tag);
+    } catch {
+      throw new HttpError(400, "No fue posible descifrar el cuerpo JSON.");
+    }
+  }
+
   if (!isEncryptedJsonEnvelope(payload)) {
     return payload;
   }
@@ -2754,21 +2774,46 @@ function decryptJsonPayload(payload: unknown) {
     const iv = Buffer.from(payload.iv, "base64");
     const encrypted = Buffer.from(payload.payload, "base64");
     const tag = Buffer.from(payload.tag, "base64");
-    const decipher = createDecipheriv(
-      "aes-256-gcm",
-      PAYLOAD_ENCRYPTION_KEY_BYTES,
-      iv,
-    );
-    decipher.setAuthTag(tag);
-    const decrypted = Buffer.concat([
-      decipher.update(encrypted),
-      decipher.final(),
-    ]).toString("utf8");
 
-    return JSON.parse(decrypted);
+    return decryptEncryptedJsonPayload(iv, encrypted, tag);
   } catch {
     throw new HttpError(400, "No fue posible descifrar el cuerpo JSON.");
   }
+}
+
+function decryptEncryptedJsonPayload(
+  iv: Buffer,
+  encrypted: Buffer,
+  tag: Buffer,
+) {
+  if (PAYLOAD_ENCRYPTION_KEY_BYTES == null) {
+    throw new HttpError(400, "El cuerpo cifrado no esta habilitado.");
+  }
+
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    PAYLOAD_ENCRYPTION_KEY_BYTES,
+    iv,
+  );
+  decipher.setAuthTag(tag);
+  const decrypted = Buffer.concat([
+    decipher.update(encrypted),
+    decipher.final(),
+  ]).toString("utf8");
+
+  return JSON.parse(decrypted);
+}
+
+function isCompactEncryptedJsonEnvelope(value: unknown): value is {
+  d: string;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+
+  return typeof record.d === "string" && record.d.trim().length > 0;
 }
 
 function isEncryptedJsonEnvelope(value: unknown): value is {
