@@ -472,9 +472,10 @@ const server = http.createServer(async (request, response) => {
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);
+      const authToken = await createAuthToken(user);
 
       sendJson(response, 200, {
-        data: serializeAppUser(user, person),
+        data: serializeAppUser(user, person, authToken),
       });
       return;
     }
@@ -499,10 +500,9 @@ const server = http.createServer(async (request, response) => {
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);
-      const authToken = await createAuthToken(user);
 
       sendJson(response, 200, {
-        data: serializeAppUser(user, person, authToken),
+        data: serializeAppUser(user, person),
       });
       return;
     }
