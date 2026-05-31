@@ -6540,18 +6540,9 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
     allowedCargoCodigos.size > 0 &&
     matchesCargoSelection(userCargoCodigo, userCargoName, allowedCargoCodigos, allowedCargoNames);
 
-  if (hasOfficeCargoRules) {
-    if (!matchesOffice || !matchesOfficeCargo) {
-      throw new HttpError(
-        403,
-        "Este usuario no esta permitido asistir a este evento.",
-      );
-    }
+  const matchesOfficeRule = matchesOffice && matchesOfficeCargo;
 
-    return;
-  }
-
-  if (!matchesOffice && !matchesCargo) {
+  if (!matchesOfficeRule && !matchesCargo) {
     throw new HttpError(
       403,
       "Este usuario no esta permitido asistir a este evento.",

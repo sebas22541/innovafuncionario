@@ -1288,8 +1288,6 @@ class _EventJobTitleSelectionResult {
   final List<String> selectedJobTitleCodes;
 }
 
-enum _EventAudienceMode { offices, globalJobTitles }
-
 class _CreateEventDialogState extends State<_CreateEventDialog> {
   late final TextEditingController _nameController;
   late final TextEditingController _addressController;
@@ -1308,11 +1306,7 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
   late final Set<int> _excludedOfficeIds;
   late final Set<String> _selectedJobTitleCodes;
   late final Map<int, Set<String>> _officeJobTitleCodes;
-  late _EventAudienceMode _audienceMode;
   bool _showValidation = false;
-
-  bool get _usesGlobalJobTitleAudience =>
-      _audienceMode == _EventAudienceMode.globalJobTitles;
 
   Set<int> get _expandedOfficeIds => _expandOfficeSelection(
     _selectedOfficeIds,
@@ -1369,12 +1363,6 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
           in widget.initialEvent?.officeJobTitleSelections ?? const [])
         selection.officeId: selection.jobTitleCodes.toSet(),
     };
-    _audienceMode =
-        _selectedOfficeIds.isEmpty &&
-            _selectedJobTitleCodes.isNotEmpty &&
-            _officeJobTitleCodes.isEmpty
-        ? _EventAudienceMode.globalJobTitles
-        : _EventAudienceMode.offices;
     final initialControls = widget.initialEvent?.controls ?? const [];
     _controls = initialControls.isEmpty
         ? [
@@ -1499,29 +1487,6 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
     _officeJobTitleCodes.removeWhere(
       (officeId, _) => !expandedOfficeIds.contains(officeId),
     );
-
-    if (_officeJobTitleCodes.isEmpty && _selectedJobTitleCodes.isNotEmpty) {
-      for (final officeId in expandedOfficeIds) {
-        _officeJobTitleCodes[officeId] = {..._selectedJobTitleCodes};
-      }
-    }
-  }
-
-  void _setAudienceMode(_EventAudienceMode mode) {
-    if (_audienceMode == mode) {
-      return;
-    }
-
-    setState(() {
-      _audienceMode = mode;
-
-      if (_usesGlobalJobTitleAudience) {
-        _officeJobTitleCodes.clear();
-        _excludedOfficeIds.clear();
-      } else {
-        _syncOfficeJobTitleSelections();
-      }
-    });
   }
 
   Future<void> _pickGlobalJobTitles() async {
@@ -1573,9 +1538,6 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
       _officeJobTitleCodes[office.id] = {
         ...selectionResult.selectedJobTitleCodes,
       };
-      _selectedJobTitleCodes
-        ..clear()
-        ..addAll(_officeJobTitleCodes.values.expand((codes) => codes));
     });
   }
 
@@ -1640,10 +1602,8 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
       _selectedStartTime.hour,
       _selectedStartTime.minute,
     );
-    final usesGlobalJobTitleAudience = _usesGlobalJobTitleAudience;
-    final hasAudienceSelection = usesGlobalJobTitleAudience
-        ? _selectedJobTitleCodes.isNotEmpty
-        : _selectedOfficeIds.isNotEmpty;
+    final hasAudienceSelection =
+        _selectedOfficeIds.isNotEmpty || _selectedJobTitleCodes.isNotEmpty;
 
     if (trimmedName.isEmpty ||
         trimmedAddress.isEmpty ||
@@ -1663,79 +1623,20 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
         address: trimmedAddress,
         latitude: _selectedLocation!.latitude,
         longitude: _selectedLocation!.longitude,
-        officeIds: usesGlobalJobTitleAudience
-            ? const []
-            : _selectedOfficeIds.toList(growable: false),
-        finalOfficeIds: usesGlobalJobTitleAudience
-            ? const []
-            : _expandedOfficeIds.toList(growable: false),
+        officeIds: _selectedOfficeIds.toList(growable: false),
+        finalOfficeIds: _expandedOfficeIds.toList(growable: false),
         jobTitleCodes: _selectedJobTitleCodes.toList(growable: false),
-        officeJobTitleSelections: usesGlobalJobTitleAudience
-            ? const []
-            : _expandedOfficeIds
-                  .map(
-                    (officeId) => EventOfficeJobTitleSelection(
-                      officeId: officeId,
-                      jobTitleCodes:
-                          (_officeJobTitleCodes[officeId] ?? const {}).toList(
-                            growable: false,
-                          ),
-                    ),
-                  )
-                  .toList(growable: false),
-        excludedOfficeIds: usesGlobalJobTitleAudience
-            ? const []
-            : _excludedOfficeIds.toList(growable: false),
+        officeJobTitleSelections: _expandedOfficeIds
+            .map(
+              (officeId) => EventOfficeJobTitleSelection(
+                officeId: officeId,
+                jobTitleCodes: (_officeJobTitleCodes[officeId] ?? const {})
+                    .toList(growable: false),
+              ),
+            )
+            .toList(growable: false),
+        excludedOfficeIds: _excludedOfficeIds.toList(growable: false),
         controls: controls,
-      ),
-    );
-  }
-
-  Widget _buildAudienceOption({
-    required _EventAudienceMode mode,
-    required IconData icon,
-    required String title,
-    required String description,
-  }) {
-    final isSelected = _audienceMode == mode;
-
-    return Expanded(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: () => _setAudienceMode(mode),
-        child: Ink(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: isSelected ? AppPalette.orangeSoft : Colors.white,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: isSelected ? AppPalette.orange : AppPalette.line,
-            ),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                isSelected ? Icons.check_circle_rounded : icon,
-                color: isSelected ? AppPalette.orange : AppPalette.muted,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, style: Theme.of(context).textTheme.titleSmall),
-                    const SizedBox(height: 4),
-                    Text(
-                      description,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
@@ -1920,378 +1821,177 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                       ),
                       const SizedBox(height: 14),
                       Text(
-                        'Alcance del evento',
+                        'Oficinas',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          _buildAudienceOption(
-                            mode: _EventAudienceMode.offices,
-                            icon: Icons.apartment_rounded,
-                            title: 'Por oficinas',
-                            description:
-                                'Selecciona oficinas y cargos por unidad.',
-                          ),
-                          const SizedBox(width: 10),
-                          _buildAudienceOption(
-                            mode: _EventAudienceMode.globalJobTitles,
-                            icon: Icons.badge_rounded,
-                            title: 'Solo cargos',
-                            description:
-                                'Incluye ese cargo en cualquier unidad.',
-                          ),
-                        ],
+                      Text(
+                        'Selecciona una o mas oficinas base. Si marcas una oficina padre, el sistema incluira automaticamente toda su rama segun el codigo, pero podras deseleccionar subramas que no iran al evento.',
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
-                      const SizedBox(height: 14),
-                      if (!_usesGlobalJobTitleAudience) ...[
-                        Text(
-                          'Oficinas',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Selecciona una o mas oficinas base. Si marcas una oficina padre, el sistema incluira automaticamente toda su rama segun el codigo, pero podras deseleccionar subramas que no iran al evento.',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(
-                              color:
-                                  _showValidation && _selectedOfficeIds.isEmpty
-                                  ? const Color(0xFFD94841)
-                                  : AppPalette.line,
-                            ),
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color:
+                                _showValidation &&
+                                    _selectedOfficeIds.isEmpty &&
+                                    _selectedJobTitleCodes.isEmpty
+                                ? const Color(0xFFD94841)
+                                : AppPalette.line,
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (shouldStackOfficeSummary) ...[
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '${_selectedOfficeIds.length} oficinas base seleccionadas',
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.titleSmall,
-                                    ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (shouldStackOfficeSummary) ...[
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '${_selectedOfficeIds.length} oficinas base seleccionadas',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleSmall,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${expandedOfficeIds.length} oficinas finales quedaran asociadas al evento.',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
+                                  ),
+                                  if (excludedBranchOffices.isNotEmpty) ...[
                                     const SizedBox(height: 4),
                                     Text(
-                                      '${expandedOfficeIds.length} oficinas finales quedaran asociadas al evento.',
+                                      '${excludedBranchOffices.length} ramas quedaran fuera aunque pertenezcan a una oficina padre seleccionada.',
                                       style: Theme.of(
                                         context,
                                       ).textTheme.bodySmall,
                                     ),
-                                    if (excludedBranchOffices.isNotEmpty) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        '${excludedBranchOffices.length} ramas quedaran fuera aunque pertenezcan a una oficina padre seleccionada.',
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.bodySmall,
-                                      ),
-                                    ],
-                                    const SizedBox(height: 12),
-                                    ElevatedButton.icon(
-                                      onPressed: _pickOffices,
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: AppPalette.orange,
-                                        foregroundColor: Colors.white,
-                                        elevation: 0,
-                                      ),
-                                      icon: const Icon(Icons.apartment_rounded),
-                                      label: Text(
-                                        directlySelectedOffices.isEmpty
-                                            ? 'Seleccionar'
-                                            : 'Cambiar',
-                                      ),
-                                    ),
                                   ],
-                                ),
-                              ] else
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            '${_selectedOfficeIds.length} oficinas base seleccionadas',
-                                            style: Theme.of(
-                                              context,
-                                            ).textTheme.titleSmall,
-                                          ),
+                                  const SizedBox(height: 12),
+                                  ElevatedButton.icon(
+                                    onPressed: _pickOffices,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: AppPalette.orange,
+                                      foregroundColor: Colors.white,
+                                      elevation: 0,
+                                    ),
+                                    icon: const Icon(Icons.apartment_rounded),
+                                    label: Text(
+                                      directlySelectedOffices.isEmpty
+                                          ? 'Seleccionar'
+                                          : 'Cambiar',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ] else
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '${_selectedOfficeIds.length} oficinas base seleccionadas',
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.titleSmall,
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          '${expandedOfficeIds.length} oficinas finales quedaran asociadas al evento.',
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.bodySmall,
+                                        ),
+                                        if (excludedBranchOffices
+                                            .isNotEmpty) ...[
                                           const SizedBox(height: 4),
                                           Text(
-                                            '${expandedOfficeIds.length} oficinas finales quedaran asociadas al evento.',
+                                            '${excludedBranchOffices.length} ramas quedaran fuera aunque pertenezcan a una oficina padre seleccionada.',
                                             style: Theme.of(
                                               context,
                                             ).textTheme.bodySmall,
                                           ),
-                                          if (excludedBranchOffices
-                                              .isNotEmpty) ...[
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              '${excludedBranchOffices.length} ramas quedaran fuera aunque pertenezcan a una oficina padre seleccionada.',
-                                              style: Theme.of(
-                                                context,
-                                              ).textTheme.bodySmall,
-                                            ),
-                                          ],
                                         ],
-                                      ),
+                                      ],
                                     ),
-                                    const SizedBox(width: 12),
-                                    ElevatedButton.icon(
-                                      onPressed: _pickOffices,
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: AppPalette.orange,
-                                        foregroundColor: Colors.white,
-                                        elevation: 0,
-                                      ),
-                                      icon: const Icon(Icons.apartment_rounded),
-                                      label: Text(
-                                        directlySelectedOffices.isEmpty
-                                            ? 'Seleccionar'
-                                            : 'Cambiar',
-                                      ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  ElevatedButton.icon(
+                                    onPressed: _pickOffices,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: AppPalette.orange,
+                                      foregroundColor: Colors.white,
+                                      elevation: 0,
                                     ),
-                                  ],
+                                    icon: const Icon(Icons.apartment_rounded),
+                                    label: Text(
+                                      directlySelectedOffices.isEmpty
+                                          ? 'Seleccionar'
+                                          : 'Cambiar',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            const SizedBox(height: 12),
+                            if (directlySelectedOffices.isEmpty)
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: AppPalette.surfaceSoft,
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(color: AppPalette.line),
                                 ),
-                              const SizedBox(height: 12),
-                              if (directlySelectedOffices.isEmpty)
-                                Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: AppPalette.surfaceSoft,
-                                    borderRadius: BorderRadius.circular(18),
-                                    border: Border.all(color: AppPalette.line),
-                                  ),
-                                  child: Text(
-                                    'Todavia no seleccionaste oficinas base.',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodyMedium,
-                                  ),
-                                )
-                              else ...[
-                                Text(
-                                  'Oficinas base elegidas',
-                                  style: Theme.of(context).textTheme.titleSmall,
+                                child: Text(
+                                  'Todavia no seleccionaste oficinas base.',
+                                  style: Theme.of(context).textTheme.bodyMedium,
                                 ),
-                                const SizedBox(height: 8),
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxHeight: 170,
-                                  ),
-                                  child: Scrollbar(
+                              )
+                            else ...[
+                              Text(
+                                'Oficinas base elegidas',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 8),
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxHeight: 170,
+                                ),
+                                child: Scrollbar(
+                                  controller: _selectedOfficesScrollController,
+                                  thumbVisibility:
+                                      directlySelectedOffices.length > 2,
+                                  child: ListView.separated(
                                     controller:
                                         _selectedOfficesScrollController,
-                                    thumbVisibility:
-                                        directlySelectedOffices.length > 2,
-                                    child: ListView.separated(
-                                      controller:
-                                          _selectedOfficesScrollController,
-                                      shrinkWrap: true,
-                                      itemCount: directlySelectedOffices.length,
-                                      separatorBuilder: (_, _) =>
-                                          const SizedBox(height: 8),
-                                      itemBuilder: (context, index) {
-                                        final office =
-                                            directlySelectedOffices[index];
-                                        final descendantsCount =
-                                            _countOfficeDescendants(
-                                              office,
-                                              widget.offices,
-                                            );
-
-                                        return Container(
-                                          padding: const EdgeInsets.all(14),
-                                          decoration: BoxDecoration(
-                                            color: AppPalette.surfaceSoft,
-                                            borderRadius: BorderRadius.circular(
-                                              18,
-                                            ),
-                                            border: Border.all(
-                                              color: AppPalette.line,
-                                            ),
-                                          ),
-                                          child: Row(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              const Icon(
-                                                Icons.apartment_rounded,
-                                                color: AppPalette.orange,
-                                              ),
-                                              const SizedBox(width: 12),
-                                              Expanded(
-                                                child: Column(
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment.start,
-                                                  children: [
-                                                    Text(
-                                                      office.name,
-                                                      style: Theme.of(
-                                                        context,
-                                                      ).textTheme.titleSmall,
-                                                    ),
-                                                    const SizedBox(height: 4),
-                                                    Text(
-                                                      'Cod. ${office.code} | Nivel ${office.level}',
-                                                      style: Theme.of(
-                                                        context,
-                                                      ).textTheme.bodySmall,
-                                                    ),
-                                                    if (descendantsCount >
-                                                        0) ...[
-                                                      const SizedBox(height: 4),
-                                                      Text(
-                                                        'Se agregaran automaticamente $descendantsCount oficinas hijas de su rama.',
-                                                        style: Theme.of(
-                                                          context,
-                                                        ).textTheme.bodySmall,
-                                                      ),
-                                                    ],
-                                                  ],
-                                                ),
-                                              ),
-                                              IconButton(
-                                                onPressed: () =>
-                                                    _removeSelectedOffice(
-                                                      office.id,
-                                                    ),
-                                                icon: const Icon(
-                                                  Icons.close_rounded,
-                                                  color: AppPalette.muted,
-                                                ),
-                                                tooltip: 'Quitar oficina',
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                ),
-                              ],
-                              if (excludedBranchOffices.isNotEmpty) ...[
-                                const SizedBox(height: 12),
-                                Text(
-                                  'Ramas deseleccionadas',
-                                  style: Theme.of(context).textTheme.titleSmall,
-                                ),
-                                const SizedBox(height: 8),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: [
-                                    for (final office in excludedBranchOffices)
-                                      InputChip(
-                                        label: Text(office.displayLabel),
-                                        onDeleted: () =>
-                                            _removeExcludedOffice(office.id),
-                                        deleteIconColor: const Color(
-                                          0xFFD94841,
-                                        ),
-                                        backgroundColor: const Color(
-                                          0xFFFFF1F0,
-                                        ),
-                                        side: const BorderSide(
-                                          color: Color(0xFFF2B8B5),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ],
-                              if (expandedOffices.isNotEmpty) ...[
-                                const SizedBox(height: 12),
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: TextButton.icon(
-                                    onPressed: _showExpandedOfficesPreview,
-                                    icon: const Icon(Icons.visibility_outlined),
-                                    label: Text(
-                                      excludedBranchOffices.isNotEmpty
-                                          ? 'Ver oficinas finales del evento'
-                                          : expandedOffices.length ==
-                                                directlySelectedOffices.length
-                                          ? 'Ver oficinas seleccionadas'
-                                          : 'Ver todas las oficinas que se asociaran',
-                                    ),
-                                  ),
-                                ),
-                              ],
-                              if (_showValidation &&
-                                  _selectedOfficeIds.isEmpty) ...[
-                                const SizedBox(height: 10),
-                                const Text(
-                                  'Selecciona al menos una oficina base.',
-                                  style: TextStyle(
-                                    color: Color(0xFFD94841),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        Text(
-                          'Cargos por oficina',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Define que cargos podran asistir en cada oficina. Si dejas una oficina en Todos, no se filtrara por cargo para esa oficina.',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(color: AppPalette.line),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (expandedOffices.isEmpty)
-                                Text(
-                                  'Primero selecciona una oficina.',
-                                  style: Theme.of(context).textTheme.bodyMedium,
-                                )
-                              else
-                                for (final office in expandedOffices) ...[
-                                  Builder(
-                                    builder: (context) {
-                                      final selectedCodes =
-                                          _officeJobTitleCodes[office.id] ??
-                                          const <String>{};
-                                      final selectedTitles = widget.jobTitles
-                                          .where(
-                                            (jobTitle) => selectedCodes
-                                                .contains(jobTitle.code),
-                                          )
-                                          .toList(growable: false);
+                                    shrinkWrap: true,
+                                    itemCount: directlySelectedOffices.length,
+                                    separatorBuilder: (_, _) =>
+                                        const SizedBox(height: 8),
+                                    itemBuilder: (context, index) {
+                                      final office =
+                                          directlySelectedOffices[index];
+                                      final descendantsCount =
+                                          _countOfficeDescendants(
+                                            office,
+                                            widget.offices,
+                                          );
 
                                       return Container(
-                                        margin: const EdgeInsets.only(
-                                          bottom: 10,
-                                        ),
-                                        padding: const EdgeInsets.all(12),
+                                        padding: const EdgeInsets.all(14),
                                         decoration: BoxDecoration(
                                           color: AppPalette.surfaceSoft,
                                           borderRadius: BorderRadius.circular(
-                                            16,
+                                            18,
                                           ),
                                           border: Border.all(
                                             color: AppPalette.line,
@@ -2305,7 +2005,7 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                                               Icons.apartment_rounded,
                                               color: AppPalette.orange,
                                             ),
-                                            const SizedBox(width: 10),
+                                            const SizedBox(width: 12),
                                             Expanded(
                                               child: Column(
                                                 crossAxisAlignment:
@@ -2319,147 +2019,315 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                                                   ),
                                                   const SizedBox(height: 4),
                                                   Text(
-                                                    selectedTitles.isEmpty
-                                                        ? 'Todos los cargos'
-                                                        : '${selectedTitles.length} cargos: ${selectedTitles.map((item) => item.name).join(', ')}',
-                                                    maxLines: 3,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
+                                                    'Cod. ${office.code} | Nivel ${office.level}',
                                                     style: Theme.of(
                                                       context,
                                                     ).textTheme.bodySmall,
                                                   ),
+                                                  if (descendantsCount > 0) ...[
+                                                    const SizedBox(height: 4),
+                                                    Text(
+                                                      'Se agregaran automaticamente $descendantsCount oficinas hijas de su rama.',
+                                                      style: Theme.of(
+                                                        context,
+                                                      ).textTheme.bodySmall,
+                                                    ),
+                                                  ],
                                                 ],
                                               ),
                                             ),
-                                            const SizedBox(width: 10),
-                                            TextButton.icon(
+                                            IconButton(
                                               onPressed: () =>
-                                                  _pickOfficeJobTitles(office),
+                                                  _removeSelectedOffice(
+                                                    office.id,
+                                                  ),
                                               icon: const Icon(
-                                                Icons.badge_rounded,
+                                                Icons.close_rounded,
+                                                color: AppPalette.muted,
                                               ),
-                                              label: const Text('Cargos'),
+                                              tooltip: 'Quitar oficina',
                                             ),
                                           ],
                                         ),
                                       );
                                     },
                                   ),
-                                ],
+                                ),
+                              ),
                             ],
-                          ),
-                        ),
-                      ] else ...[
-                        Text(
-                          'Cargos del evento',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Selecciona cargos globales. Todas las personas con esos cargos podran asistir, sin importar su oficina o unidad.',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(
-                              color:
-                                  _showValidation &&
-                                      _selectedJobTitleCodes.isEmpty
-                                  ? const Color(0xFFD94841)
-                                  : AppPalette.line,
-                            ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                            if (excludedBranchOffices.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Text(
+                                'Ramas deseleccionadas',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
                                 children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          globalSelectedJobTitles.length == 1
-                                              ? '1 cargo seleccionado'
-                                              : '${globalSelectedJobTitles.length} cargos seleccionados',
-                                          style: Theme.of(
-                                            context,
-                                          ).textTheme.titleSmall,
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          globalSelectedJobTitles.isEmpty
-                                              ? 'Todavia no seleccionaste cargos.'
-                                              : 'Aplicara a todas las oficinas.',
-                                          style: Theme.of(
-                                            context,
-                                          ).textTheme.bodySmall,
-                                        ),
-                                      ],
+                                  for (final office in excludedBranchOffices)
+                                    InputChip(
+                                      label: Text(office.displayLabel),
+                                      onDeleted: () =>
+                                          _removeExcludedOffice(office.id),
+                                      deleteIconColor: const Color(0xFFD94841),
+                                      backgroundColor: const Color(0xFFFFF1F0),
+                                      side: const BorderSide(
+                                        color: Color(0xFFF2B8B5),
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  ElevatedButton.icon(
-                                    onPressed: _pickGlobalJobTitles,
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: AppPalette.orange,
-                                      foregroundColor: Colors.white,
-                                      elevation: 0,
-                                    ),
-                                    icon: const Icon(Icons.badge_rounded),
-                                    label: Text(
-                                      globalSelectedJobTitles.isEmpty
-                                          ? 'Seleccionar'
-                                          : 'Cambiar',
-                                    ),
-                                  ),
                                 ],
                               ),
-                              if (globalSelectedJobTitles.isNotEmpty) ...[
-                                const SizedBox(height: 12),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: [
-                                    for (final jobTitle
-                                        in globalSelectedJobTitles)
-                                      Chip(
-                                        label: Text(jobTitle.name),
-                                        avatar: const Icon(
-                                          Icons.badge_rounded,
-                                          size: 18,
-                                          color: AppPalette.orange,
-                                        ),
-                                        backgroundColor: AppPalette.orangeSoft,
-                                        side: const BorderSide(
+                            ],
+                            if (expandedOffices.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: TextButton.icon(
+                                  onPressed: _showExpandedOfficesPreview,
+                                  icon: const Icon(Icons.visibility_outlined),
+                                  label: Text(
+                                    excludedBranchOffices.isNotEmpty
+                                        ? 'Ver oficinas finales del evento'
+                                        : expandedOffices.length ==
+                                              directlySelectedOffices.length
+                                        ? 'Ver oficinas seleccionadas'
+                                        : 'Ver todas las oficinas que se asociaran',
+                                  ),
+                                ),
+                              ),
+                            ],
+                            if (_showValidation &&
+                                _selectedOfficeIds.isEmpty &&
+                                _selectedJobTitleCodes.isEmpty) ...[
+                              const SizedBox(height: 10),
+                              const Text(
+                                'Selecciona al menos una oficina base o un cargo global.',
+                                style: TextStyle(
+                                  color: Color(0xFFD94841),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        'Cargos por oficina',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Define que cargos podran asistir en cada oficina. Si dejas una oficina en Todos, no se filtrara por cargo para esa oficina.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: AppPalette.line),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (expandedOffices.isEmpty)
+                              Text(
+                                'Primero selecciona una oficina.',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              )
+                            else
+                              for (final office in expandedOffices) ...[
+                                Builder(
+                                  builder: (context) {
+                                    final selectedCodes =
+                                        _officeJobTitleCodes[office.id] ??
+                                        const <String>{};
+                                    final selectedTitles = widget.jobTitles
+                                        .where(
+                                          (jobTitle) => selectedCodes.contains(
+                                            jobTitle.code,
+                                          ),
+                                        )
+                                        .toList(growable: false);
+
+                                    return Container(
+                                      margin: const EdgeInsets.only(bottom: 10),
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: AppPalette.surfaceSoft,
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
                                           color: AppPalette.line,
                                         ),
                                       ),
-                                  ],
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          const Icon(
+                                            Icons.apartment_rounded,
+                                            color: AppPalette.orange,
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  office.name,
+                                                  style: Theme.of(
+                                                    context,
+                                                  ).textTheme.titleSmall,
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  selectedTitles.isEmpty
+                                                      ? 'Todos los cargos'
+                                                      : '${selectedTitles.length} cargos: ${selectedTitles.map((item) => item.name).join(', ')}',
+                                                  maxLines: 3,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: Theme.of(
+                                                    context,
+                                                  ).textTheme.bodySmall,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          TextButton.icon(
+                                            onPressed: () =>
+                                                _pickOfficeJobTitles(office),
+                                            icon: const Icon(
+                                              Icons.badge_rounded,
+                                            ),
+                                            label: const Text('Cargos'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
                                 ),
                               ],
-                              if (_showValidation &&
-                                  _selectedJobTitleCodes.isEmpty) ...[
-                                const SizedBox(height: 10),
-                                const Text(
-                                  'Selecciona al menos un cargo.',
-                                  style: TextStyle(
-                                    color: Color(0xFFD94841),
-                                    fontSize: 12,
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        'Cargos globales del evento',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Selecciona cargos globales. Todas las personas con esos cargos podran asistir, sin importar su oficina o unidad.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color:
+                                _showValidation &&
+                                    _selectedOfficeIds.isEmpty &&
+                                    _selectedJobTitleCodes.isEmpty
+                                ? const Color(0xFFD94841)
+                                : AppPalette.line,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        globalSelectedJobTitles.length == 1
+                                            ? '1 cargo seleccionado'
+                                            : '${globalSelectedJobTitles.length} cargos seleccionados',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.titleSmall,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        globalSelectedJobTitles.isEmpty
+                                            ? 'Todavia no seleccionaste cargos.'
+                                            : 'Aplicara sin importar la oficina.',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                ElevatedButton.icon(
+                                  onPressed: _pickGlobalJobTitles,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppPalette.orange,
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                  ),
+                                  icon: const Icon(Icons.badge_rounded),
+                                  label: Text(
+                                    globalSelectedJobTitles.isEmpty
+                                        ? 'Seleccionar'
+                                        : 'Cambiar',
                                   ),
                                 ),
                               ],
+                            ),
+                            if (globalSelectedJobTitles.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  for (final jobTitle
+                                      in globalSelectedJobTitles)
+                                    Chip(
+                                      label: Text(jobTitle.name),
+                                      avatar: const Icon(
+                                        Icons.badge_rounded,
+                                        size: 18,
+                                        color: AppPalette.orange,
+                                      ),
+                                      backgroundColor: AppPalette.orangeSoft,
+                                      side: const BorderSide(
+                                        color: AppPalette.line,
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ],
-                          ),
+                            if (_showValidation &&
+                                _selectedOfficeIds.isEmpty &&
+                                _selectedJobTitleCodes.isEmpty) ...[
+                              const SizedBox(height: 10),
+                              const Text(
+                                'Selecciona al menos una oficina o un cargo global.',
+                                style: TextStyle(
+                                  color: Color(0xFFD94841),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
-                      ],
+                      ),
                       const SizedBox(height: 14),
                       Text(
                         'Controles del evento',
