@@ -324,6 +324,10 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Future<void> _submit() async {
+    if (_isSubmitting) {
+      return;
+    }
+
     final form = _formKey.currentState;
 
     if (form == null || !form.validate()) {

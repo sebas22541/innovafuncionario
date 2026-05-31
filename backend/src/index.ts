@@ -74,13 +74,13 @@ const JWT_SECRET =
   createHash("sha256").update(`${DATABASE_URL}:jwt`).digest("hex");
 const RATE_LIMIT_MAX_REQUESTS = clampInt(
   process.env.RATE_LIMIT_MAX_REQUESTS ?? null,
-  60,
+  100,
   1,
   300,
 );
 const IP_RATE_LIMIT_MAX_REQUESTS = clampInt(
   process.env.IP_RATE_LIMIT_MAX_REQUESTS ?? null,
-  60,
+  100,
   1,
   300,
 );
@@ -315,18 +315,6 @@ const server = http.createServer(async (request, response) => {
   requestPath = buildSafeRequestPath(url);
 
   if (!applyCors(request, response)) {
-    if (
-      recordSuspiciousIpActivity(request, response, requestId, {
-        reason: "Origen no permitido.",
-        strikes: 3,
-      })
-    ) {
-      sendJson(response, 429, {
-        error: "IP bloqueada temporalmente por actividad sospechosa.",
-      });
-      return;
-    }
-
     logWarning("Origen no permitido.", buildRequestLogFields(request, requestId, {
       statusCode: 403,
     }));
