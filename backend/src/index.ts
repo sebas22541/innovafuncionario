@@ -72,43 +72,6 @@ const JWT_TTL_SECONDS = clampInt(
 const JWT_SECRET =
   process.env.JWT_SECRET ??
   createHash("sha256").update(`${DATABASE_URL}:jwt`).digest("hex");
-const RATE_LIMIT_MAX_REQUESTS = clampInt(
-  process.env.RATE_LIMIT_MAX_REQUESTS ?? null,
-  100,
-  1,
-  300,
-);
-const IP_RATE_LIMIT_MAX_REQUESTS = clampInt(
-  process.env.IP_RATE_LIMIT_MAX_REQUESTS ?? null,
-  100,
-  1,
-  300,
-);
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_BAN_MS = clampInt(
-  process.env.RATE_LIMIT_BAN_SECONDS ?? null,
-  900,
-  60,
-  3600,
-) * 1000;
-const SUSPICIOUS_IP_MAX_STRIKES = clampInt(
-  process.env.SUSPICIOUS_IP_MAX_STRIKES ?? null,
-  3,
-  1,
-  100,
-);
-const SUSPICIOUS_IP_WINDOW_MS = clampInt(
-  process.env.SUSPICIOUS_IP_WINDOW_SECONDS ?? null,
-  900,
-  60,
-  86_400,
-) * 1000;
-const SUSPICIOUS_IP_BAN_MS = clampInt(
-  process.env.SUSPICIOUS_IP_BAN_SECONDS ?? null,
-  1800,
-  60,
-  86_400,
-) * 1000;
 const ALLOWED_CORS_ORIGINS = parseAllowedCorsOrigins(
   process.env.CORS_ALLOWED_ORIGINS,
 );
@@ -132,8 +95,6 @@ const SEED_ADMIN_EMAIL = normalizeEmailValue(
 const DYNAMIC_QR_SIGNING_SECRET =
   process.env.QR_DYNAMIC_SECRET ??
   createHash("sha256").update(`${DATABASE_URL}:dynamic-qr`).digest("hex");
-const HIGH_RISK_BOT_PATH_PATTERN =
-  /(?:^|\/)(?:wp-admin|wp-content|wp-includes|wp-login|xmlrpc|phpmyadmin|\.git|vendor)(?:\/|$)|(?:\.php$|\.php\/|readme\.txt$|composer\.(?:json|lock)$|package-lock\.json$|\.env$|config(?:\.json)?$|backup|dump|\.sql$)/i;
 
 if (!DATABASE_URL) {
   logFatal(
@@ -256,18 +217,6 @@ type CacheEntry<T> = {
   expiresAt: number;
 };
 
-type RateLimitBucket = {
-  count: number;
-  resetAt: number;
-  bannedUntil?: number;
-};
-
-type SuspiciousIpBucket = {
-  strikes: number;
-  resetAt: number;
-  bannedUntil?: number;
-};
-
 let officesCache: CacheEntry<any[]> | null = null;
 let cargosCache: CacheEntry<any[]> | null = null;
 let dashboardSummaryCache: CacheEntry<{
@@ -277,8 +226,6 @@ let dashboardSummaryCache: CacheEntry<{
 }> | null = null;
 let eventSummaryCache: CacheEntry<any[]> | null = null;
 const eventAttendanceContextCache = new Map<number, CacheEntry<any>>();
-const rateLimitBuckets = new Map<string, RateLimitBucket>();
-const suspiciousIpBuckets = new Map<string, SuspiciousIpBucket>();
 
 await ensureRuntimeSchema();
 
@@ -328,38 +275,10 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
-  if (rejectSuspiciousIpIfBanned(request, response, requestId)) {
-    return;
-  }
-
-  try {
-    enforceRateLimit(request, response, null);
-  } catch (error) {
-    if (error instanceof HttpError) {
-      logWarning(error.message, buildRequestLogFields(request, requestId, {
-        statusCode: error.statusCode,
-      }));
-      sendErrorJson(response, error.statusCode, error.message);
-      return;
-    }
-
-    throw error;
-  }
-
-  if (recordSuspiciousPathActivity(request, response, requestId, url)) {
-    sendJson(response, 429, {
-      error: "IP bloqueada temporalmente por actividad sospechosa.",
-    });
-    return;
-  }
-
   try {
     const authenticatedUser = await authenticateRequestIfRequired(request, url);
 
     authenticatedUserForLog = authenticatedUser;
-    if (authenticatedUser.id > 0) {
-      enforceRateLimit(request, response, authenticatedUser);
-    }
 
     if (request.method === "GET" && url.pathname === "/") {
       sendJson(response, 404, { error: "No encontrado." });
@@ -1844,22 +1763,6 @@ const server = http.createServer(async (request, response) => {
         userId: authenticatedUserForLog?.id,
         userEmail: authenticatedUserForLog?.email,
       }));
-      if (
-        recordSuspiciousHttpError(
-          request,
-          response,
-          requestId,
-          url,
-          error,
-          authenticatedUserForLog,
-        )
-      ) {
-        sendJson(response, 429, {
-          error: "IP bloqueada temporalmente por actividad sospechosa.",
-        });
-        return;
-      }
-
       sendErrorJson(response, error.statusCode, error.message);
       return;
     }
@@ -2343,319 +2246,6 @@ function normalizeOptionalEnvValue(value: string | undefined) {
   return normalizedValue == null || normalizedValue.length === 0
     ? null
     : normalizedValue;
-}
-
-function rejectSuspiciousIpIfBanned(
-  request: IncomingMessage,
-  response: ServerResponse,
-  requestId: string,
-) {
-  const now = Date.now();
-  pruneSuspiciousIpBuckets(now);
-  const bucket = suspiciousIpBuckets.get(readClientIp(request));
-
-  if (bucket?.bannedUntil == null || bucket.bannedUntil <= now) {
-    return false;
-  }
-
-  setSuspiciousIpBanHeaders(response, bucket, now);
-  logWarning(
-    "IP bloqueada temporalmente por actividad sospechosa.",
-    buildRequestLogFields(request, requestId, {
-      statusCode: 429,
-      strikes: bucket.strikes,
-      bannedUntil: new Date(bucket.bannedUntil).toISOString(),
-    }),
-  );
-  sendJson(response, 429, {
-    error: "IP bloqueada temporalmente por actividad sospechosa.",
-  });
-
-  return true;
-}
-
-function recordSuspiciousPathActivity(
-  request: IncomingMessage,
-  response: ServerResponse,
-  requestId: string,
-  url: URL,
-) {
-  const strikes = readSuspiciousPathStrikes(url);
-
-  if (strikes <= 0) {
-    return false;
-  }
-
-  return recordSuspiciousIpActivity(request, response, requestId, {
-    reason: "Ruta sospechosa.",
-    strikes,
-    extraFields: { path: buildSafeRequestPath(url) },
-  });
-}
-
-function recordSuspiciousHttpError(
-  request: IncomingMessage,
-  response: ServerResponse,
-  requestId: string,
-  url: URL,
-  error: HttpError,
-  authenticatedUser: AuthenticatedUser | null,
-) {
-  const strikes = readSuspiciousHttpErrorStrikes(request, url, error, authenticatedUser);
-
-  if (strikes <= 0) {
-    return false;
-  }
-
-  return recordSuspiciousIpActivity(request, response, requestId, {
-    reason: error.message,
-    strikes,
-    extraFields: {
-      path: buildSafeRequestPath(url),
-      statusCode: error.statusCode,
-    },
-  });
-}
-
-function recordSuspiciousIpActivity(
-  request: IncomingMessage,
-  response: ServerResponse,
-  requestId: string,
-  input: {
-    reason: string;
-    strikes: number;
-    extraFields?: Record<string, unknown>;
-  },
-) {
-  const now = Date.now();
-  pruneSuspiciousIpBuckets(now);
-  const ip = readClientIp(request);
-  const currentBucket = suspiciousIpBuckets.get(ip);
-  const bucket =
-    currentBucket == null || currentBucket.resetAt <= now
-      ? {
-          strikes: 0,
-          resetAt: now + SUSPICIOUS_IP_WINDOW_MS,
-        }
-      : currentBucket;
-
-  bucket.strikes += input.strikes;
-  suspiciousIpBuckets.set(ip, bucket);
-
-  if (bucket.strikes < SUSPICIOUS_IP_MAX_STRIKES) {
-    return false;
-  }
-
-  bucket.bannedUntil = now + SUSPICIOUS_IP_BAN_MS;
-  setSuspiciousIpBanHeaders(response, bucket, now);
-  logWarning(
-    "IP bloqueada temporalmente por actividad sospechosa.",
-    buildRequestLogFields(request, requestId, {
-      statusCode: 429,
-      reason: input.reason,
-      strikes: bucket.strikes,
-      bannedUntil: new Date(bucket.bannedUntil).toISOString(),
-      ...input.extraFields,
-    }),
-  );
-
-  return true;
-}
-
-function readSuspiciousPathStrikes(url: URL) {
-  const pathname = url.pathname.toLowerCase();
-
-  if (
-    HIGH_RISK_BOT_PATH_PATTERN.test(pathname) ||
-    pathname.includes("..") ||
-    pathname.includes(";") ||
-    pathname.includes("\\") ||
-    pathname.includes("/content/dam") ||
-    pathname.includes("media-cache") ||
-    pathname.includes("validator") ||
-    pathname.includes("tidy") ||
-    pathname.includes("infinity")
-  ) {
-    return SUSPICIOUS_IP_MAX_STRIKES;
-  }
-
-  if (pathname === "/" || pathname === "/health" || pathname.startsWith("/api/")) {
-    return 0;
-  }
-
-  if (pathname === "/favicon.ico" || pathname === "/robots.txt") {
-    return 0;
-  }
-
-  return 2;
-}
-
-function readSuspiciousHttpErrorStrikes(
-  request: IncomingMessage,
-  url: URL,
-  error: HttpError,
-  authenticatedUser: AuthenticatedUser | null,
-) {
-  if (authenticatedUser != null && authenticatedUser.id > 0) {
-    return 0;
-  }
-
-  if (error.statusCode === 404) {
-    return readSuspiciousPathStrikes(url) > 0 ? 2 : 0;
-  }
-
-  if (error.statusCode === 403) {
-    return 2;
-  }
-
-  if (error.statusCode === 400 && isEncryptedJsonEnvelopeError(error)) {
-    return 2;
-  }
-
-  if (error.statusCode !== 401) {
-    return 0;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/auth/login") {
-    return 3;
-  }
-
-  const hasToken = readOptionalBearerToken(request) != null;
-
-  if (!hasToken) {
-    return url.pathname.startsWith("/api/") ? 0 : 1;
-  }
-
-  if (
-    error.message.includes("Token de sesion invalido") ||
-    error.message.includes("Sesion invalida")
-  ) {
-    return 2;
-  }
-
-  return 0;
-}
-
-function isEncryptedJsonEnvelopeError(error: HttpError) {
-  return (
-    error.message.includes("JSON") ||
-    error.message.includes("cifrado") ||
-    error.message.includes("descifrar")
-  );
-}
-
-function pruneSuspiciousIpBuckets(now: number) {
-  for (const [key, bucket] of suspiciousIpBuckets) {
-    if (
-      bucket.resetAt <= now &&
-      (bucket.bannedUntil == null || bucket.bannedUntil <= now)
-    ) {
-      suspiciousIpBuckets.delete(key);
-    }
-  }
-}
-
-function setSuspiciousIpBanHeaders(
-  response: ServerResponse,
-  bucket: SuspiciousIpBucket,
-  now: number,
-) {
-  if (bucket.bannedUntil == null) {
-    return;
-  }
-
-  response.setHeader("Retry-After", Math.max(
-    1,
-    Math.ceil((bucket.bannedUntil - now) / 1000),
-  ).toString());
-}
-
-function enforceRateLimit(
-  request: IncomingMessage,
-  response: ServerResponse,
-  authenticatedUser: AuthenticatedUser | null,
-) {
-  const key = readRateLimitKey(request, authenticatedUser);
-  const scope = authenticatedUser == null ? "ip" : "user";
-  const maxRequests =
-    scope === "ip" ? IP_RATE_LIMIT_MAX_REQUESTS : RATE_LIMIT_MAX_REQUESTS;
-  const now = Date.now();
-  pruneExpiredRateLimitBuckets(now);
-  const bucket = rateLimitBuckets.get(key);
-
-  if (bucket?.bannedUntil != null && bucket.bannedUntil > now) {
-    setRateLimitHeaders(response, bucket, scope, maxRequests);
-    response.setHeader(
-      "Retry-After",
-      Math.max(1, Math.ceil((bucket.bannedUntil - now) / 1000)).toString(),
-    );
-    throw new HttpError(
-      429,
-      "Demasiadas solicitudes. Intente nuevamente mas tarde.",
-    );
-  }
-
-  if (bucket == null || bucket.resetAt <= now) {
-    const nextBucket = {
-      count: 1,
-      resetAt: now + RATE_LIMIT_WINDOW_MS,
-    };
-    rateLimitBuckets.set(key, nextBucket);
-    setRateLimitHeaders(response, nextBucket, scope, maxRequests);
-    return;
-  }
-
-  bucket.count += 1;
-  setRateLimitHeaders(response, bucket, scope, maxRequests);
-
-  if (bucket.count > maxRequests) {
-    bucket.bannedUntil = now + RATE_LIMIT_BAN_MS;
-    response.setHeader(
-      "Retry-After",
-      Math.max(1, Math.ceil(RATE_LIMIT_BAN_MS / 1000)).toString(),
-    );
-    throw new HttpError(
-      429,
-      "Demasiadas solicitudes. Intente nuevamente mas tarde.",
-    );
-  }
-}
-
-function readRateLimitKey(
-  request: IncomingMessage,
-  authenticatedUser: AuthenticatedUser | null,
-) {
-  if (authenticatedUser != null && authenticatedUser.id > 0) {
-    return `user:${authenticatedUser.id}`;
-  }
-
-  return `ip:${readClientIp(request)}`;
-}
-
-function pruneExpiredRateLimitBuckets(now: number) {
-  for (const [key, bucket] of rateLimitBuckets) {
-    if (bucket.resetAt <= now && (bucket.bannedUntil == null || bucket.bannedUntil <= now)) {
-      rateLimitBuckets.delete(key);
-    }
-  }
-}
-
-function setRateLimitHeaders(
-  response: ServerResponse,
-  bucket: RateLimitBucket,
-  scope: "ip" | "user",
-  maxRequests: number,
-) {
-  const resetSeconds = Math.ceil(bucket.resetAt / 1000).toString();
-
-  response.setHeader("RateLimit-Limit", maxRequests.toString());
-  response.setHeader("RateLimit-Policy", `${maxRequests};w=${Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)}`);
-  response.setHeader("RateLimit-Scope", scope);
-  response.setHeader(
-    "RateLimit-Remaining",
-    Math.max(0, maxRequests - bucket.count).toString(),
-  );
-  response.setHeader("RateLimit-Reset", resetSeconds);
 }
 
 function readClientIp(request: IncomingMessage) {
