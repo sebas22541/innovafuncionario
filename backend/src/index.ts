@@ -1084,13 +1084,15 @@ const server = http.createServer(async (request, response) => {
           input.oficinaIdsFinales,
         );
 
-        await tx.evento_oficinas.createMany({
-          data: resolvedOfficeSelection.expandedOffices.map((office) => ({
-            evento_id: createdEvent.id,
-            oficina_id: office.id,
-            seleccion_directa: office.isDirectSelection,
-          })),
-        });
+        if (resolvedOfficeSelection.expandedOffices.length > 0) {
+          await tx.evento_oficinas.createMany({
+            data: resolvedOfficeSelection.expandedOffices.map((office) => ({
+              evento_id: createdEvent.id,
+              oficina_id: office.id,
+              seleccion_directa: office.isDirectSelection,
+            })),
+          });
+        }
 
         await syncEventJobTitles(tx, createdEvent.id, input.cargoCodigos);
         await syncEventOfficeJobTitles(
@@ -1185,13 +1187,15 @@ const server = http.createServer(async (request, response) => {
           input.oficinaIdsFinales,
         );
 
-        await tx.evento_oficinas.createMany({
-          data: resolvedOfficeSelection.expandedOffices.map((office) => ({
-            evento_id: eventId,
-            oficina_id: office.id,
-            seleccion_directa: office.isDirectSelection,
-          })),
-        });
+        if (resolvedOfficeSelection.expandedOffices.length > 0) {
+          await tx.evento_oficinas.createMany({
+            data: resolvedOfficeSelection.expandedOffices.map((office) => ({
+              evento_id: eventId,
+              oficina_id: office.id,
+              seleccion_directa: office.isDirectSelection,
+            })),
+          });
+        }
 
         await syncEventJobTitles(tx, eventId, input.cargoCodigos);
         await syncEventOfficeJobTitles(
@@ -3170,7 +3174,7 @@ function parseEventInputPayload(payload: unknown) {
   const direccion = readRequiredString(body, "direccion", 5, 255);
   const latitud = readRequiredFloat(body, "latitud", -90, 90);
   const longitud = readRequiredFloat(body, "longitud", -180, 180);
-  const oficinaIds = readRequiredIntList(body, "oficinaIds", "oficinaId");
+  const oficinaIds = readOptionalIntList(body, "oficinaIds");
   const oficinaIdsFinales = readOptionalIntList(
     body,
     "oficinaIdsFinales",
@@ -3182,6 +3186,20 @@ function parseEventInputPayload(payload: unknown) {
   const cargoCodigos = readOptionalStringList(body, "cargoCodigos", "cargoCodigo");
   const cargoCodigosPorOficina = parseOfficeJobTitleInput(body);
   const controles = parseEventControlsInput(body);
+
+  if (oficinaIds.length === 0 && cargoCodigos.length === 0) {
+    throw new HttpError(
+      400,
+      "Debes seleccionar al menos una oficina o un cargo para el evento.",
+    );
+  }
+
+  if (oficinaIds.length === 0 && cargoCodigosPorOficina.length > 0) {
+    throw new HttpError(
+      400,
+      "Los cargos por oficina requieren seleccionar una o mas oficinas.",
+    );
+  }
 
   return {
     nombre,
