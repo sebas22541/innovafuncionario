@@ -48,7 +48,7 @@ class _QrWebAppState extends State<QrWebApp> {
         user = await dependencies.authApiService.fetchCurrentUser();
         await SessionStore.saveUser(user);
       } on BackendApiException catch (error) {
-        if (error.statusCode == 401 || error.statusCode == 403) {
+        if (error.statusCode == 401) {
           await SessionStore.clearSession();
         } else {
           user = storedUser;

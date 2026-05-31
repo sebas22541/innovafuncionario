@@ -50,7 +50,7 @@ const DB_POOL_CONNECTION_TIMEOUT_MS = clampInt(
 );
 const DYNAMIC_QR_TTL_SECONDS = clampInt(
   process.env.QR_DYNAMIC_TTL_SECONDS ?? null,
-  300,
+  1800,
   30,
   3600,
 );
@@ -65,8 +65,8 @@ const DYNAMIC_QR_VERSION = "DQR1";
 const DYNAMIC_QR_SIGNATURE_LENGTH = 16;
 const JWT_TTL_SECONDS = clampInt(
   process.env.JWT_TTL_SECONDS ?? null,
+  31_536_000,
   2_592_000,
-  3_600,
   31_536_000,
 );
 const JWT_SECRET =
@@ -90,6 +90,24 @@ const RATE_LIMIT_BAN_MS = clampInt(
   300,
   60,
   3600,
+) * 1000;
+const SUSPICIOUS_IP_MAX_STRIKES = clampInt(
+  process.env.SUSPICIOUS_IP_MAX_STRIKES ?? null,
+  5,
+  1,
+  100,
+);
+const SUSPICIOUS_IP_WINDOW_MS = clampInt(
+  process.env.SUSPICIOUS_IP_WINDOW_SECONDS ?? null,
+  900,
+  60,
+  86_400,
+) * 1000;
+const SUSPICIOUS_IP_BAN_MS = clampInt(
+  process.env.SUSPICIOUS_IP_BAN_SECONDS ?? null,
+  1800,
+  60,
+  86_400,
 ) * 1000;
 const ALLOWED_CORS_ORIGINS = parseAllowedCorsOrigins(
   process.env.CORS_ALLOWED_ORIGINS,
@@ -241,6 +259,12 @@ type RateLimitBucket = {
   bannedUntil?: number;
 };
 
+type SuspiciousIpBucket = {
+  strikes: number;
+  resetAt: number;
+  bannedUntil?: number;
+};
+
 let officesCache: CacheEntry<any[]> | null = null;
 let cargosCache: CacheEntry<any[]> | null = null;
 let dashboardSummaryCache: CacheEntry<{
@@ -250,6 +274,7 @@ let dashboardSummaryCache: CacheEntry<{
 }> | null = null;
 let eventSummaryCache: CacheEntry<any[]> | null = null;
 const rateLimitBuckets = new Map<string, RateLimitBucket>();
+const suspiciousIpBuckets = new Map<string, SuspiciousIpBucket>();
 
 await ensureRuntimeSchema();
 
@@ -274,7 +299,37 @@ const server = http.createServer(async (request, response) => {
     });
   });
 
+  if (rejectSuspiciousIpIfBanned(request, response, requestId)) {
+    return;
+  }
+
+  try {
+    enforceRateLimit(request, response, null);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      logWarning(error.message, buildRequestLogFields(request, requestId, {
+        statusCode: error.statusCode,
+      }));
+      sendJson(response, error.statusCode, { error: error.message });
+      return;
+    }
+
+    throw error;
+  }
+
   if (!applyCors(request, response)) {
+    if (
+      recordSuspiciousIpActivity(request, response, requestId, {
+        reason: "Origen no permitido.",
+        strikes: 3,
+      })
+    ) {
+      sendJson(response, 429, {
+        error: "IP bloqueada temporalmente por actividad sospechosa.",
+      });
+      return;
+    }
+
     logWarning("Origen no permitido.", buildRequestLogFields(request, requestId, {
       statusCode: 403,
     }));
@@ -300,7 +355,12 @@ const server = http.createServer(async (request, response) => {
   requestPath = buildSafeRequestPath(url);
 
   try {
-    enforceRateLimit(request, response, null);
+    if (recordSuspiciousPathActivity(request, response, requestId, url)) {
+      sendJson(response, 429, {
+        error: "IP bloqueada temporalmente por actividad sospechosa.",
+      });
+      return;
+    }
 
     const authenticatedUser = await authenticateRequestIfRequired(request, url);
 
@@ -1805,6 +1865,22 @@ const server = http.createServer(async (request, response) => {
         userId: authenticatedUserForLog?.id,
         userEmail: authenticatedUserForLog?.email,
       }));
+      if (
+        recordSuspiciousHttpError(
+          request,
+          response,
+          requestId,
+          url,
+          error,
+          authenticatedUserForLog,
+        )
+      ) {
+        sendJson(response, 429, {
+          error: "IP bloqueada temporalmente por actividad sospechosa.",
+        });
+        return;
+      }
+
       sendJson(response, error.statusCode, { error: error.message });
       return;
     }
@@ -2273,6 +2349,234 @@ function normalizeOptionalEnvValue(value: string | undefined) {
   return normalizedValue == null || normalizedValue.length === 0
     ? null
     : normalizedValue;
+}
+
+function rejectSuspiciousIpIfBanned(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestId: string,
+) {
+  const now = Date.now();
+  pruneSuspiciousIpBuckets(now);
+  const bucket = suspiciousIpBuckets.get(readClientIp(request));
+
+  if (bucket?.bannedUntil == null || bucket.bannedUntil <= now) {
+    return false;
+  }
+
+  setSuspiciousIpBanHeaders(response, bucket, now);
+  logWarning(
+    "IP bloqueada temporalmente por actividad sospechosa.",
+    buildRequestLogFields(request, requestId, {
+      statusCode: 429,
+      strikes: bucket.strikes,
+      bannedUntil: new Date(bucket.bannedUntil).toISOString(),
+    }),
+  );
+  sendJson(response, 429, {
+    error: "IP bloqueada temporalmente por actividad sospechosa.",
+  });
+
+  return true;
+}
+
+function recordSuspiciousPathActivity(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestId: string,
+  url: URL,
+) {
+  const strikes = readSuspiciousPathStrikes(url);
+
+  if (strikes <= 0) {
+    return false;
+  }
+
+  return recordSuspiciousIpActivity(request, response, requestId, {
+    reason: "Ruta sospechosa.",
+    strikes,
+    extraFields: { path: buildSafeRequestPath(url) },
+  });
+}
+
+function recordSuspiciousHttpError(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestId: string,
+  url: URL,
+  error: HttpError,
+  authenticatedUser: AuthenticatedUser | null,
+) {
+  const strikes = readSuspiciousHttpErrorStrikes(request, url, error, authenticatedUser);
+
+  if (strikes <= 0) {
+    return false;
+  }
+
+  return recordSuspiciousIpActivity(request, response, requestId, {
+    reason: error.message,
+    strikes,
+    extraFields: {
+      path: buildSafeRequestPath(url),
+      statusCode: error.statusCode,
+    },
+  });
+}
+
+function recordSuspiciousIpActivity(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestId: string,
+  input: {
+    reason: string;
+    strikes: number;
+    extraFields?: Record<string, unknown>;
+  },
+) {
+  const now = Date.now();
+  pruneSuspiciousIpBuckets(now);
+  const ip = readClientIp(request);
+  const currentBucket = suspiciousIpBuckets.get(ip);
+  const bucket =
+    currentBucket == null || currentBucket.resetAt <= now
+      ? {
+          strikes: 0,
+          resetAt: now + SUSPICIOUS_IP_WINDOW_MS,
+        }
+      : currentBucket;
+
+  bucket.strikes += input.strikes;
+  suspiciousIpBuckets.set(ip, bucket);
+
+  if (bucket.strikes < SUSPICIOUS_IP_MAX_STRIKES) {
+    return false;
+  }
+
+  bucket.bannedUntil = now + SUSPICIOUS_IP_BAN_MS;
+  setSuspiciousIpBanHeaders(response, bucket, now);
+  logWarning(
+    "IP bloqueada temporalmente por actividad sospechosa.",
+    buildRequestLogFields(request, requestId, {
+      statusCode: 429,
+      reason: input.reason,
+      strikes: bucket.strikes,
+      bannedUntil: new Date(bucket.bannedUntil).toISOString(),
+      ...input.extraFields,
+    }),
+  );
+
+  return true;
+}
+
+function readSuspiciousPathStrikes(url: URL) {
+  const pathname = url.pathname.toLowerCase();
+
+  if (pathname === "/" || pathname === "/health" || pathname.startsWith("/api/")) {
+    return 0;
+  }
+
+  if (pathname === "/favicon.ico" || pathname === "/robots.txt") {
+    return 0;
+  }
+
+  if (
+    pathname.includes("..") ||
+    pathname.includes(";") ||
+    pathname.includes("\\") ||
+    pathname.includes("/content/dam") ||
+    pathname.includes("wp-") ||
+    pathname.includes("php") ||
+    pathname.includes(".env") ||
+    pathname.includes("config") ||
+    pathname.includes("media-cache") ||
+    pathname.includes("validator") ||
+    pathname.includes("tidy") ||
+    pathname.includes("infinity")
+  ) {
+    return SUSPICIOUS_IP_MAX_STRIKES;
+  }
+
+  return 2;
+}
+
+function readSuspiciousHttpErrorStrikes(
+  request: IncomingMessage,
+  url: URL,
+  error: HttpError,
+  authenticatedUser: AuthenticatedUser | null,
+) {
+  if (authenticatedUser != null && authenticatedUser.id > 0) {
+    return 0;
+  }
+
+  if (error.statusCode === 404) {
+    return readSuspiciousPathStrikes(url) > 0 ? 2 : 0;
+  }
+
+  if (error.statusCode === 403) {
+    return 2;
+  }
+
+  if (error.statusCode === 400 && isEncryptedJsonEnvelopeError(error)) {
+    return 2;
+  }
+
+  if (error.statusCode !== 401) {
+    return 0;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/auth/login") {
+    return 3;
+  }
+
+  const hasToken = readOptionalBearerToken(request) != null;
+
+  if (!hasToken) {
+    return 1;
+  }
+
+  if (
+    error.message.includes("Token de sesion invalido") ||
+    error.message.includes("Sesion invalida")
+  ) {
+    return 2;
+  }
+
+  return 0;
+}
+
+function isEncryptedJsonEnvelopeError(error: HttpError) {
+  return (
+    error.message.includes("JSON") ||
+    error.message.includes("cifrado") ||
+    error.message.includes("descifrar")
+  );
+}
+
+function pruneSuspiciousIpBuckets(now: number) {
+  for (const [key, bucket] of suspiciousIpBuckets) {
+    if (
+      bucket.resetAt <= now &&
+      (bucket.bannedUntil == null || bucket.bannedUntil <= now)
+    ) {
+      suspiciousIpBuckets.delete(key);
+    }
+  }
+}
+
+function setSuspiciousIpBanHeaders(
+  response: ServerResponse,
+  bucket: SuspiciousIpBucket,
+  now: number,
+) {
+  if (bucket.bannedUntil == null) {
+    return;
+  }
+
+  response.setHeader("Retry-After", Math.max(
+    1,
+    Math.ceil((bucket.bannedUntil - now) / 1000),
+  ).toString());
 }
 
 function enforceRateLimit(
