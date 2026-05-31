@@ -50,7 +50,7 @@ const DB_POOL_CONNECTION_TIMEOUT_MS = clampInt(
 );
 const DYNAMIC_QR_TTL_SECONDS = clampInt(
   process.env.QR_DYNAMIC_TTL_SECONDS ?? null,
-  300,
+  1800,
   30,
   3600,
 );
@@ -65,8 +65,8 @@ const DYNAMIC_QR_VERSION = "DQR1";
 const DYNAMIC_QR_SIGNATURE_LENGTH = 16;
 const JWT_TTL_SECONDS = clampInt(
   process.env.JWT_TTL_SECONDS ?? null,
+  31_536_000,
   2_592_000,
-  3_600,
   31_536_000,
 );
 const JWT_SECRET =
@@ -91,6 +91,24 @@ const RATE_LIMIT_BAN_MS = clampInt(
   60,
   3600,
 ) * 1000;
+const SUSPICIOUS_IP_MAX_STRIKES = clampInt(
+  process.env.SUSPICIOUS_IP_MAX_STRIKES ?? null,
+  5,
+  1,
+  100,
+);
+const SUSPICIOUS_IP_WINDOW_MS = clampInt(
+  process.env.SUSPICIOUS_IP_WINDOW_SECONDS ?? null,
+  900,
+  60,
+  86_400,
+) * 1000;
+const SUSPICIOUS_IP_BAN_MS = clampInt(
+  process.env.SUSPICIOUS_IP_BAN_SECONDS ?? null,
+  1800,
+  60,
+  86_400,
+) * 1000;
 const ALLOWED_CORS_ORIGINS = parseAllowedCorsOrigins(
   process.env.CORS_ALLOWED_ORIGINS,
 );
@@ -102,7 +120,8 @@ const PAYLOAD_ENCRYPTION_KEY_BYTES =
     ? null
     : createHash("sha256").update(PAYLOAD_ENCRYPTION_KEY).digest();
 const PAYLOAD_RESPONSE_ENCRYPTION_ENABLED =
-  process.env.PAYLOAD_RESPONSE_ENCRYPTION === "true";
+  PAYLOAD_ENCRYPTION_KEY_BYTES != null &&
+  process.env.PAYLOAD_RESPONSE_ENCRYPTION !== "false";
 const REFERENCE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DASHBOARD_CACHE_TTL_MS = 30 * 1000;
 const EVENT_SUMMARY_CACHE_TTL_MS = 15 * 1000;
@@ -240,6 +259,12 @@ type RateLimitBucket = {
   bannedUntil?: number;
 };
 
+type SuspiciousIpBucket = {
+  strikes: number;
+  resetAt: number;
+  bannedUntil?: number;
+};
+
 let officesCache: CacheEntry<any[]> | null = null;
 let cargosCache: CacheEntry<any[]> | null = null;
 let dashboardSummaryCache: CacheEntry<{
@@ -249,6 +274,7 @@ let dashboardSummaryCache: CacheEntry<{
 }> | null = null;
 let eventSummaryCache: CacheEntry<any[]> | null = null;
 const rateLimitBuckets = new Map<string, RateLimitBucket>();
+const suspiciousIpBuckets = new Map<string, SuspiciousIpBucket>();
 
 await ensureRuntimeSchema();
 
@@ -273,7 +299,37 @@ const server = http.createServer(async (request, response) => {
     });
   });
 
+  if (rejectSuspiciousIpIfBanned(request, response, requestId)) {
+    return;
+  }
+
+  try {
+    enforceRateLimit(request, response, null);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      logWarning(error.message, buildRequestLogFields(request, requestId, {
+        statusCode: error.statusCode,
+      }));
+      sendJson(response, error.statusCode, { error: error.message });
+      return;
+    }
+
+    throw error;
+  }
+
   if (!applyCors(request, response)) {
+    if (
+      recordSuspiciousIpActivity(request, response, requestId, {
+        reason: "Origen no permitido.",
+        strikes: 3,
+      })
+    ) {
+      sendJson(response, 429, {
+        error: "IP bloqueada temporalmente por actividad sospechosa.",
+      });
+      return;
+    }
+
     logWarning("Origen no permitido.", buildRequestLogFields(request, requestId, {
       statusCode: 403,
     }));
@@ -299,24 +355,14 @@ const server = http.createServer(async (request, response) => {
   requestPath = buildSafeRequestPath(url);
 
   try {
-    const shouldRateLimitIpBeforeAuth =
-      isPublicRoute(request, url) || readOptionalBearerToken(request) == null;
-
-    if (shouldRateLimitIpBeforeAuth) {
-      enforceRateLimit(request, response, null);
+    if (recordSuspiciousPathActivity(request, response, requestId, url)) {
+      sendJson(response, 429, {
+        error: "IP bloqueada temporalmente por actividad sospechosa.",
+      });
+      return;
     }
 
-    let authenticatedUser: AuthenticatedUser;
-
-    try {
-      authenticatedUser = await authenticateRequestIfRequired(request, url);
-    } catch (error) {
-      if (!shouldRateLimitIpBeforeAuth) {
-        enforceRateLimit(request, response, null);
-      }
-
-      throw error;
-    }
+    const authenticatedUser = await authenticateRequestIfRequired(request, url);
 
     authenticatedUserForLog = authenticatedUser;
     if (authenticatedUser.id > 0) {
@@ -500,10 +546,9 @@ const server = http.createServer(async (request, response) => {
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);
-      const authToken = await createAuthToken(user);
 
       sendJson(response, 200, {
-        data: serializeAppUser(user, person, authToken),
+        data: serializeAppUser(user, person),
       });
       return;
     }
@@ -549,10 +594,9 @@ const server = http.createServer(async (request, response) => {
         include: userWithOfficeInclude,
       });
       const person = await ensurePersonIdentityForUser(prisma, updatedUser);
-      const authToken = await createAuthToken(updatedUser);
 
       sendJson(response, 200, {
-        data: serializeAppUser(updatedUser, person, authToken),
+        data: serializeAppUser(updatedUser, person),
       });
       return;
     }
@@ -1037,6 +1081,7 @@ const server = http.createServer(async (request, response) => {
           tx,
           input.oficinaIds,
           input.oficinaIdsExcluidos,
+          input.oficinaIdsFinales,
         );
 
         await tx.evento_oficinas.createMany({
@@ -1137,6 +1182,7 @@ const server = http.createServer(async (request, response) => {
           tx,
           input.oficinaIds,
           input.oficinaIdsExcluidos,
+          input.oficinaIdsFinales,
         );
 
         await tx.evento_oficinas.createMany({
@@ -1467,7 +1513,7 @@ const server = http.createServer(async (request, response) => {
         : extractLookupCode(scannedValue);
 
       if (!isCiRegistration) {
-        assertScannedQrIsUsable(scannedValue);
+        assertScannedQrIsDynamic(scannedValue);
       }
 
       if (!lookupCode) {
@@ -1483,8 +1529,8 @@ const server = http.createServer(async (request, response) => {
         where: { id: input.eventId },
         include: {
           evento_oficinas: {
-            select: {
-              oficina_id: true,
+            include: {
+              oficinas: true,
             },
           },
           evento_cargos: {
@@ -1765,7 +1811,7 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
-      assertScannedQrIsUsable(codigoQr);
+      assertScannedQrIsDynamic(codigoQr);
 
       const persona = await findPersonByScannedValue(codigoQr);
       const eventId = readOptionalQueryInt(url, "eventId");
@@ -1819,6 +1865,22 @@ const server = http.createServer(async (request, response) => {
         userId: authenticatedUserForLog?.id,
         userEmail: authenticatedUserForLog?.email,
       }));
+      if (
+        recordSuspiciousHttpError(
+          request,
+          response,
+          requestId,
+          url,
+          error,
+          authenticatedUserForLog,
+        )
+      ) {
+        sendJson(response, 429, {
+          error: "IP bloqueada temporalmente por actividad sospechosa.",
+        });
+        return;
+      }
+
       sendJson(response, error.statusCode, { error: error.message });
       return;
     }
@@ -1896,6 +1958,7 @@ type CreateEventInput = {
   latitud: number;
   longitud: number;
   oficinaIds: number[];
+  oficinaIdsFinales: number[];
   oficinaIdsExcluidos: number[];
   cargoCodigos: string[];
   cargoCodigosPorOficina: EventOfficeJobTitleInput[];
@@ -1911,6 +1974,7 @@ type UpdateEventInput = {
   latitud: number;
   longitud: number;
   oficinaIds: number[];
+  oficinaIdsFinales: number[];
   oficinaIdsExcluidos: number[];
   cargoCodigos: string[];
   cargoCodigosPorOficina: EventOfficeJobTitleInput[];
@@ -2174,7 +2238,6 @@ function sendJson(
   const encryptedPayload = encryptJsonPayload(payload);
 
   if (encryptedPayload != null) {
-    response.setHeader("X-Payload-Encrypted", "AES-256-GCM");
     payload = encryptedPayload;
   }
 
@@ -2286,6 +2349,234 @@ function normalizeOptionalEnvValue(value: string | undefined) {
   return normalizedValue == null || normalizedValue.length === 0
     ? null
     : normalizedValue;
+}
+
+function rejectSuspiciousIpIfBanned(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestId: string,
+) {
+  const now = Date.now();
+  pruneSuspiciousIpBuckets(now);
+  const bucket = suspiciousIpBuckets.get(readClientIp(request));
+
+  if (bucket?.bannedUntil == null || bucket.bannedUntil <= now) {
+    return false;
+  }
+
+  setSuspiciousIpBanHeaders(response, bucket, now);
+  logWarning(
+    "IP bloqueada temporalmente por actividad sospechosa.",
+    buildRequestLogFields(request, requestId, {
+      statusCode: 429,
+      strikes: bucket.strikes,
+      bannedUntil: new Date(bucket.bannedUntil).toISOString(),
+    }),
+  );
+  sendJson(response, 429, {
+    error: "IP bloqueada temporalmente por actividad sospechosa.",
+  });
+
+  return true;
+}
+
+function recordSuspiciousPathActivity(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestId: string,
+  url: URL,
+) {
+  const strikes = readSuspiciousPathStrikes(url);
+
+  if (strikes <= 0) {
+    return false;
+  }
+
+  return recordSuspiciousIpActivity(request, response, requestId, {
+    reason: "Ruta sospechosa.",
+    strikes,
+    extraFields: { path: buildSafeRequestPath(url) },
+  });
+}
+
+function recordSuspiciousHttpError(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestId: string,
+  url: URL,
+  error: HttpError,
+  authenticatedUser: AuthenticatedUser | null,
+) {
+  const strikes = readSuspiciousHttpErrorStrikes(request, url, error, authenticatedUser);
+
+  if (strikes <= 0) {
+    return false;
+  }
+
+  return recordSuspiciousIpActivity(request, response, requestId, {
+    reason: error.message,
+    strikes,
+    extraFields: {
+      path: buildSafeRequestPath(url),
+      statusCode: error.statusCode,
+    },
+  });
+}
+
+function recordSuspiciousIpActivity(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestId: string,
+  input: {
+    reason: string;
+    strikes: number;
+    extraFields?: Record<string, unknown>;
+  },
+) {
+  const now = Date.now();
+  pruneSuspiciousIpBuckets(now);
+  const ip = readClientIp(request);
+  const currentBucket = suspiciousIpBuckets.get(ip);
+  const bucket =
+    currentBucket == null || currentBucket.resetAt <= now
+      ? {
+          strikes: 0,
+          resetAt: now + SUSPICIOUS_IP_WINDOW_MS,
+        }
+      : currentBucket;
+
+  bucket.strikes += input.strikes;
+  suspiciousIpBuckets.set(ip, bucket);
+
+  if (bucket.strikes < SUSPICIOUS_IP_MAX_STRIKES) {
+    return false;
+  }
+
+  bucket.bannedUntil = now + SUSPICIOUS_IP_BAN_MS;
+  setSuspiciousIpBanHeaders(response, bucket, now);
+  logWarning(
+    "IP bloqueada temporalmente por actividad sospechosa.",
+    buildRequestLogFields(request, requestId, {
+      statusCode: 429,
+      reason: input.reason,
+      strikes: bucket.strikes,
+      bannedUntil: new Date(bucket.bannedUntil).toISOString(),
+      ...input.extraFields,
+    }),
+  );
+
+  return true;
+}
+
+function readSuspiciousPathStrikes(url: URL) {
+  const pathname = url.pathname.toLowerCase();
+
+  if (pathname === "/" || pathname === "/health" || pathname.startsWith("/api/")) {
+    return 0;
+  }
+
+  if (pathname === "/favicon.ico" || pathname === "/robots.txt") {
+    return 0;
+  }
+
+  if (
+    pathname.includes("..") ||
+    pathname.includes(";") ||
+    pathname.includes("\\") ||
+    pathname.includes("/content/dam") ||
+    pathname.includes("wp-") ||
+    pathname.includes("php") ||
+    pathname.includes(".env") ||
+    pathname.includes("config") ||
+    pathname.includes("media-cache") ||
+    pathname.includes("validator") ||
+    pathname.includes("tidy") ||
+    pathname.includes("infinity")
+  ) {
+    return SUSPICIOUS_IP_MAX_STRIKES;
+  }
+
+  return 2;
+}
+
+function readSuspiciousHttpErrorStrikes(
+  request: IncomingMessage,
+  url: URL,
+  error: HttpError,
+  authenticatedUser: AuthenticatedUser | null,
+) {
+  if (authenticatedUser != null && authenticatedUser.id > 0) {
+    return 0;
+  }
+
+  if (error.statusCode === 404) {
+    return readSuspiciousPathStrikes(url) > 0 ? 2 : 0;
+  }
+
+  if (error.statusCode === 403) {
+    return 2;
+  }
+
+  if (error.statusCode === 400 && isEncryptedJsonEnvelopeError(error)) {
+    return 2;
+  }
+
+  if (error.statusCode !== 401) {
+    return 0;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/auth/login") {
+    return 3;
+  }
+
+  const hasToken = readOptionalBearerToken(request) != null;
+
+  if (!hasToken) {
+    return 1;
+  }
+
+  if (
+    error.message.includes("Token de sesion invalido") ||
+    error.message.includes("Sesion invalida")
+  ) {
+    return 2;
+  }
+
+  return 0;
+}
+
+function isEncryptedJsonEnvelopeError(error: HttpError) {
+  return (
+    error.message.includes("JSON") ||
+    error.message.includes("cifrado") ||
+    error.message.includes("descifrar")
+  );
+}
+
+function pruneSuspiciousIpBuckets(now: number) {
+  for (const [key, bucket] of suspiciousIpBuckets) {
+    if (
+      bucket.resetAt <= now &&
+      (bucket.bannedUntil == null || bucket.bannedUntil <= now)
+    ) {
+      suspiciousIpBuckets.delete(key);
+    }
+  }
+}
+
+function setSuspiciousIpBanHeaders(
+  response: ServerResponse,
+  bucket: SuspiciousIpBucket,
+  now: number,
+) {
+  if (bucket.bannedUntil == null) {
+    return;
+  }
+
+  response.setHeader("Retry-After", Math.max(
+    1,
+    Math.ceil((bucket.bannedUntil - now) / 1000),
+  ).toString());
 }
 
 function enforceRateLimit(
@@ -2745,15 +3036,36 @@ function encryptJsonPayload(payload: unknown) {
   const tag = cipher.getAuthTag();
 
   return {
-    encrypted: true,
-    alg: "AES-256-GCM",
-    iv: iv.toString("base64"),
-    payload: encrypted.toString("base64"),
-    tag: tag.toString("base64"),
+    d: Buffer.concat([iv, encrypted, tag]).toString("base64"),
   };
 }
 
 function decryptJsonPayload(payload: unknown) {
+  if (isCompactEncryptedJsonEnvelope(payload)) {
+    if (PAYLOAD_ENCRYPTION_KEY_BYTES == null) {
+      throw new HttpError(400, "El cuerpo cifrado no esta habilitado.");
+    }
+
+    try {
+      const encryptedEnvelope = Buffer.from(payload.d, "base64");
+
+      if (encryptedEnvelope.length <= 28) {
+        throw new Error("Invalid encrypted envelope");
+      }
+
+      const iv = encryptedEnvelope.subarray(0, 12);
+      const tag = encryptedEnvelope.subarray(encryptedEnvelope.length - 16);
+      const encrypted = encryptedEnvelope.subarray(
+        12,
+        encryptedEnvelope.length - 16,
+      );
+
+      return decryptEncryptedJsonPayload(iv, encrypted, tag);
+    } catch {
+      throw new HttpError(400, "No fue posible descifrar el cuerpo JSON.");
+    }
+  }
+
   if (!isEncryptedJsonEnvelope(payload)) {
     return payload;
   }
@@ -2766,21 +3078,46 @@ function decryptJsonPayload(payload: unknown) {
     const iv = Buffer.from(payload.iv, "base64");
     const encrypted = Buffer.from(payload.payload, "base64");
     const tag = Buffer.from(payload.tag, "base64");
-    const decipher = createDecipheriv(
-      "aes-256-gcm",
-      PAYLOAD_ENCRYPTION_KEY_BYTES,
-      iv,
-    );
-    decipher.setAuthTag(tag);
-    const decrypted = Buffer.concat([
-      decipher.update(encrypted),
-      decipher.final(),
-    ]).toString("utf8");
 
-    return JSON.parse(decrypted);
+    return decryptEncryptedJsonPayload(iv, encrypted, tag);
   } catch {
     throw new HttpError(400, "No fue posible descifrar el cuerpo JSON.");
   }
+}
+
+function decryptEncryptedJsonPayload(
+  iv: Buffer,
+  encrypted: Buffer,
+  tag: Buffer,
+) {
+  if (PAYLOAD_ENCRYPTION_KEY_BYTES == null) {
+    throw new HttpError(400, "El cuerpo cifrado no esta habilitado.");
+  }
+
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    PAYLOAD_ENCRYPTION_KEY_BYTES,
+    iv,
+  );
+  decipher.setAuthTag(tag);
+  const decrypted = Buffer.concat([
+    decipher.update(encrypted),
+    decipher.final(),
+  ]).toString("utf8");
+
+  return JSON.parse(decrypted);
+}
+
+function isCompactEncryptedJsonEnvelope(value: unknown): value is {
+  d: string;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+
+  return typeof record.d === "string" && record.d.trim().length > 0;
 }
 
 function isEncryptedJsonEnvelope(value: unknown): value is {
@@ -2834,6 +3171,10 @@ function parseEventInputPayload(payload: unknown) {
   const latitud = readRequiredFloat(body, "latitud", -90, 90);
   const longitud = readRequiredFloat(body, "longitud", -180, 180);
   const oficinaIds = readRequiredIntList(body, "oficinaIds", "oficinaId");
+  const oficinaIdsFinales = readOptionalIntList(
+    body,
+    "oficinaIdsFinales",
+  );
   const oficinaIdsExcluidos = readOptionalIntList(
     body,
     "oficinaIdsExcluidos",
@@ -2849,6 +3190,7 @@ function parseEventInputPayload(payload: unknown) {
     latitud,
     longitud,
     oficinaIds,
+    oficinaIdsFinales,
     oficinaIdsExcluidos,
     cargoCodigos,
     cargoCodigosPorOficina,
@@ -2905,14 +3247,21 @@ async function resolveExpandedEventOffices(
   tx: any,
   officeIds: number[],
   excludedOfficeIds: number[] = [],
+  finalOfficeIds: number[] = [],
 ): Promise<ResolvedEventOfficeSelection> {
   const uniqueOfficeIds = [...new Set(officeIds)];
+  const uniqueFinalOfficeIds = [...new Set(finalOfficeIds)];
   const allOffices = (await tx.oficinas.findMany()) as EventOfficeNode[];
   const officesById = new Map(allOffices.map((office) => [office.id, office]));
   const directOffices = uniqueOfficeIds.map((officeId) => officesById.get(officeId));
+  const finalOffices = uniqueFinalOfficeIds.map((officeId) => officesById.get(officeId));
 
   if (directOffices.some((office) => office == null)) {
     throw new HttpError(400, "Debes seleccionar una o mas oficinas validas.");
+  }
+
+  if (finalOffices.some((office) => office == null)) {
+    throw new HttpError(400, "Las oficinas finales del evento no son validas.");
   }
 
   const directIdSet = new Set(uniqueOfficeIds);
@@ -2945,25 +3294,29 @@ async function resolveExpandedEventOffices(
     .map((office) => normalizeOfficeCode(office.cod))
     .filter((code) => code.length > 0);
 
-  const expandedOffices = allOffices
-    .filter((office: EventOfficeNode) => {
-      const officeCode = normalizeOfficeCode(office.cod);
+  const resolvedFinalOfficeSet = new Set(uniqueFinalOfficeIds);
+  const expandedOfficesSource = uniqueFinalOfficeIds.length > 0
+    ? (finalOffices as EventOfficeNode[]).filter((office) =>
+        resolvedFinalOfficeSet.has(office.id),
+      )
+    : allOffices.filter((office: EventOfficeNode) => {
+        const officeCode = normalizeOfficeCode(office.cod);
 
-      const isIncluded = directCodes.some(
-        (selectedCode) =>
-          officeCode === selectedCode || officeCode.startsWith(`${selectedCode}.`),
-      );
-      const isExcluded = excludedCodes.some(
-        (excludedCode) =>
-          officeCode === excludedCode || officeCode.startsWith(`${excludedCode}.`),
-      );
+        const isIncluded = directCodes.some(
+          (selectedCode) =>
+            officeCode === selectedCode || officeCode.startsWith(`${selectedCode}.`),
+        );
+        const isExcluded = excludedCodes.some(
+          (excludedCode) =>
+            officeCode === excludedCode || officeCode.startsWith(`${excludedCode}.`),
+        );
 
-      return isIncluded && !isExcluded;
-    })
-    .map((office: EventOfficeNode) => ({
-      ...office,
-      isDirectSelection: directIdSet.has(office.id),
-    }));
+        return isIncluded && !isExcluded;
+      });
+  const expandedOffices = expandedOfficesSource.map((office: EventOfficeNode) => ({
+    ...office,
+    isDirectSelection: directIdSet.has(office.id),
+  }));
 
   expandedOffices.sort(compareOfficeHierarchy);
   normalizedExcludedOffices.sort(compareOfficeHierarchy);
@@ -3171,6 +3524,52 @@ function normalizeOfficeMatchText(value: unknown) {
     .replace(/\s+/g, " ")
     .trim()
     .toUpperCase();
+}
+
+function normalizeLooseMatchText(value: unknown) {
+  const text = normalizeOfficeMatchText(value);
+
+  if (text == null) {
+    return null;
+  }
+
+  return text
+    .replace(/\bCOMISION\b/g, " ")
+    .replace(/[^A-Z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function matchesCargoSelection(
+  userCargoCodigo: string | null,
+  userCargoName: string | null,
+  allowedCargoCodigos: Set<string>,
+  allowedCargoNames: Set<string>,
+) {
+  if (userCargoCodigo != null && allowedCargoCodigos.has(userCargoCodigo)) {
+    return true;
+  }
+
+  if (userCargoName == null) {
+    return false;
+  }
+
+  if (allowedCargoNames.has(userCargoName)) {
+    return true;
+  }
+
+  for (const allowedCargoName of allowedCargoNames) {
+    if (
+      allowedCargoName.length >= 4 &&
+      userCargoName.length >= 4 &&
+      (allowedCargoName.includes(userCargoName) ||
+        userCargoName.includes(allowedCargoName))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function isOfficeCoveredByBranch(officeCode: string, branchCode: string) {
@@ -4079,6 +4478,10 @@ function isAdminUser(user: AuthenticatedUser) {
   return user.rol === rol_usuario.ADMIN;
 }
 
+function canScanQrData(user: AuthenticatedUser) {
+  return user.rol === rol_usuario.ADMIN || user.rol === rol_usuario.CONTROL;
+}
+
 function assertAuthenticatedRequester(user: AuthenticatedUser) {
   if (user.id <= 0 || user.activo !== true) {
     throw new HttpError(401, "Debes iniciar sesion para continuar.");
@@ -4086,10 +4489,10 @@ function assertAuthenticatedRequester(user: AuthenticatedUser) {
 }
 
 function assertPersonLookupRequester(user: AuthenticatedUser) {
-  if (!isAdminUser(user)) {
+  if (!canScanQrData(user)) {
     throw new HttpError(
       403,
-      "Solo un administrador puede consultar datos por QR o CI.",
+      "Solo un administrador o usuario de control puede consultar datos por QR o CI.",
     );
   }
 }
@@ -4867,10 +5270,17 @@ function isDynamicQrExpired(payload: DynamicQrPayload) {
   return payload.expiresAt.getTime() <= Date.now();
 }
 
-function assertScannedQrIsUsable(scannedValue: string) {
+function assertScannedQrIsDynamic(scannedValue: string) {
   const dynamicQr = tryParseDynamicQrPayload(scannedValue);
 
-  if (dynamicQr != null && isDynamicQrExpired(dynamicQr)) {
+  if (dynamicQr == null) {
+    throw new HttpError(
+      400,
+      "Solo se puede registrar asistencia con el QR dinamico generado por el funcionario.",
+    );
+  }
+
+  if (isDynamicQrExpired(dynamicQr)) {
     throw new HttpError(
       410,
       "No se puede realizar el escaneo porque el QR esta caduco. Genera o refresca un nuevo QR e intentalo otra vez.",
@@ -6039,6 +6449,20 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
   const allowedOfficeIds = new Set<number>(
     (event.evento_oficinas ?? []).map((item: { oficina_id: number }) => item.oficina_id),
   );
+  const allowedOfficeCodes = new Set<string>(
+    (event.evento_oficinas ?? [])
+      .map((item: { oficinas?: { cod?: string | null } }) =>
+        normalizeOfficeCode(item.oficinas?.cod ?? ""),
+      )
+      .filter((officeCode: string) => officeCode.length > 0),
+  );
+  const allowedOfficeNames = new Set<string>(
+    (event.evento_oficinas ?? [])
+      .map((item: { oficinas?: { oficina?: string | null } }) =>
+        normalizeLooseMatchText(item.oficinas?.oficina),
+      )
+      .filter((officeName: string | null) => officeName != null),
+  );
   const allowedCargoCodigos = new Set<string>(
     (event.evento_cargos ?? [])
       .map((item: { cargo_codigo: string }) => item.cargo_codigo)
@@ -6047,17 +6471,36 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
   const allowedCargoNames = new Set<string>(
     (event.evento_cargos ?? [])
       .map((item: { cargos?: { cargo?: string | null } }) =>
-        normalizeOfficeMatchText(item.cargos?.cargo),
+        normalizeLooseMatchText(item.cargos?.cargo),
       )
       .filter((cargoName: string | null) => cargoName != null),
   );
   const userCargoCodigo = normalizeOptionalText(linkedUser?.cargo_codigo);
-  const userCargoName = normalizeOfficeMatchText(linkedUser?.cargo);
-  const matchesOffice = userOfficeId != null && allowedOfficeIds.has(userOfficeId);
+  const userCargoName = normalizeLooseMatchText(linkedUser?.cargo);
+  const userOfficeCode = normalizeOfficeCode(resolveLinkedOfficeCode(linkedUser) ?? "");
+  const userOfficeName = normalizeLooseMatchText(resolveLinkedOfficeName(linkedUser));
+  const matchingOfficeIds = new Set<number>(
+    (event.evento_oficinas ?? [])
+      .filter((item: { oficina_id: number; oficinas?: { cod?: string | null; oficina?: string | null } }) => {
+        const eventOfficeCode = normalizeOfficeCode(item.oficinas?.cod ?? "");
+        const eventOfficeName = normalizeLooseMatchText(item.oficinas?.oficina);
+
+        return (
+          (userOfficeId != null && item.oficina_id === userOfficeId) ||
+          (userOfficeCode.length > 0 && allowedOfficeCodes.has(userOfficeCode) && eventOfficeCode === userOfficeCode) ||
+          (userOfficeName != null && allowedOfficeNames.has(userOfficeName) && eventOfficeName === userOfficeName)
+        );
+      })
+      .map((item: { oficina_id: number }) => item.oficina_id),
+  );
+  const matchesOffice =
+    (userOfficeId != null && allowedOfficeIds.has(userOfficeId)) ||
+    (userOfficeCode.length > 0 && allowedOfficeCodes.has(userOfficeCode)) ||
+    (userOfficeName != null && allowedOfficeNames.has(userOfficeName));
   const officeCargoRows = event.evento_oficina_cargos ?? [];
   const hasOfficeCargoRules = officeCargoRows.length > 0;
   const officeCargoRules = officeCargoRows.filter(
-    (item: { oficina_id: number }) => item.oficina_id === userOfficeId,
+    (item: { oficina_id: number }) => matchingOfficeIds.has(item.oficina_id),
   );
   const officeCargoCodes = new Set<string>(
     officeCargoRules
@@ -6067,19 +6510,17 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
   const officeCargoNames = new Set<string>(
     officeCargoRules
       .map((item: { cargos?: { cargo?: string | null } }) =>
-        normalizeOfficeMatchText(item.cargos?.cargo),
+        normalizeLooseMatchText(item.cargos?.cargo),
       )
       .filter((cargoName: string | null) => cargoName != null),
   );
   const matchesOfficeCargo =
     !hasOfficeCargoRules ||
     officeCargoRules.length === 0 ||
-    (userCargoCodigo != null && officeCargoCodes.has(userCargoCodigo)) ||
-    (userCargoName != null && officeCargoNames.has(userCargoName));
+    matchesCargoSelection(userCargoCodigo, userCargoName, officeCargoCodes, officeCargoNames);
   const matchesCargo =
     allowedCargoCodigos.size > 0 &&
-    ((userCargoCodigo != null && allowedCargoCodigos.has(userCargoCodigo)) ||
-      (userCargoName != null && allowedCargoNames.has(userCargoName)));
+    matchesCargoSelection(userCargoCodigo, userCargoName, allowedCargoCodigos, allowedCargoNames);
 
   if (hasOfficeCargoRules) {
     if (!matchesOffice || !matchesOfficeCargo) {

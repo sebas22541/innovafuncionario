@@ -13,6 +13,7 @@ COPY frontend/web ./web
 
 ARG BACKEND_BASE_URL=
 ARG PAYLOAD_ENCRYPTION_KEY=
+ARG APP_VERSION=
 RUN if [ -n "$BACKEND_BASE_URL" ] || [ -n "$PAYLOAD_ENCRYPTION_KEY" ]; then \
       flutter build web --release --no-wasm-dry-run \
         --no-web-resources-cdn \
@@ -22,6 +23,8 @@ RUN if [ -n "$BACKEND_BASE_URL" ] || [ -n "$PAYLOAD_ENCRYPTION_KEY" ]; then \
       flutter build web --release --no-wasm-dry-run --no-web-resources-cdn; \
     fi
 RUN sed -i 's#https://unpkg.com/@zxing/library@0.21.3#vendor/zxing-library-0.21.3.js#g' /app/build/web/main.dart.js
+RUN APP_VERSION_VALUE="${APP_VERSION:-$(date -u +%Y%m%d%H%M%S)}" && \
+    printf '{"version":"%s"}\n' "$APP_VERSION_VALUE" > /app/build/web/app-version.json
 
 FROM nginx:alpine
 

@@ -597,23 +597,10 @@ function buildCloudinaryPdfPageImageUrl(input: {
 
 function buildCredentialQrPayload(
   frontImageUrl: string,
-  user: CredentialUser,
-  person: CredentialPerson,
+  _user: CredentialUser,
+  _person: CredentialPerson,
 ) {
-  const lookupCode = normalizeText(person?.codigo_qr) ?? null;
-  const publicUrl = new URL(frontImageUrl);
-
-  if (lookupCode) {
-    publicUrl.searchParams.set("qr", lookupCode);
-  }
-
-  const ci = normalizeText(user.ci);
-
-  if (ci) {
-    publicUrl.searchParams.set("ci", ci);
-  }
-
-  return publicUrl.toString();
+  return frontImageUrl;
 }
 
 function stripVersionFromCloudinaryUrl(url: string) {

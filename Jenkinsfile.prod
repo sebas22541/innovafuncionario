@@ -48,6 +48,7 @@ pipeline {
                             . backend/.env.prod
                             set +a
                             export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            export APP_VERSION="\$(git rev-parse --short HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)"
                             set -x
                             docker-compose \
                             --env-file backend/.env.prod \
@@ -61,6 +62,7 @@ pipeline {
                             . backend/.env.prod
                             set +a
                             export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            export APP_VERSION="\$(git rev-parse --short HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)"
                             set -x
                             docker-compose \
                             --env-file backend/.env.prod \
@@ -85,6 +87,7 @@ pipeline {
                             . backend/.env.prod
                             set +a
                             export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            export APP_VERSION="\$(git rev-parse --short HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)"
                             set -x
                             docker-compose \
                             --env-file backend/.env.prod \
@@ -100,6 +103,7 @@ pipeline {
                             . backend/.env.prod
                             set +a
                             export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            export APP_VERSION="\$(git rev-parse --short HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)"
                             set -x
                             docker-compose \
                             --env-file backend/.env.prod \

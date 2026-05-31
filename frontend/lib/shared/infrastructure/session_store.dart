@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/app_section.dart';
 import '../models/app_user.dart';
+import 'local_preference_cipher.dart';
 
 class SessionStore {
   const SessionStore._();
@@ -21,13 +22,14 @@ class SessionStore {
 
     final preferences = await SharedPreferences.getInstance();
     final rawUser = preferences.getString(_userKey);
+    final storedUser = await LocalPreferenceCipher.decryptString(rawUser);
 
-    if (rawUser == null || rawUser.trim().isEmpty) {
+    if (storedUser == null || storedUser.trim().isEmpty) {
       return null;
     }
 
     try {
-      final parsedUser = jsonDecode(rawUser);
+      final parsedUser = jsonDecode(storedUser);
 
       if (parsedUser is! Map<String, dynamic>) {
         await clearSession();
@@ -36,6 +38,14 @@ class SessionStore {
 
       final user = AppUser.fromJson(parsedUser);
       _cachedUser = user;
+      if (!LocalPreferenceCipher.isEncrypted(rawUser)) {
+        await _writeEncryptedString(
+          preferences,
+          _userKey,
+          jsonEncode(user.toJson()),
+        );
+      }
+
       return user;
     } catch (_) {
       await clearSession();
@@ -47,7 +57,11 @@ class SessionStore {
     final userToSave = await _withPersistableAuthToken(user);
     _cachedUser = userToSave;
     final preferences = await SharedPreferences.getInstance();
-    await preferences.setString(_userKey, jsonEncode(userToSave.toJson()));
+    await _writeEncryptedString(
+      preferences,
+      _userKey,
+      jsonEncode(userToSave.toJson()),
+    );
   }
 
   static Future<String?> readAuthToken() async {
@@ -59,12 +73,20 @@ class SessionStore {
 
   static Future<AppSection?> readSection() async {
     final preferences = await SharedPreferences.getInstance();
-    return parseAppSection(preferences.getString(_sectionKey));
+    final rawSection = preferences.getString(_sectionKey);
+    final storedSection = await LocalPreferenceCipher.decryptString(rawSection);
+    final section = parseAppSection(storedSection);
+
+    if (section != null && !LocalPreferenceCipher.isEncrypted(rawSection)) {
+      await saveSection(section);
+    }
+
+    return section;
   }
 
   static Future<void> saveSection(AppSection section) async {
     final preferences = await SharedPreferences.getInstance();
-    await preferences.setString(_sectionKey, section.storageKey);
+    await _writeEncryptedString(preferences, _sectionKey, section.storageKey);
   }
 
   static Future<void> clearSession() async {
@@ -99,13 +121,14 @@ class SessionStore {
 
     final preferences = await SharedPreferences.getInstance();
     final rawUser = preferences.getString(_userKey);
+    final storedUser = await LocalPreferenceCipher.decryptString(rawUser);
 
-    if (rawUser == null || rawUser.trim().isEmpty) {
+    if (storedUser == null || storedUser.trim().isEmpty) {
       return null;
     }
 
     try {
-      final parsedUser = jsonDecode(rawUser);
+      final parsedUser = jsonDecode(storedUser);
 
       if (parsedUser is! Map<String, dynamic>) {
         return null;
@@ -120,5 +143,16 @@ class SessionStore {
     } catch (_) {
       return null;
     }
+  }
+
+  static Future<void> _writeEncryptedString(
+    SharedPreferences preferences,
+    String key,
+    String value,
+  ) async {
+    await preferences.setString(
+      key,
+      await LocalPreferenceCipher.encryptString(value),
+    );
   }
 }

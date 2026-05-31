@@ -27,6 +27,8 @@ services:
     environment:
       TZ: America/La_Paz
       PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:?Defina PAYLOAD_ENCRYPTION_KEY en el entorno o archivo .env antes de desplegar}
+      PAYLOAD_RESPONSE_ENCRYPTION: "true"
+      QR_DYNAMIC_TTL_SECONDS: "1800"
     ports:
       - "4015:4000"
     volumes:
@@ -39,6 +41,7 @@ services:
       args:
         BACKEND_BASE_URL: ${FRONTEND_BACKEND_BASE_URL:-https://innovafuncionarioapi.cochabamba.bo}
         PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:?Defina PAYLOAD_ENCRYPTION_KEY en el entorno o archivo .env antes de desplegar}
+        APP_VERSION: ${APP_VERSION:-manual}
     restart: unless-stopped
     
     ports:
