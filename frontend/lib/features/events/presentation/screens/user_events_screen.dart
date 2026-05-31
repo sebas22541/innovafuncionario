@@ -922,26 +922,39 @@ List<EventRecord> _filterEventsForCurrentUser(
         ? currentUser.commissionOfficeName ?? ''
         : _resolvedOfficeName(currentUser),
   );
-  final cargoCodigo = (currentUser.cargoCodigo ?? '').trim();
+  final cargoCodigo = (currentUser.cargoCodigo ?? '').trim().toUpperCase();
   final cargoName = _normalizeOfficeSearchText(currentUser.cargo);
 
   return events
       .where((event) {
-        final matchesJobTitle = event.jobTitles.any((jobTitle) {
-          if (cargoCodigo.isNotEmpty && jobTitle.code == cargoCodigo) {
-            return true;
-          }
+        final selectedJobTitleCodes = event.selectedJobTitleCodes
+            .map((code) => code.trim().toUpperCase())
+            .where((code) => code.isNotEmpty)
+            .toSet();
+        final matchesSelectedJobTitleCode =
+            cargoCodigo.isNotEmpty &&
+            selectedJobTitleCodes.contains(cargoCodigo);
+        final matchesJobTitle =
+            matchesSelectedJobTitleCode ||
+            event.jobTitles.any((jobTitle) {
+              final eventJobTitleCode = jobTitle.code.trim().toUpperCase();
 
-          if (cargoName.isEmpty) {
-            return false;
-          }
+              if (cargoCodigo.isNotEmpty && eventJobTitleCode == cargoCodigo) {
+                return true;
+              }
 
-          final eventJobTitleName = _normalizeOfficeSearchText(jobTitle.name);
+              if (cargoName.isEmpty) {
+                return false;
+              }
 
-          return eventJobTitleName == cargoName ||
-              eventJobTitleName.contains(cargoName) ||
-              cargoName.contains(eventJobTitleName);
-        });
+              final eventJobTitleName = _normalizeOfficeSearchText(
+                jobTitle.name,
+              );
+
+              return eventJobTitleName == cargoName ||
+                  eventJobTitleName.contains(cargoName) ||
+                  cargoName.contains(eventJobTitleName);
+            });
 
         if (matchesJobTitle) {
           return true;
@@ -984,7 +997,9 @@ List<EventRecord> _filterEventsForCurrentUser(
           }
 
           return officeSelection.jobTitleCodes.any(
-            (code) => cargoCodigo.isNotEmpty && code == cargoCodigo,
+            (code) =>
+                cargoCodigo.isNotEmpty &&
+                code.trim().toUpperCase() == cargoCodigo,
           );
         }
 

@@ -125,6 +125,7 @@ const PAYLOAD_RESPONSE_ENCRYPTION_ENABLED =
 const REFERENCE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DASHBOARD_CACHE_TTL_MS = 30 * 1000;
 const EVENT_SUMMARY_CACHE_TTL_MS = 15 * 1000;
+const EVENT_ATTENDANCE_CONTEXT_CACHE_TTL_MS = 60 * 1000;
 const SEED_ADMIN_EMAIL = normalizeEmailValue(
   process.env.SEED_ADMIN_EMAIL ?? "admin@admin.com",
 );
@@ -275,6 +276,7 @@ let dashboardSummaryCache: CacheEntry<{
   eventos: number;
 }> | null = null;
 let eventSummaryCache: CacheEntry<any[]> | null = null;
+const eventAttendanceContextCache = new Map<number, CacheEntry<any>>();
 const rateLimitBuckets = new Map<string, RateLimitBucket>();
 const suspiciousIpBuckets = new Map<string, SuspiciousIpBucket>();
 
@@ -301,24 +303,6 @@ const server = http.createServer(async (request, response) => {
     });
   });
 
-  if (rejectSuspiciousIpIfBanned(request, response, requestId)) {
-    return;
-  }
-
-  try {
-    enforceRateLimit(request, response, null);
-  } catch (error) {
-    if (error instanceof HttpError) {
-      logWarning(error.message, buildRequestLogFields(request, requestId, {
-        statusCode: error.statusCode,
-      }));
-      sendErrorJson(response, error.statusCode, error.message);
-      return;
-    }
-
-    throw error;
-  }
-
   if (!request.url || !request.method) {
     sendJson(response, 400, { error: "Solicitud invalida." });
     return;
@@ -329,13 +313,6 @@ const server = http.createServer(async (request, response) => {
     `http://${request.headers.host ?? "localhost"}`,
   );
   requestPath = buildSafeRequestPath(url);
-
-  if (recordSuspiciousPathActivity(request, response, requestId, url)) {
-    sendJson(response, 429, {
-      error: "IP bloqueada temporalmente por actividad sospechosa.",
-    });
-    return;
-  }
 
   if (!applyCors(request, response)) {
     if (
@@ -360,6 +337,31 @@ const server = http.createServer(async (request, response) => {
   if (request.method === "OPTIONS") {
     response.writeHead(204);
     response.end();
+    return;
+  }
+
+  if (rejectSuspiciousIpIfBanned(request, response, requestId)) {
+    return;
+  }
+
+  try {
+    enforceRateLimit(request, response, null);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      logWarning(error.message, buildRequestLogFields(request, requestId, {
+        statusCode: error.statusCode,
+      }));
+      sendErrorJson(response, error.statusCode, error.message);
+      return;
+    }
+
+    throw error;
+  }
+
+  if (recordSuspiciousPathActivity(request, response, requestId, url)) {
+    sendJson(response, 429, {
+      error: "IP bloqueada temporalmente por actividad sospechosa.",
+    });
     return;
   }
 
@@ -1119,6 +1121,7 @@ const server = http.createServer(async (request, response) => {
         });
       });
       invalidateEventSummaryCache();
+      invalidateEventAttendanceContextCache(evento.id);
       invalidateDashboardSummaryCache();
 
       sendJson(response, 201, {
@@ -1222,6 +1225,7 @@ const server = http.createServer(async (request, response) => {
         });
       });
       invalidateEventSummaryCache();
+      invalidateEventAttendanceContextCache(eventId);
 
       sendJson(response, 200, {
         data: serializeEvent(evento),
@@ -1247,6 +1251,7 @@ const server = http.createServer(async (request, response) => {
         where: { id: eventId },
       });
       invalidateEventSummaryCache();
+      invalidateEventAttendanceContextCache(eventId);
       invalidateDashboardSummaryCache();
 
       sendJson(response, 200, {
@@ -1531,36 +1536,7 @@ const server = http.createServer(async (request, response) => {
         );
       }
 
-      const evento = await prisma.eventos.findUnique({
-        where: { id: input.eventId },
-        include: {
-          evento_oficinas: {
-            include: {
-              oficinas: true,
-            },
-          },
-          evento_cargos: {
-            include: {
-              cargos: true,
-            },
-          },
-          evento_oficina_cargos: {
-            include: {
-              cargos: true,
-            },
-          },
-          evento_controles: {
-            select: {
-              id: true,
-              nombre: true,
-              orden: true,
-            },
-            orderBy: {
-              orden: "asc",
-            },
-          },
-        },
-      });
+      const evento = await getEventAttendanceContext(input.eventId);
 
       if (!evento) {
         throw new HttpError(404, "No se encontro el evento seleccionado.");
@@ -1633,7 +1609,7 @@ const server = http.createServer(async (request, response) => {
           },
         });
 
-        await tx.asistencia_controles.upsert({
+        const controlAttendance = await tx.asistencia_controles.upsert({
           where: {
             asistencia_id_control_id: {
               asistencia_id: baseAttendance.id,
@@ -1662,22 +1638,22 @@ const server = http.createServer(async (request, response) => {
           },
         });
 
-        const controlAttendances = await tx.asistencia_controles.findMany({
-          where: {
-            asistencia_id: baseAttendance.id,
-          },
-          select: {
-            estado: true,
-          },
-        });
-        const resolvedAttendanceState = controlAttendances.some(
-          (item: { estado: estado_asistencia }) =>
-            item.estado === estado_asistencia.ASISTIO,
-        )
+        const attendedControl = input.estado === estado_asistencia.ASISTIO
+          ? { id: controlAttendance.id }
+          : await tx.asistencia_controles.findFirst({
+              where: {
+                asistencia_id: baseAttendance.id,
+                estado: estado_asistencia.ASISTIO,
+              },
+              select: {
+                id: true,
+              },
+            });
+        const resolvedAttendanceState = attendedControl != null
           ? estado_asistencia.ASISTIO
           : estado_asistencia.OBSERVADO;
 
-        await tx.asistencias.update({
+        const updatedAttendance = await tx.asistencias.update({
           where: { id: baseAttendance.id },
           data: {
             nombre_snapshot: buildResolvedPersonDisplayName(persona),
@@ -1688,37 +1664,36 @@ const server = http.createServer(async (request, response) => {
             registrado_por_id: operador.id,
             registrado_en: registeredAt,
           },
+          select: {
+            id: true,
+            persona_id: true,
+            evento_id: true,
+            estado: true,
+            registrado_en: true,
+          },
         });
 
-        return tx.asistencias.findUniqueOrThrow({
-          where: {
-            id: baseAttendance.id,
+        return {
+          id: updatedAttendance.id,
+          personaId: updatedAttendance.persona_id,
+          eventoId: updatedAttendance.evento_id,
+          estado: updatedAttendance.estado,
+          registradoEn: updatedAttendance.registrado_en.toISOString(),
+          control: {
+            id: controlAttendance.id,
+            controlId: controlAttendance.control_id,
+            controlNombre: selectedControl.nombre,
+            controlOrden: selectedControl.orden,
+            estado: controlAttendance.estado,
+            observacion: controlAttendance.observacion,
+            registradoEn: controlAttendance.registrado_en.toISOString(),
           },
-          include: {
-            personas: {
-              include: {
-                departamentos: true,
-                usuario: {
-                  include: userWithOfficeInclude,
-                },
-              },
-            },
-            eventos: true,
-            asistencia_controles: {
-              include: {
-                evento_controles: true,
-              },
-              orderBy: {
-                control_id: "asc",
-              },
-            },
-          },
-        });
+        };
       });
       invalidateEventSummaryCache();
 
       sendJson(response, 200, {
-        data: serializeAttendanceRecord(asistencia),
+        data: asistencia,
       });
       return;
     }
@@ -2338,6 +2313,15 @@ function invalidateEventSummaryCache() {
   eventSummaryCache = null;
 }
 
+function invalidateEventAttendanceContextCache(eventId?: number) {
+  if (eventId == null) {
+    eventAttendanceContextCache.clear();
+    return;
+  }
+
+  eventAttendanceContextCache.delete(eventId);
+}
+
 function parseAllowedCorsOrigins(value: string | undefined) {
   const defaultOrigins = [
     "https://innovafuncionario.cochabamba.bo",
@@ -2541,7 +2525,7 @@ function readSuspiciousHttpErrorStrikes(
   const hasToken = readOptionalBearerToken(request) != null;
 
   if (!hasToken) {
-    return 1;
+    return url.pathname.startsWith("/api/") ? 0 : 1;
   }
 
   if (
@@ -3409,6 +3393,54 @@ async function createEventControls(
       orden: control.orden,
     })),
   });
+}
+
+async function getEventAttendanceContext(eventId: number) {
+  const cachedEvent = readCacheValue(eventAttendanceContextCache.get(eventId) ?? null);
+
+  if (cachedEvent != null) {
+    return cachedEvent;
+  }
+
+  const event = await prisma.eventos.findUnique({
+    where: { id: eventId },
+    include: {
+      evento_oficinas: {
+        include: {
+          oficinas: true,
+        },
+      },
+      evento_cargos: {
+        include: {
+          cargos: true,
+        },
+      },
+      evento_oficina_cargos: {
+        include: {
+          cargos: true,
+        },
+      },
+      evento_controles: {
+        select: {
+          id: true,
+          nombre: true,
+          orden: true,
+        },
+        orderBy: {
+          orden: "asc",
+        },
+      },
+    },
+  });
+
+  if (event != null) {
+    eventAttendanceContextCache.set(
+      eventId,
+      createCacheEntry(event, EVENT_ATTENDANCE_CONTEXT_CACHE_TTL_MS),
+    );
+  }
+
+  return event;
 }
 
 async function syncEventJobTitles(
