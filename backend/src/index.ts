@@ -54,7 +54,6 @@ const DYNAMIC_QR_TTL_SECONDS = clampInt(
   30,
   3600,
 );
-const DYNAMIC_QR_MIN_REUSE_SECONDS = 15;
 const DYNAMIC_QR_HISTORY_LIMIT = clampInt(
   process.env.QR_DYNAMIC_HISTORY_LIMIT ?? null,
   20,
@@ -63,6 +62,7 @@ const DYNAMIC_QR_HISTORY_LIMIT = clampInt(
 );
 const DYNAMIC_QR_VERSION = "DQR1";
 const DYNAMIC_QR_SIGNATURE_LENGTH = 16;
+const STATIC_DYNAMIC_QR_EXPIRES_AT = new Date("2099-12-31T23:59:59.000Z");
 const JWT_TTL_SECONDS = clampInt(
   process.env.JWT_TTL_SECONDS ?? null,
   31_536_000,
@@ -4383,32 +4383,14 @@ async function issueDynamicQrForUser(
   tx: any,
   person: any,
   user: any,
-  input: GenerateDynamicQrInput,
+  _input: GenerateDynamicQrInput,
 ) {
-  const activeDynamicQr = readActiveDynamicQrSession(person, user);
-
-  if (isReusableDynamicQrSession(activeDynamicQr)) {
-    return activeDynamicQr;
-  }
-
   const qrCode = person.codigo_qr ?? buildUserQrCode(user);
-  const issuedAt = new Date();
-  const expiresAt = new Date(
-    issuedAt.getTime() + (DYNAMIC_QR_TTL_SECONDS * 1000),
-  );
-  const qrPayload = buildDynamicQrPayload(qrCode, expiresAt);
+  const staticQr = buildStaticDynamicQrSession(person, user);
   const nextMetadata = buildStoredUserQrMetadata(
     user,
     qrCode,
     person.datos_qr ?? null,
-    {
-      qrPayload,
-      issuedAt,
-      expiresAt,
-      latitud: input.latitud,
-      longitud: input.longitud,
-      accuracy: input.accuracy,
-    },
   );
 
   await tx.personas.update({
@@ -4420,60 +4402,32 @@ async function issueDynamicQrForUser(
     },
   });
 
-  return {
-    qrCode,
-    qrPayload,
-    generatedAt: issuedAt.toISOString(),
-    expiresAt: expiresAt.toISOString(),
-    ttlSeconds: DYNAMIC_QR_TTL_SECONDS,
-    location: {
-      latitud: input.latitud,
-      longitud: input.longitud,
-      accuracy: input.accuracy,
-    },
-  };
-}
-
-function isReusableDynamicQrSession(
-  session: ReturnType<typeof readActiveDynamicQrSession>,
-) {
-  return (
-    session != null &&
-    new Date(session.expiresAt).getTime() - Date.now() >
-      DYNAMIC_QR_MIN_REUSE_SECONDS * 1000
-  );
+  return staticQr;
 }
 
 function readActiveDynamicQrSession(person: any, user: any) {
-  const qrCode = person.codigo_qr ?? buildUserQrCode(user);
-  const dynamicQr = readDynamicQrMetadata(person.datos_qr);
-  const generatedAt = readIsoDate(dynamicQr?.lastGeneratedAt);
-  const expiresAt = readIsoDate(dynamicQr?.lastExpiresAt);
-  const location = readLooseJsonRecord(dynamicQr?.lastLocation);
-  const latitud = readFiniteNumber(location?.latitud);
-  const longitud = readFiniteNumber(location?.longitud);
-  const accuracy = readFiniteNumber(location?.accuracy);
+  return buildStaticDynamicQrSession(person, user);
+}
 
-  if (
-    !generatedAt ||
-    !expiresAt ||
-    expiresAt.getTime() <= Date.now() ||
-    latitud == null ||
-    longitud == null
-  ) {
-    return null;
-  }
+function buildStaticDynamicQrSession(person: any, user: any) {
+  const qrCode = person.codigo_qr ?? buildUserQrCode(user);
+  const generatedAt =
+    person.created_at instanceof Date
+      ? person.created_at
+      : user.created_at instanceof Date
+        ? user.created_at
+        : new Date();
 
   return {
     qrCode,
-    qrPayload: buildDynamicQrPayload(qrCode, expiresAt),
+    qrPayload: buildDynamicQrPayload(qrCode, STATIC_DYNAMIC_QR_EXPIRES_AT),
     generatedAt: generatedAt.toISOString(),
-    expiresAt: expiresAt.toISOString(),
-    ttlSeconds: DYNAMIC_QR_TTL_SECONDS,
+    expiresAt: STATIC_DYNAMIC_QR_EXPIRES_AT.toISOString(),
+    ttlSeconds: 0,
     location: {
-      latitud,
-      longitud,
-      accuracy,
+      latitud: 0,
+      longitud: 0,
+      accuracy: null,
     },
   };
 }
@@ -4966,14 +4920,14 @@ function assertScannedQrIsDynamic(scannedValue: string) {
   if (dynamicQr == null) {
     throw new HttpError(
       400,
-      "Solo se puede registrar asistencia con el QR dinamico generado por el funcionario.",
+      "Solo se puede registrar asistencia con el QR generado por el funcionario.",
     );
   }
 
   if (isDynamicQrExpired(dynamicQr)) {
     throw new HttpError(
       410,
-      "No se puede realizar el escaneo porque el QR esta caduco. Genera o refresca un nuevo QR e intentalo otra vez.",
+      "No se puede realizar el escaneo porque el QR esta caduco. Vuelve a cargar tu QR e intentalo otra vez.",
     );
   }
 }
@@ -5108,9 +5062,9 @@ function buildUserQrPayloadObject(user: any, qrCode: string) {
 }
 
 function buildUserQrPayload(_: any, qrCode: string) {
-  // El QR visible y exportable contiene solo el ID externo.
-  // La app consulta al backend con ese ID para obtener los datos completos.
-  return qrCode;
+  // El QR visible del perfil usa un token firmado y estable.
+  // No depende de ubicacion, no rota y queda valido para el escaner del evento.
+  return buildDynamicQrPayload(qrCode, STATIC_DYNAMIC_QR_EXPIRES_AT);
 }
 
 function buildStoredUserQrMetadata(
@@ -5940,7 +5894,7 @@ function resolveCommissionOfficeName(linkedUser: any) {
 function serializeAppUser(user: any, person?: any | null, authToken?: string) {
   // El frontend recibe dos piezas equivalentes:
   // 1. `qrCode` para mostrar el ID externo en texto.
-  // 2. `qrPayload` para renderizar ese mismo ID externo como imagen QR.
+  // 2. `qrPayload` para renderizar el QR firmado y permanente del perfil.
   const linkedPerson = person ?? user.persona ?? null;
   const qrCode = linkedPerson?.codigo_qr ?? buildUserQrCode(user);
   const officeName = resolveLinkedOfficeName(user);

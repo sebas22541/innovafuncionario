@@ -720,7 +720,7 @@ class _LocationSettingsCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Controla si la app puede pedir y usar tu ubicacion para QR dinamico, asistencias y mapas.',
+                        'Controla si la app puede pedir y usar tu ubicacion para asistencias y mapas.',
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                     ],
@@ -1038,7 +1038,7 @@ class _CredentialErrorView extends StatelessWidget {
 }
 
 class _MyQrDialogState extends State<MyQrDialog> {
-  static const Duration _minimumReusableQrTime = Duration(seconds: 15);
+  static const String _signedStaticQrPrefix = 'DQR1.';
 
   Timer? _countdownTimer;
   DynamicQrSession? _dynamicQrSession;
@@ -1049,6 +1049,15 @@ class _MyQrDialogState extends State<MyQrDialog> {
   @override
   void initState() {
     super.initState();
+    final storedStaticQr = _readStoredStaticQrSession();
+
+    if (storedStaticQr != null) {
+      _dynamicQrSession = storedStaticQr;
+      _remaining = Duration.zero;
+      _isGenerating = false;
+      return;
+    }
+
     _ensureDynamicQrAvailable();
   }
 
@@ -1065,6 +1074,10 @@ class _MyQrDialogState extends State<MyQrDialog> {
       return false;
     }
 
+    if (_isStaticQrSession(session)) {
+      return false;
+    }
+
     return DateTime.now().isAfter(session.expiresAt) ||
         _remaining == Duration.zero;
   }
@@ -1078,24 +1091,28 @@ class _MyQrDialogState extends State<MyQrDialog> {
     });
 
     try {
-      final activeDynamicQr =
-          await dependencies.authApiService.fetchActiveDynamicQr();
-      final dynamicQr = _hasEnoughTimeToScan(activeDynamicQr)
-          ? activeDynamicQr!
-          : await _generateFreshDynamicQr();
+      final activeDynamicQr = await dependencies.authApiService
+          .fetchActiveDynamicQr();
+      final dynamicQr = activeDynamicQr ?? await _generateFreshDynamicQr();
 
       if (!mounted) {
         return;
       }
 
+      final isStaticQr = _isStaticQrSession(dynamicQr);
+
       setState(() {
         _dynamicQrSession = dynamicQr;
-        _remaining = _resolveRemaining(dynamicQr.expiresAt);
+        _remaining = isStaticQr
+            ? Duration.zero
+            : _resolveRemaining(dynamicQr.expiresAt);
         _isGenerating = false;
         _generationError = null;
       });
 
-      _startCountdown(dynamicQr.expiresAt);
+      if (!isStaticQr) {
+        _startCountdown(dynamicQr.expiresAt);
+      }
     } on BackendApiException catch (error) {
       if (!mounted) {
         return;
@@ -1127,124 +1144,46 @@ class _MyQrDialogState extends State<MyQrDialog> {
         _dynamicQrSession = null;
         _remaining = Duration.zero;
         _isGenerating = false;
-        _generationError = 'No fue posible generar tu QR dinamico.';
+        _generationError = 'No fue posible cargar tu QR.';
       });
     }
   }
 
-  Future<void> _refreshDynamicQr() async {
-    _countdownTimer?.cancel();
-
-    setState(() {
-      _isGenerating = true;
-      _generationError = null;
-    });
-
-    try {
-      final dynamicQr = await _generateFreshDynamicQr();
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _dynamicQrSession = dynamicQr;
-        _remaining = _resolveRemaining(dynamicQr.expiresAt);
-        _isGenerating = false;
-        _generationError = null;
-      });
-
-      _startCountdown(dynamicQr.expiresAt);
-    } on BackendApiException catch (error) {
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _dynamicQrSession = null;
-        _remaining = Duration.zero;
-        _isGenerating = false;
-        _generationError = error.message;
-      });
-    } on StateError catch (error) {
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _dynamicQrSession = null;
-        _remaining = Duration.zero;
-        _isGenerating = false;
-        _generationError = error.message;
-      });
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _dynamicQrSession = null;
-        _remaining = Duration.zero;
-        _isGenerating = false;
-        _generationError = 'No fue posible generar tu QR dinamico.';
-      });
-    }
+  bool _isStaticQrSession(DynamicQrSession session) {
+    return session.ttlSeconds <= 0;
   }
 
-  bool _hasEnoughTimeToScan(DynamicQrSession? session) {
-    if (session == null) {
-      return false;
+  DynamicQrSession? _readStoredStaticQrSession() {
+    final storedPayload = widget.currentUser.qrPayload?.trim();
+
+    if (storedPayload == null ||
+        storedPayload.isEmpty ||
+        !storedPayload.startsWith(_signedStaticQrPrefix)) {
+      return null;
     }
 
-    return session.expiresAt.difference(DateTime.now()) >
-        _minimumReusableQrTime;
+    final storedCode = widget.currentUser.qrCode?.trim();
+
+    return DynamicQrSession(
+      qrCode: storedCode != null && storedCode.isNotEmpty
+          ? storedCode
+          : storedPayload,
+      qrPayload: storedPayload,
+      generatedAt: DateTime.now(),
+      expiresAt: DateTime(2099, 12, 31, 23, 59, 59),
+      ttlSeconds: 0,
+      location: const DynamicQrLocationSnapshot(
+        latitude: 0,
+        longitude: 0,
+        accuracy: null,
+      ),
+    );
   }
 
   Future<DynamicQrSession> _generateFreshDynamicQr() async {
-    final location = await _resolveCurrentLocation();
     return dependencies.authApiService.generateDynamicQr(
-      latitude: location.latitude,
-      longitude: location.longitude,
-      accuracy: location.accuracy,
-    );
-  }
-
-  Future<_QrGenerationLocationSnapshot> _resolveCurrentLocation() async {
-    final isLocationEnabled = await LocationPermissionSettings.isEnabled();
-
-    if (!isLocationEnabled) {
-      throw StateError(
-        'Habilita la ubicacion en Configuracion para generar el QR dinamico.',
-      );
-    }
-
-    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-
-    if (!serviceEnabled) {
-      throw StateError('Activa tu ubicacion para generar el QR dinamico.');
-    }
-
-    var permission = await Geolocator.checkPermission();
-
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      throw StateError(
-        'No se concedio el permiso de ubicacion. Habilitalo y vuelve a intentarlo.',
-      );
-    }
-
-    final position = await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-    );
-
-    return _QrGenerationLocationSnapshot(
-      latitude: position.latitude,
-      longitude: position.longitude,
-      accuracy: position.accuracy,
+      latitude: 0,
+      longitude: 0,
     );
   }
 
@@ -1285,6 +1224,8 @@ class _MyQrDialogState extends State<MyQrDialog> {
   Widget build(BuildContext context) {
     final currentUser = widget.currentUser;
     final dynamicQrSession = _dynamicQrSession;
+    final isStaticQr =
+        dynamicQrSession != null && _isStaticQrSession(dynamicQrSession);
 
     return AlertDialog(
       backgroundColor: AppPalette.surface,
@@ -1296,10 +1237,11 @@ class _MyQrDialogState extends State<MyQrDialog> {
             currentUser: currentUser,
             qrPayload: dynamicQrSession?.qrPayload,
             isGenerating: _isGenerating,
+            isStatic: isStaticQr,
             isExpired: _isExpired,
             remaining: _remaining,
             errorMessage: _generationError,
-            onRefresh: _isGenerating ? null : _refreshDynamicQr,
+            onRefresh: _isGenerating ? null : _ensureDynamicQrAvailable,
           ),
         ),
       ),
@@ -1318,6 +1260,7 @@ class _QrProfileCard extends StatelessWidget {
     required this.currentUser,
     required this.qrPayload,
     required this.isGenerating,
+    required this.isStatic,
     required this.isExpired,
     required this.remaining,
     required this.errorMessage,
@@ -1327,6 +1270,7 @@ class _QrProfileCard extends StatelessWidget {
   final AppUser currentUser;
   final String? qrPayload;
   final bool isGenerating;
+  final bool isStatic;
   final bool isExpired;
   final Duration remaining;
   final String? errorMessage;
@@ -1414,6 +1358,7 @@ class _QrProfileCard extends StatelessWidget {
                     children: [
                       _QrStatusBanner(
                         isGenerating: isGenerating,
+                        isStatic: isStatic,
                         isExpired: isExpired,
                         remaining: remaining,
                       ),
@@ -1432,7 +1377,7 @@ class _QrProfileCard extends StatelessWidget {
                               ),
                               SizedBox(height: 16),
                               Text(
-                                'Generando QR...',
+                                'Cargando QR...',
                                 textAlign: TextAlign.center,
                               ),
                             ],
@@ -1444,7 +1389,7 @@ class _QrProfileCard extends StatelessWidget {
                           child: Column(
                             children: [
                               const Icon(
-                                Icons.location_off_rounded,
+                                Icons.qr_code_2_rounded,
                                 size: 42,
                                 color: Color(0xFFD94841),
                               ),
@@ -1518,7 +1463,7 @@ class _QrProfileCard extends StatelessWidget {
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
-                                      'Genera uno nuevo para volver a escanearlo.',
+                                      'Carga tu QR para volver a escanearlo.',
                                       textAlign: TextAlign.center,
                                       style: Theme.of(
                                         context,
@@ -1530,7 +1475,7 @@ class _QrProfileCard extends StatelessWidget {
                                           ? null
                                           : () => onRefresh!.call(),
                                       icon: const Icon(Icons.refresh_rounded),
-                                      label: const Text('Refrescar QR'),
+                                      label: const Text('Cargar QR'),
                                     ),
                                   ],
                                 ),
@@ -1540,7 +1485,9 @@ class _QrProfileCard extends StatelessWidget {
                       const SizedBox(height: 12),
                       Text(
                         isExpired
-                            ? 'Este QR ya no se puede usar hasta que lo refresques.'
+                            ? 'Este QR ya no se puede usar hasta que lo vuelvas a cargar.'
+                            : isStatic
+                            ? 'Escanea este codigo permanente para registrar tu asistencia.'
                             : 'Escanea este codigo para registrar tu asistencia.',
                         style: Theme.of(
                           context,
@@ -1562,11 +1509,13 @@ class _QrProfileCard extends StatelessWidget {
 class _QrStatusBanner extends StatelessWidget {
   const _QrStatusBanner({
     required this.isGenerating,
+    required this.isStatic,
     required this.isExpired,
     required this.remaining,
   });
 
   final bool isGenerating;
+  final bool isStatic;
   final bool isExpired;
   final Duration remaining;
 
@@ -1574,18 +1523,24 @@ class _QrStatusBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final backgroundColor = isExpired
         ? const Color(0xFFFDECEC)
+        : isStatic
+        ? const Color(0xFFEAF7EF)
         : isGenerating
         ? AppPalette.surfaceSoft
         : const Color(0xFFEAF7EF);
     final foregroundColor = isExpired
         ? const Color(0xFFD94841)
+        : isStatic
+        ? const Color(0xFF18794E)
         : isGenerating
         ? AppPalette.ink
         : const Color(0xFF18794E);
     final label = isExpired
         ? 'QR caduco'
+        : isStatic
+        ? 'QR permanente'
         : isGenerating
-        ? 'Generando QR'
+        ? 'Cargando QR'
         : 'Vence en ${_formatDuration(remaining)}';
 
     return Container(
@@ -1602,6 +1557,8 @@ class _QrStatusBanner extends StatelessWidget {
           Icon(
             isExpired
                 ? Icons.timer_off_rounded
+                : isStatic
+                ? Icons.verified_rounded
                 : isGenerating
                 ? Icons.autorenew_rounded
                 : Icons.timer_outlined,
@@ -1628,18 +1585,6 @@ String _formatDuration(Duration duration) {
   final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
 
   return '$minutes:$seconds';
-}
-
-class _QrGenerationLocationSnapshot {
-  const _QrGenerationLocationSnapshot({
-    required this.latitude,
-    required this.longitude,
-    required this.accuracy,
-  });
-
-  final double latitude;
-  final double longitude;
-  final double? accuracy;
 }
 
 String _buildCredentialFilename(AppUser currentUser) {
