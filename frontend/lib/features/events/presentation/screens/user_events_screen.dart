@@ -423,6 +423,10 @@ class _UserAttendedEventCard extends StatelessWidget {
                   label: _formatTime(record.eventDate),
                 ),
                 const _InfoPill(icon: Icons.verified_rounded, label: 'Asistio'),
+                _InfoPill(
+                  icon: Icons.fact_check_outlined,
+                  label: _formatUserControlCount(record),
+                ),
               ],
             ),
             const SizedBox(height: 14),
@@ -457,6 +461,20 @@ class _UserAttendedEventCard extends StatelessWidget {
       ),
     );
   }
+}
+
+String _formatUserControlCount(AttendanceReportRecord record) {
+  final totalControls = record.registeredControlsCount;
+
+  if (totalControls <= 0) {
+    return 'Sin controles registrados';
+  }
+
+  final controlLabel = totalControls == 1
+      ? 'control realizado'
+      : 'controles realizados';
+
+  return '$totalControls $controlLabel';
 }
 
 class _UserOfficeEventCard extends StatelessWidget {

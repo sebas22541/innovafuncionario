@@ -64,6 +64,7 @@ class ApiQrDetailsDataSource implements QrDetailsDataSource {
     final updatedAt =
         (source['updatedAt'] as String?) ?? DateTime.now().toIso8601String();
     final eventAttendance = source['eventoRegistro'] as Map<String, dynamic>?;
+    final eventPermission = source['eventoPermiso'] as Map<String, dynamic>?;
     final resolvedOfficeName = officeName ?? unitName;
     final firstName =
         (source['nombres'] as String?)?.trim() ??
@@ -101,6 +102,8 @@ class ApiQrDetailsDataSource implements QrDetailsDataSource {
       officeCode: officeCode,
       cargoCodigo: cargoCodigo,
       photoUrl: (source['fotoUrl'] ?? source['fotoBase64']) as String?,
+      canRegisterInActiveEvent: eventPermission?['permitido'] as bool?,
+      eventRegistrationMessage: eventPermission?['mensaje'] as String?,
       eventAttendance: eventAttendance == null
           ? null
           : QrEventAttendanceRecordModel(

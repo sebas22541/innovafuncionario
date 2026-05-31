@@ -74,6 +74,8 @@ class QrDetails {
     this.cargoCodigo,
     this.photoUrl,
     this.eventAttendance,
+    this.canRegisterInActiveEvent,
+    this.eventRegistrationMessage,
   });
 
   final String id;
@@ -89,6 +91,8 @@ class QrDetails {
   final String? cargoCodigo;
   final String? photoUrl;
   final QrEventAttendanceRecord? eventAttendance;
+  final bool? canRegisterInActiveEvent;
+  final String? eventRegistrationMessage;
 
   QrDetails copyWith({
     String? id,
@@ -104,6 +108,8 @@ class QrDetails {
     String? cargoCodigo,
     String? photoUrl,
     QrEventAttendanceRecord? eventAttendance,
+    bool? canRegisterInActiveEvent,
+    String? eventRegistrationMessage,
   }) {
     return QrDetails(
       id: id ?? this.id,
@@ -119,6 +125,10 @@ class QrDetails {
       cargoCodigo: cargoCodigo ?? this.cargoCodigo,
       photoUrl: photoUrl ?? this.photoUrl,
       eventAttendance: eventAttendance ?? this.eventAttendance,
+      canRegisterInActiveEvent:
+          canRegisterInActiveEvent ?? this.canRegisterInActiveEvent,
+      eventRegistrationMessage:
+          eventRegistrationMessage ?? this.eventRegistrationMessage,
     );
   }
 }

@@ -1549,9 +1549,7 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(404, "No se encontro una persona con ese CI.");
       }
 
-      if (input.estado === estado_asistencia.ASISTIO) {
-        await assertPersonCanAttendEvent(persona, evento);
-      }
+      await assertPersonCanAttendEvent(persona, evento);
 
       const operador = await assertEventOperator(authenticatedUser.id);
       const registeredAt = new Date();
@@ -1731,8 +1729,11 @@ const server = http.createServer(async (request, response) => {
       }
 
       let eventAttendance = null;
+      let eventPermission = null;
 
       if (eventId != null) {
+        eventPermission = await resolvePersonEventPermission(persona, eventId);
+
         const attendance = await prisma.asistencias.findUnique({
           where: {
             evento_id_persona_id: {
@@ -1758,7 +1759,10 @@ const server = http.createServer(async (request, response) => {
       }
 
       sendJson(response, 200, {
-        data: serializeQrPersonDetail(persona, { eventAttendance }),
+        data: serializeQrPersonDetail(persona, {
+          eventAttendance,
+          eventPermission,
+        }),
       });
       return;
     }
@@ -1793,8 +1797,11 @@ const server = http.createServer(async (request, response) => {
       }
 
       let eventAttendance = null;
+      let eventPermission = null;
 
       if (eventId != null) {
+        eventPermission = await resolvePersonEventPermission(persona, eventId);
+
         const attendance = await prisma.asistencias.findUnique({
           where: {
             evento_id_persona_id: {
@@ -1820,7 +1827,10 @@ const server = http.createServer(async (request, response) => {
       }
 
       sendJson(response, 200, {
-        data: serializeQrPersonDetail(persona, { eventAttendance }),
+        data: serializeQrPersonDetail(persona, {
+          eventAttendance,
+          eventPermission,
+        }),
       });
       return;
     }
@@ -6490,6 +6500,7 @@ function serializeQrPersonDetail(
   person: any,
   options?: {
     eventAttendance?: ReturnType<typeof serializeEventAttendanceLookup> | null;
+    eventPermission?: { permitido: boolean; mensaje: string | null } | null;
   },
 ) {
   const linkedUser = person.usuario ?? null;
@@ -6527,7 +6538,34 @@ function serializeQrPersonDetail(
       new Date()
     ).toISOString(),
     eventoRegistro: options?.eventAttendance ?? null,
+    eventoPermiso: options?.eventPermission ?? null,
   };
+}
+
+async function resolvePersonEventPermission(person: any, eventId: number) {
+  const event = await getEventAttendanceContext(eventId);
+
+  if (!event) {
+    throw new HttpError(404, "No se encontro el evento seleccionado.");
+  }
+
+  try {
+    await assertPersonCanAttendEvent(person, event);
+
+    return {
+      permitido: true,
+      mensaje: null,
+    };
+  } catch (error) {
+    if (error instanceof HttpError && error.statusCode === 403) {
+      return {
+        permitido: false,
+        mensaje: error.message,
+      };
+    }
+
+    throw error;
+  }
 }
 
 async function assertPersonCanAttendEvent(person: any, event: any) {

@@ -159,6 +159,17 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
       return;
     }
 
+    final currentDetails = _currentQrDetails;
+
+    if (currentDetails?.canRegisterInActiveEvent == false) {
+      AppAlert.showError(
+        context,
+        currentDetails?.eventRegistrationMessage ??
+            'Este usuario no esta permitido asistir a este evento.',
+      );
+      return;
+    }
+
     String? observation;
 
     if (listType == EventListType.observed) {
@@ -213,7 +224,7 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
           ? '$actionLabel para ${widget.activeEventName}.'
           : '$actionLabel por CI para ${widget.activeEventName}.';
 
-      AppAlert.showSuccess(context, actionMessage);
+      Navigator.of(context).pop(actionMessage);
     } on BackendApiException catch (error) {
       if (!mounted) {
         return;
@@ -584,8 +595,8 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
                             const SizedBox(height: 8),
                             Text(
                               _hasActiveEventContext
-                                  ? 'Como no se pudo validar su oficina, en este evento solo podras guardarlo como Observado.'
-                                  : 'Puedes guardarlo igual en este evento para pruebas usando Asistio u Observado.',
+                                  ? 'No se puede registrar en el evento hasta validar que pertenece a las oficinas o cargos configurados.'
+                                  : 'Selecciona un evento para validar si puede registrarse.',
                               style: textTheme.bodyMedium,
                             ),
                           ],
@@ -705,6 +716,38 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
                           child: Text(
                             'Este evento no tiene controles configurados.',
                             style: textTheme.bodyMedium,
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+
+                  if (qrDetails == null) {
+                    return const SizedBox.shrink();
+                  }
+
+                  if (qrDetails.canRegisterInActiveEvent == false) {
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 18),
+                      child: Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'No se puede registrar',
+                                style: textTheme.titleLarge?.copyWith(
+                                  color: const Color(0xFFD94841),
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                qrDetails.eventRegistrationMessage ??
+                                    'Este usuario no esta permitido asistir a este evento.',
+                                style: textTheme.bodyMedium,
+                              ),
+                            ],
                           ),
                         ),
                       ),
