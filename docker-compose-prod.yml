@@ -29,6 +29,11 @@ services:
       PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:?Defina PAYLOAD_ENCRYPTION_KEY en el entorno o archivo .env antes de desplegar}
       PAYLOAD_RESPONSE_ENCRYPTION: "true"
       QR_DYNAMIC_TTL_SECONDS: "1800"
+      IP_RATE_LIMIT_MAX_REQUESTS: "60"
+      RATE_LIMIT_MAX_REQUESTS: "60"
+      RATE_LIMIT_BAN_SECONDS: "900"
+      SUSPICIOUS_IP_MAX_STRIKES: "3"
+      SUSPICIOUS_IP_BAN_SECONDS: "1800"
     ports:
       - "4015:4000"
     volumes:

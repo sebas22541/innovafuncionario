@@ -74,26 +74,26 @@ const JWT_SECRET =
   createHash("sha256").update(`${DATABASE_URL}:jwt`).digest("hex");
 const RATE_LIMIT_MAX_REQUESTS = clampInt(
   process.env.RATE_LIMIT_MAX_REQUESTS ?? null,
-  100,
+  60,
   1,
-  100,
+  300,
 );
 const IP_RATE_LIMIT_MAX_REQUESTS = clampInt(
   process.env.IP_RATE_LIMIT_MAX_REQUESTS ?? null,
   60,
   1,
-  100,
+  300,
 );
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_BAN_MS = clampInt(
   process.env.RATE_LIMIT_BAN_SECONDS ?? null,
-  300,
+  900,
   60,
   3600,
 ) * 1000;
 const SUSPICIOUS_IP_MAX_STRIKES = clampInt(
   process.env.SUSPICIOUS_IP_MAX_STRIKES ?? null,
-  5,
+  3,
   1,
   100,
 );
@@ -131,6 +131,8 @@ const SEED_ADMIN_EMAIL = normalizeEmailValue(
 const DYNAMIC_QR_SIGNING_SECRET =
   process.env.QR_DYNAMIC_SECRET ??
   createHash("sha256").update(`${DATABASE_URL}:dynamic-qr`).digest("hex");
+const HIGH_RISK_BOT_PATH_PATTERN =
+  /(?:^|\/)(?:wp-admin|wp-content|wp-includes|wp-login|xmlrpc|phpmyadmin|\.git|vendor)(?:\/|$)|(?:\.php$|\.php\/|readme\.txt$|composer\.(?:json|lock)$|package-lock\.json$|\.env$|config(?:\.json)?$|backup|dump|\.sql$)/i;
 
 if (!DATABASE_URL) {
   logFatal(
@@ -310,11 +312,29 @@ const server = http.createServer(async (request, response) => {
       logWarning(error.message, buildRequestLogFields(request, requestId, {
         statusCode: error.statusCode,
       }));
-      sendJson(response, error.statusCode, { error: error.message });
+      sendErrorJson(response, error.statusCode, error.message);
       return;
     }
 
     throw error;
+  }
+
+  if (!request.url || !request.method) {
+    sendJson(response, 400, { error: "Solicitud invalida." });
+    return;
+  }
+
+  const url = new URL(
+    request.url,
+    `http://${request.headers.host ?? "localhost"}`,
+  );
+  requestPath = buildSafeRequestPath(url);
+
+  if (recordSuspiciousPathActivity(request, response, requestId, url)) {
+    sendJson(response, 429, {
+      error: "IP bloqueada temporalmente por actividad sospechosa.",
+    });
+    return;
   }
 
   if (!applyCors(request, response)) {
@@ -343,25 +363,7 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
-  if (!request.url || !request.method) {
-    sendJson(response, 400, { error: "Solicitud invalida." });
-    return;
-  }
-
-  const url = new URL(
-    request.url,
-    `http://${request.headers.host ?? "localhost"}`,
-  );
-  requestPath = buildSafeRequestPath(url);
-
   try {
-    if (recordSuspiciousPathActivity(request, response, requestId, url)) {
-      sendJson(response, 429, {
-        error: "IP bloqueada temporalmente por actividad sospechosa.",
-      });
-      return;
-    }
-
     const authenticatedUser = await authenticateRequestIfRequired(request, url);
 
     authenticatedUserForLog = authenticatedUser;
@@ -1885,7 +1887,7 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
-      sendJson(response, error.statusCode, { error: error.message });
+      sendErrorJson(response, error.statusCode, error.message);
       return;
     }
 
@@ -2192,13 +2194,7 @@ function buildSafeRequestPath(url: URL) {
 }
 
 function getClientIp(request: IncomingMessage) {
-  const forwardedFor = readSingleHeader(request.headers["x-forwarded-for"]);
-
-  if (forwardedFor != null && forwardedFor.trim().length > 0) {
-    return forwardedFor.split(",")[0]?.trim();
-  }
-
-  return request.socket.remoteAddress;
+  return readClientIp(request);
 }
 
 function buildRequestLogFields(
@@ -2249,6 +2245,18 @@ function sendJson(
   response.setHeader("Pragma", "no-cache");
   response.writeHead(statusCode);
   response.end(JSON.stringify(payload, null, 2));
+}
+
+function sendErrorJson(
+  response: ServerResponse,
+  statusCode: number,
+  message: string,
+) {
+  sendJson(response, statusCode, {
+    status: statusCode,
+    message,
+    error: message,
+  });
 }
 
 function sendPdf(
@@ -2475,29 +2483,26 @@ function recordSuspiciousIpActivity(
 function readSuspiciousPathStrikes(url: URL) {
   const pathname = url.pathname.toLowerCase();
 
-  if (pathname === "/" || pathname === "/health" || pathname.startsWith("/api/")) {
-    return 0;
-  }
-
-  if (pathname === "/favicon.ico" || pathname === "/robots.txt") {
-    return 0;
-  }
-
   if (
+    HIGH_RISK_BOT_PATH_PATTERN.test(pathname) ||
     pathname.includes("..") ||
     pathname.includes(";") ||
     pathname.includes("\\") ||
     pathname.includes("/content/dam") ||
-    pathname.includes("wp-") ||
-    pathname.includes("php") ||
-    pathname.includes(".env") ||
-    pathname.includes("config") ||
     pathname.includes("media-cache") ||
     pathname.includes("validator") ||
     pathname.includes("tidy") ||
     pathname.includes("infinity")
   ) {
     return SUSPICIOUS_IP_MAX_STRIKES;
+  }
+
+  if (pathname === "/" || pathname === "/health" || pathname.startsWith("/api/")) {
+    return 0;
+  }
+
+  if (pathname === "/favicon.ico" || pathname === "/robots.txt") {
+    return 0;
   }
 
   return 2;
@@ -2604,7 +2609,7 @@ function enforceRateLimit(
     );
     throw new HttpError(
       429,
-      "Demasiadas solicitudes. Intenta nuevamente mas tarde.",
+      "Demasiadas solicitudes. Intente nuevamente mas tarde.",
     );
   }
 
@@ -2629,7 +2634,7 @@ function enforceRateLimit(
     );
     throw new HttpError(
       429,
-      "Demasiadas solicitudes. Intenta nuevamente mas tarde.",
+      "Demasiadas solicitudes. Intente nuevamente mas tarde.",
     );
   }
 }
@@ -2659,29 +2664,76 @@ function setRateLimitHeaders(
   scope: "ip" | "user",
   maxRequests: number,
 ) {
-  response.setHeader("X-RateLimit-Limit", maxRequests.toString());
-  response.setHeader("X-RateLimit-Scope", scope);
+  const resetSeconds = Math.ceil(bucket.resetAt / 1000).toString();
+
+  response.setHeader("RateLimit-Limit", maxRequests.toString());
+  response.setHeader("RateLimit-Policy", `${maxRequests};w=${Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)}`);
+  response.setHeader("RateLimit-Scope", scope);
   response.setHeader(
-    "X-RateLimit-Remaining",
+    "RateLimit-Remaining",
     Math.max(0, maxRequests - bucket.count).toString(),
   );
-  response.setHeader(
-    "X-RateLimit-Reset",
-    Math.ceil(bucket.resetAt / 1000).toString(),
-  );
+  response.setHeader("RateLimit-Reset", resetSeconds);
 }
 
 function readClientIp(request: IncomingMessage) {
+  const remoteAddress = request.socket.remoteAddress;
   const forwardedFor = request.headers["x-forwarded-for"];
   const firstForwardedIp = Array.isArray(forwardedFor)
     ? forwardedFor[0]
     : forwardedFor?.split(",")[0];
 
+  if (
+    remoteAddress != null &&
+    isTrustedProxyAddress(remoteAddress) &&
+    firstForwardedIp != null &&
+    firstForwardedIp.trim().length > 0
+  ) {
+    return firstForwardedIp.trim();
+  }
+
   return (
-    firstForwardedIp?.trim() ??
-    request.socket.remoteAddress ??
+    remoteAddress ??
     "unknown"
   );
+}
+
+function isTrustedProxyAddress(address: string) {
+  const normalizedAddress = normalizeSocketAddress(address);
+
+  if (
+    normalizedAddress === "::1" ||
+    normalizedAddress === "127.0.0.1" ||
+    normalizedAddress === "localhost"
+  ) {
+    return true;
+  }
+
+  if (
+    normalizedAddress.startsWith("10.") ||
+    normalizedAddress.startsWith("192.168.") ||
+    normalizedAddress.startsWith("169.254.")
+  ) {
+    return true;
+  }
+
+  const match172 = /^172\.(\d{1,3})\./.exec(normalizedAddress);
+
+  if (match172 != null) {
+    const secondOctet = Number.parseInt(match172[1] ?? "", 10);
+
+    return secondOctet >= 16 && secondOctet <= 31;
+  }
+
+  return (
+    normalizedAddress.startsWith("fc") ||
+    normalizedAddress.startsWith("fd") ||
+    normalizedAddress.startsWith("fe80:")
+  );
+}
+
+function normalizeSocketAddress(address: string) {
+  return address.trim().toLowerCase().replace(/^::ffff:/, "");
 }
 
 async function authenticateRequestIfRequired(
