@@ -147,9 +147,10 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
 
   void _handleSystemBack() {
     FocusManager.instance.primaryFocus?.unfocus();
+    final defaultSection = _defaultSectionForUser(_currentUser);
 
-    if (_selectedSection != AppSection.home) {
-      _selectSection(AppSection.home);
+    if (_selectedSection != defaultSection) {
+      _selectSection(defaultSection);
     }
   }
 
@@ -240,7 +241,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
   @override
   Widget build(BuildContext context) {
     final visibleSections = _visibleSectionsForUser(_currentUser);
-    final usePortalShell = !_currentUser.isAdmin;
+    final usePortalShell = !_currentUser.isAdmin && !_currentUser.isCredentials;
 
     return LayoutBuilder(
       builder: (context, constraints) {
