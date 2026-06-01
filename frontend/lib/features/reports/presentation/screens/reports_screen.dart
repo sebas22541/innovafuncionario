@@ -15,8 +15,8 @@ const Map<int, pw.TableColumnWidth> _eventReportPdfColumnWidths = {
   0: pw.FixedColumnWidth(20),
   1: pw.FixedColumnWidth(62),
   2: pw.FixedColumnWidth(92),
-  3: pw.FixedColumnWidth(132),
-  4: pw.FixedColumnWidth(76),
+  3: pw.FixedColumnWidth(45),
+  4: pw.FixedColumnWidth(163),
   5: pw.FixedColumnWidth(60),
 };
 
