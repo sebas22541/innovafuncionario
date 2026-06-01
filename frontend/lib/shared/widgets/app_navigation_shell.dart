@@ -201,7 +201,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 onLogout: widget.onLogout,
               );
       case AppSection.credentials:
-        return _currentUser.isAdmin
+        return _currentUser.isAdmin || _currentUser.isCredentials
             ? CredentialsScreen(currentUser: _currentUser)
             : SettingsScreen(
                 currentUser: _currentUser,
@@ -1071,11 +1071,11 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
   }
 
   if (user.isControl) {
-    return const [
-      AppSection.home,
-      AppSection.events,
-      AppSection.settings,
-    ];
+    return const [AppSection.home, AppSection.events, AppSection.settings];
+  }
+
+  if (user.isCredentials) {
+    return const [AppSection.credentials, AppSection.settings];
   }
 
   return const [
@@ -1088,6 +1088,10 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
 }
 
 AppSection _defaultSectionForUser(AppUser user) {
+  if (user.isCredentials) {
+    return AppSection.credentials;
+  }
+
   return AppSection.home;
 }
 

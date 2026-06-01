@@ -242,6 +242,7 @@ enum estado_evento {
 enum rol_usuario {
   ADMIN
   CONTROL
+  CREDENCIALES
   OPERADOR
 }
     

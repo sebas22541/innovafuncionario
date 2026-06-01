@@ -655,9 +655,9 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/usuarios") {
-      await assertAdminRequester(
+      await assertCredentialsRequester(
         authenticatedUser.email,
-        "Solo un administrador puede gestionar usuarios.",
+        "Solo un administrador o usuario de credenciales puede consultar credenciales.",
       );
       const usuarios = await prisma.usuarios.findMany({
         where: {
@@ -3434,9 +3434,9 @@ async function resolveCredentialTargetUser(
   const targetLogin = requestedLogin ?? authenticatedUser.email;
 
   if (requestedLogin != null && requestedLogin !== authenticatedUser.email) {
-    await assertAdminRequester(
+    await assertCredentialsRequester(
       authenticatedUser.email,
-      "Solo un administrador puede descargar credenciales de otros usuarios.",
+      "Solo un administrador o usuario de credenciales puede descargar credenciales de otros usuarios.",
     );
   }
 
@@ -3584,6 +3584,7 @@ function parseManagedUserInput(payload: unknown): ManagedUserInput {
   const requestedRole = readRequiredUppercaseChoice(body, "rol", [
     rol_usuario.ADMIN,
     rol_usuario.CONTROL,
+    rol_usuario.CREDENCIALES,
     rol_usuario.OPERADOR,
   ]) as (typeof rol_usuario)[keyof typeof rol_usuario];
   const requesterEmail = readRequiredLoginIdentifier(body, "requesterEmail");
@@ -3619,6 +3620,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
   const requestedRole = readRequiredUppercaseChoice(body, "rol", [
     rol_usuario.ADMIN,
     rol_usuario.CONTROL,
+    rol_usuario.CREDENCIALES,
     rol_usuario.OPERADOR,
   ]) as (typeof rol_usuario)[keyof typeof rol_usuario];
   const ci = readRequiredString(body, "ci", 3, 30);
@@ -4158,6 +4160,25 @@ async function assertAdminRequester(
   });
 
   if (!user || user.rol !== rol_usuario.ADMIN || user.activo !== true) {
+    throw new HttpError(403, message);
+  }
+
+  return user;
+}
+
+async function assertCredentialsRequester(
+  email: string,
+  message = "Solo un administrador o usuario de credenciales puede realizar esta accion.",
+) {
+  const user = await prisma.usuarios.findUnique({
+    where: { email: email.toLowerCase() },
+  });
+
+  if (
+    !user ||
+    (user.rol !== rol_usuario.ADMIN && user.rol !== rol_usuario.CREDENCIALES) ||
+    user.activo !== true
+  ) {
     throw new HttpError(403, message);
   }
 

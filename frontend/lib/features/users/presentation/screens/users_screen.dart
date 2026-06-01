@@ -44,6 +44,8 @@ class _UsersScreenState extends State<UsersScreen> {
 
   int get _adminCount => _users.where((user) => user.isAdmin).length;
   int get _controlCount => _users.where((user) => user.isControl).length;
+  int get _credentialsCount =>
+      _users.where((user) => user.isCredentials).length;
   int get _externalCount => _users.where((user) => user.isExternalUser).length;
   int get _activeUsersCount => _users.where((user) => user.activo).length;
   List<AppUser> get _filteredUsers {
@@ -610,7 +612,7 @@ class _UsersScreenState extends State<UsersScreen> {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              'Aqui el administrador puede gestionar las cuentas con rol administrador, control y funcionario.',
+                              'Aqui el administrador puede gestionar las cuentas con rol administrador, control, credenciales y funcionario.',
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
                           ],
@@ -635,6 +637,11 @@ class _UsersScreenState extends State<UsersScreen> {
                         label: 'Control',
                         value: '$_controlCount',
                         icon: Icons.fact_check_outlined,
+                      ),
+                      _UserStatItem(
+                        label: 'Credenciales',
+                        value: '$_credentialsCount',
+                        icon: Icons.badge_outlined,
                       ),
                       _UserStatItem(
                         label: 'Funcionarios',
@@ -1168,11 +1175,13 @@ class _RoleChip extends StatelessWidget {
     final accentColor = switch (role) {
       AppUserRole.admin => AppPalette.orange,
       AppUserRole.control => AppPalette.night,
+      AppUserRole.credentials => AppPalette.orange,
       AppUserRole.external => AppPalette.muted,
     };
     final backgroundColor = switch (role) {
       AppUserRole.admin => AppPalette.orangeSoft,
       AppUserRole.control => AppPalette.blueSoftStrong,
+      AppUserRole.credentials => AppPalette.orangeSoft,
       AppUserRole.external => AppPalette.surfaceSoft,
     };
 
@@ -1771,6 +1780,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                           DropdownMenuItem(
                             value: AppUserRole.admin,
                             child: Text('Administrador'),
+                          ),
+                          DropdownMenuItem(
+                            value: AppUserRole.credentials,
+                            child: Text('Credenciales'),
                           ),
                           DropdownMenuItem(
                             value: AppUserRole.external,
@@ -2785,8 +2798,10 @@ int _userRoleOrder(AppUserRole role) {
       return 0;
     case AppUserRole.control:
       return 1;
-    case AppUserRole.external:
+    case AppUserRole.credentials:
       return 2;
+    case AppUserRole.external:
+      return 3;
   }
 }
 
@@ -2883,9 +2898,9 @@ Set<String> _officeSearchTokens(String value) {
 }
 
 String _normalizeExactOfficeValue(String value) {
-  return _stripTextAccents(value.trim().toLowerCase())
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
+  return _stripTextAccents(
+    value.trim().toLowerCase(),
+  ).replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
 String _tipoVinculoLabel(String value) {
