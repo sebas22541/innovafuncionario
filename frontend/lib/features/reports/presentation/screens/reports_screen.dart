@@ -1676,9 +1676,9 @@ List<List<String>> _buildEventPdfRows(List<EventRosterEntry> entries) {
               ? entry.value.ci!.trim()
               : 'Sin CI',
           entry.value.fullName,
+          _eventRosterTipoLabel(entry.value.tipoVinculo),
           entry.value.officeName ?? 'Sin oficina',
           _formatDateTime(entry.value.registeredAt),
-          _eventRosterTipoLabel(entry.value.tipoVinculo),
         ],
       )
       .toList(growable: false);

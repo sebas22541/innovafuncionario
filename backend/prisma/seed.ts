@@ -19,7 +19,7 @@ const prisma = new PrismaClient({ adapter });
 const adminEmail = normalizeEmail(
   process.env.SEED_ADMIN_EMAIL ?? "admin@admin.com",
 );
-const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? "admin123";
+const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? "root#6863";
 const adminNames = process.env.SEED_ADMIN_NAMES ?? "Administrador";
 const adminFirstLastName = process.env.SEED_ADMIN_FIRST_LASTNAME ?? "Sistema";
 const adminSecondLastName = process.env.SEED_ADMIN_SECOND_LASTNAME ?? "QR";
