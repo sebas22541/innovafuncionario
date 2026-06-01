@@ -346,6 +346,7 @@ const server = http.createServer(async (request, response) => {
       const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
       const resolvedCargo = selectedCargo?.cargo ?? input.cargo;
       const resolvedCargoCode = selectedCargo?.codigo ?? null;
+      const resolvedLugar = resolvePorteroLugar(resolvedCargo, input.lugar);
       const duplicatedUser = await findUserByLoginOrCi(prisma, {
         login: input.email,
         ci: input.ci,
@@ -380,6 +381,7 @@ const server = http.createServer(async (request, response) => {
           oficina_comision_id: resolvedCommissionOfficeId,
           cargo_codigo: resolvedCargoCode,
           cargo: resolvedCargo,
+          lugar: resolvedLugar,
           numero_item: input.numeroItem,
           foto_url: storedProfilePhoto,
           email: input.email,
@@ -725,6 +727,7 @@ const server = http.createServer(async (request, response) => {
       const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
       const resolvedCargo = selectedCargo?.cargo ?? input.cargo;
       const resolvedCargoCode = selectedCargo?.codigo ?? null;
+      const resolvedLugar = resolvePorteroLugar(resolvedCargo, input.lugar);
       const existingUser = await prisma.usuarios.findUnique({
         where: { email: input.email },
       });
@@ -766,6 +769,7 @@ const server = http.createServer(async (request, response) => {
           oficina_comision_id: resolvedCommissionOfficeId,
           cargo_codigo: resolvedCargoCode,
           cargo: resolvedCargo,
+          lugar: resolvedLugar,
           numero_item: input.numeroItem,
           foto_url: storedProfilePhoto,
           email: input.email,
@@ -867,6 +871,10 @@ const server = http.createServer(async (request, response) => {
           const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
           const resolvedCargo = selectedCargo?.cargo ?? managedInput.cargo;
           const resolvedCargoCode = selectedCargo?.codigo ?? null;
+          const resolvedLugar = resolvePorteroLugar(
+            resolvedCargo,
+            managedInput.lugar,
+          );
           const nextPhotoSource = managedInput.fotoData == null
             ? existingUser.foto_url
             : await storeUserProfilePhoto({
@@ -894,6 +902,7 @@ const server = http.createServer(async (request, response) => {
               oficina_comision_id: resolvedCommissionOfficeId,
               cargo_codigo: resolvedCargoCode,
               cargo: resolvedCargo,
+              lugar: resolvedLugar,
               numero_item: managedInput.numeroItem,
               foto_url: nextPhotoSource,
               email: managedInput.email,
@@ -1949,6 +1958,7 @@ type RegisterUserInput = {
   oficinaComisionId: number | null;
   cargoCodigo: string | null;
   cargo: string;
+  lugar: string | null;
   numeroItem: string | null;
   activo: boolean;
   fotoData: string;
@@ -2529,6 +2539,11 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     ALTER TABLE "usuarios"
     ADD COLUMN IF NOT EXISTS "oficina_comision_id" INTEGER
+  `);
+
+  await pool.query(`
+    ALTER TABLE "usuarios"
+    ADD COLUMN IF NOT EXISTS "lugar" VARCHAR(120)
   `);
 
   await pool.query(`
@@ -3230,6 +3245,24 @@ function normalizeLooseMatchText(value: unknown) {
     .trim();
 }
 
+function isPorteroCargo(cargo: string | null | undefined) {
+  return normalizeLooseMatchText(cargo) === "PORTERO";
+}
+
+function resolvePorteroLugar(cargo: string | null | undefined, lugar: string | null) {
+  if (!isPorteroCargo(cargo)) {
+    return null;
+  }
+
+  const normalizedLugar = normalizeOptionalText(lugar);
+
+  if (normalizedLugar == null) {
+    throw new HttpError(400, "Debes ingresar el lugar del portero.");
+  }
+
+  return normalizedLugar;
+}
+
 function matchesCargoSelection(
   userCargoCodigo: string | null,
   userCargoName: string | null,
@@ -3538,6 +3571,7 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
   const unidad = readOptionalString(body, "unidad", 0, 120);
   const cargoCodigo = readOptionalString(body, "cargoCodigo", 1, 50);
   const cargo = readOptionalString(body, "cargo", 2, 120);
+  const lugar = readOptionalString(body, "lugar", 0, 120);
   const ci = readRequiredString(body, "ci", 3, 30);
   const primerApellido = readRequiredString(body, "primerApellido", 2, 80);
   const loginIdentifier = normalizeEmailValue(normalizeCiValue(ci));
@@ -3569,6 +3603,7 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
     oficinaComisionId,
     cargoCodigo,
     cargo: cargo ?? "",
+    lugar,
     numeroItem:
       tipoVinculo === "ITEM"
         ? readRequiredString(body, "numeroItem", 1, 50)
@@ -3617,6 +3652,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
   const unidad = readOptionalString(body, "unidad", 0, 120);
   const cargoCodigo = readOptionalString(body, "cargoCodigo", 1, 50);
   const cargo = readOptionalString(body, "cargo", 2, 120);
+  const lugar = readOptionalString(body, "lugar", 0, 120);
   const requestedRole = readRequiredUppercaseChoice(body, "rol", [
     rol_usuario.ADMIN,
     rol_usuario.CONTROL,
@@ -3650,6 +3686,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     oficinaComisionId,
     cargoCodigo,
     cargo: cargo ?? "",
+    lugar,
     numeroItem:
       tipoVinculo === "ITEM"
         ? readRequiredString(body, "numeroItem", 1, 50)
@@ -5077,6 +5114,7 @@ function buildUserQrPayloadObject(user: any, qrCode: string) {
     tipoVinculo: normalizeOptionalText(user.tipo_vinculo) ?? "",
     unidad: normalizeOptionalText(user.unidad) ?? "",
     cargo: normalizeOptionalText(user.cargo) ?? "",
+    lugar: normalizeOptionalText(user.lugar) ?? "",
     numeroItem: normalizeOptionalText(user.numero_item) ?? "",
     activo: user.activo === true,
   };
@@ -5944,6 +5982,7 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     tieneComision: commissionOfficeName != null || user.oficina_comision_id != null,
     cargoCodigo: user.cargo_codigo ?? null,
     cargo: user.cargo ?? "",
+    lugar: user.lugar ?? "",
     numeroItem: user.numero_item ?? "",
     activo: user.activo,
     fotoUrl: user.foto_url,

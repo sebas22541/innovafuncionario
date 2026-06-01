@@ -206,6 +206,7 @@ model usuarios {
   oficina_comision_id Int?
   cargo_codigo     String?       @db.VarChar(50)
   cargo            String?       @db.VarChar(120)
+  lugar            String?       @db.VarChar(120)
   numero_item      String?       @db.VarChar(50)
   foto_url         String?       @db.Text
   email            String        @unique @db.VarChar(150)

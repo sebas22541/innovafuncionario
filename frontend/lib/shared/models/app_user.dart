@@ -41,6 +41,7 @@ class AppUser {
     required this.tipoVinculo,
     required this.unidad,
     required this.cargo,
+    required this.lugar,
     required this.numeroItem,
     required this.activo,
     this.cargoCodigo,
@@ -71,6 +72,7 @@ class AppUser {
   final String tipoVinculo;
   final String unidad;
   final String cargo;
+  final String lugar;
   final String numeroItem;
   final bool activo;
   final String? cargoCodigo;
@@ -102,6 +104,7 @@ class AppUser {
       tipoVinculo: tipoVinculo,
       unidad: unidad,
       cargo: cargo,
+      lugar: lugar,
       numeroItem: numeroItem,
       activo: activo,
       cargoCodigo: cargoCodigo,
@@ -138,6 +141,7 @@ class AppUser {
       tipoVinculo: _readString(source['tipoVinculo'], 'tipoVinculo'),
       unidad: _readString(source['unidad'], 'unidad'),
       cargo: _readString(source['cargo'], 'cargo'),
+      lugar: source['lugar'] as String? ?? '',
       numeroItem: _readString(source['numeroItem'], 'numeroItem'),
       activo: source['activo'] as bool? ?? true,
       cargoCodigo: source['cargoCodigo'] as String?,
@@ -171,6 +175,7 @@ class AppUser {
       'tipoVinculo': tipoVinculo,
       'unidad': unidad,
       'cargo': cargo,
+      'lugar': lugar,
       'cargoCodigo': cargoCodigo,
       'numeroItem': numeroItem,
       'activo': activo,

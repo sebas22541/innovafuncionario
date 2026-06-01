@@ -156,7 +156,7 @@ class _UsersScreenState extends State<UsersScreen> {
     final cacheKey =
         '${user.id ?? 'new'}|${user.email}|${user.ci}|${user.fullName}|'
         '${user.officeCode}|${user.officeName}|${user.primaryOfficeName}|'
-        '${user.commissionOfficeName}|${user.unidad}';
+        '${user.commissionOfficeName}|${user.unidad}|${user.lugar}';
     final cachedText = _userSearchIndex[cacheKey];
 
     if (cachedText != null) {
@@ -169,7 +169,7 @@ class _UsersScreenState extends State<UsersScreen> {
       '${user.tercerApellido} ${user.email} '
       '${user.officeCode} ${user.officeName} '
       '${user.primaryOfficeName} ${user.commissionOfficeName} '
-      '${user.unidad}',
+      '${user.unidad} ${user.lugar}',
     );
     _userSearchIndex[cacheKey] = searchableText;
 
@@ -264,6 +264,7 @@ class _UsersScreenState extends State<UsersScreen> {
         cargoCodigo: draft.cargo.code,
         unidad: draft.office.name,
         cargo: draft.cargo.name,
+        lugar: draft.lugar,
         numeroItem: draft.numeroItem,
         activo: draft.activo,
         fotoData: draft.fotoData!,
@@ -414,6 +415,7 @@ class _UsersScreenState extends State<UsersScreen> {
         cargoCodigo: draft.cargo.code,
         unidad: draft.office.name,
         cargo: draft.cargo.name,
+        lugar: draft.lugar,
         numeroItem: draft.numeroItem,
         activo: draft.activo,
         fotoData: draft.fotoData,
@@ -1132,6 +1134,8 @@ class _UserListCard extends StatelessWidget {
                         value: user.primaryOfficeName!,
                       ),
                     _UserMeta(label: 'Cargo', value: user.cargo),
+                    if (user.lugar.trim().isNotEmpty)
+                      _UserMeta(label: 'Lugar', value: user.lugar),
                     _UserMeta(
                       label: 'Tipo',
                       value: _tipoVinculoLabel(user.tipoVinculo),
@@ -1474,6 +1478,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   final TextEditingController _commissionOfficeController =
       TextEditingController();
   final TextEditingController _cargoController = TextEditingController();
+  final TextEditingController _lugarController = TextEditingController();
   final TextEditingController _numeroItemController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController =
@@ -1537,6 +1542,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
         _selectedCommissionOffice?.name ?? user.commissionOfficeName ?? '';
     _selectedCargo = _findInitialCargo(user);
     _cargoController.text = _selectedCargo?.name ?? user.cargo;
+    _lugarController.text = user.lugar;
   }
 
   @override
@@ -1549,6 +1555,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _unidadController.dispose();
     _commissionOfficeController.dispose();
     _cargoController.dispose();
+    _lugarController.dispose();
     _numeroItemController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
@@ -1594,6 +1601,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     setState(() {
       _selectedCargo = cargo;
       _cargoController.text = cargo.name;
+
+      if (!_isPorteroCargo(cargo)) {
+        _lugarController.clear();
+      }
     });
   }
 
@@ -1709,6 +1720,9 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
         office: _selectedOffice!,
         commissionOffice: _hasCommission ? _selectedCommissionOffice : null,
         cargo: _selectedCargo!,
+        lugar: _isPorteroCargo(_selectedCargo)
+            ? _lugarController.text.trim()
+            : '',
         numeroItem: _numeroItemController.text.trim(),
         email: _ciController.text.trim(),
         password: _isEditing
@@ -1973,6 +1987,16 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                               : FontWeight.w600,
                         ),
                       ),
+                      if (_isPorteroCargo(_selectedCargo)) ...[
+                        const SizedBox(height: 14),
+                        _FormField(
+                          controller: _lugarController,
+                          label: 'Lugar',
+                          hint: 'Ingresa el lugar al que pertenece',
+                          isRequired: true,
+                          validator: _requiredValidator('Ingresa el lugar.'),
+                        ),
+                      ],
                       if (_selectedTipoVinculo == 'ITEM') ...[
                         const SizedBox(height: 14),
                         _FormField(
@@ -2149,6 +2173,7 @@ class _ManagedUserDraft {
     required this.office,
     required this.commissionOffice,
     required this.cargo,
+    required this.lugar,
     required this.numeroItem,
     required this.email,
     required this.password,
@@ -2166,6 +2191,7 @@ class _ManagedUserDraft {
   final OfficeOption office;
   final OfficeOption? commissionOffice;
   final CargoOption cargo;
+  final String lugar;
   final String numeroItem;
   final String email;
   final String? password;
@@ -2840,6 +2866,14 @@ bool _userBelongsToOffice(AppUser user, OfficeOption office) {
   );
 
   return expectedName.isNotEmpty && userOfficeName == expectedName;
+}
+
+bool _isPorteroCargo(CargoOption? cargo) {
+  if (cargo == null) {
+    return false;
+  }
+
+  return _normalizeSearchText(cargo.name) == 'portero';
 }
 
 bool _officeTextLooksSimilar(String value, String query) {
