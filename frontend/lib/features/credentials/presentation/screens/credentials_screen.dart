@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:printing/printing.dart';
@@ -9,7 +11,6 @@ import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
-import '../../../../shared/widgets/base64_avatar.dart';
 import '../../../auth/domain/entities/office_option.dart';
 
 class CredentialsScreen extends StatefulWidget {
@@ -22,6 +23,8 @@ class CredentialsScreen extends StatefulWidget {
 }
 
 class _CredentialsScreenState extends State<CredentialsScreen> {
+  static const int _credentialsPerPage = 10;
+
   final ImagePicker _imagePicker = ImagePicker();
   final TextEditingController _ciController = TextEditingController();
   final TextEditingController _officeController = TextEditingController();
@@ -33,7 +36,20 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
   int? _selectedOfficeId;
   bool _isLoading = true;
   bool _hasSearched = false;
+  int _currentPage = 0;
   String? _errorMessage;
+
+  int get _totalPages =>
+      _results.isEmpty ? 1 : ((_results.length - 1) ~/ _credentialsPerPage) + 1;
+  int get _safeCurrentPage => _currentPage.clamp(0, _totalPages - 1);
+  int get _visibleStartIndex => _results.isEmpty
+      ? 0
+      : (_safeCurrentPage * _credentialsPerPage).clamp(0, _results.length);
+  int get _visibleEndIndex => _results.isEmpty
+      ? 0
+      : (_visibleStartIndex + _credentialsPerPage).clamp(0, _results.length);
+  List<AppUser> get _visibleResults =>
+      _results.sublist(_visibleStartIndex, _visibleEndIndex);
 
   @override
   void initState() {
@@ -96,14 +112,24 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
     final ciQuery = _ciController.text.trim().toLowerCase();
     final selectedOffice = _selectedOffice();
 
+    if (selectedOffice == null) {
+      AppAlert.showError(context, 'Selecciona una oficina para buscar.');
+      setState(() {
+        _hasSearched = false;
+        _results = const [];
+        _currentPage = 0;
+      });
+      return;
+    }
+
     setState(() {
       _hasSearched = true;
+      _currentPage = 0;
       _results = _users
           .where((user) {
             final matchesCi =
                 ciQuery.isEmpty || user.ci.toLowerCase().contains(ciQuery);
-            final matchesOffice =
-                selectedOffice == null || _matchesOffice(user, selectedOffice);
+            final matchesOffice = _matchesOffice(user, selectedOffice);
 
             return matchesCi && matchesOffice;
           })
@@ -118,6 +144,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
       _selectedOfficeId = null;
       _results = const [];
       _hasSearched = false;
+      _currentPage = 0;
     });
   }
 
@@ -144,6 +171,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
     setState(() {
       _selectedOfficeId = office?.id;
       _officeController.text = office?.name ?? '';
+      _currentPage = 0;
     });
   }
 
@@ -225,6 +253,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
       setState(() {
         _users = _replaceUser(_users, updatedUser);
         _results = _replaceUser(_results, updatedUser);
+        _currentPage = _safeCurrentPage;
       });
 
       AppAlert.showSuccess(context, 'Foto actualizada.');
@@ -368,7 +397,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
         key: ValueKey('empty-search'),
         icon: Icons.manage_search_rounded,
         title: 'Realiza una busqueda',
-        message: 'Ingresa un CI, selecciona una oficina o usa ambos filtros.',
+        message: 'Selecciona una oficina. Opcionalmente filtra por CI.',
       );
     }
 
@@ -390,11 +419,33 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
           style: Theme.of(context).textTheme.titleLarge,
         ),
         const SizedBox(height: 12),
+        _CredentialsPaginationBar(
+          currentPage: _safeCurrentPage,
+          totalPages: _totalPages,
+          totalResults: _results.length,
+          startIndex: _visibleStartIndex,
+          endIndex: _visibleEndIndex,
+          onPrevious: _safeCurrentPage == 0
+              ? null
+              : () {
+                  setState(() {
+                    _currentPage = _safeCurrentPage - 1;
+                  });
+                },
+          onNext: _safeCurrentPage >= _totalPages - 1
+              ? null
+              : () {
+                  setState(() {
+                    _currentPage = _safeCurrentPage + 1;
+                  });
+                },
+        ),
+        const SizedBox(height: 12),
         LayoutBuilder(
           builder: (context, constraints) {
             if (constraints.maxWidth < 760) {
               return _CredentialCardsList(
-                users: _results,
+                users: _visibleResults,
                 downloadingEmails: _downloadingEmails,
                 updatingPhotoEmails: _updatingPhotoEmails,
                 onDownload: _downloadCredential,
@@ -403,7 +454,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
             }
 
             return _CredentialsTable(
-              users: _results,
+              users: _visibleResults,
               downloadingEmails: _downloadingEmails,
               updatingPhotoEmails: _updatingPhotoEmails,
               onDownload: _downloadCredential,
@@ -545,14 +596,6 @@ class _OfficePickerSheetState extends State<_OfficePickerSheet> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                    leading: const Icon(Icons.layers_clear_outlined),
-                    title: const Text('Todas las oficinas'),
-                    onTap: () =>
-                        Navigator.of(context).pop(_OfficePickerResult.all()),
-                  ),
-                  const Divider(height: 16),
                   Expanded(
                     child: filteredOffices.isEmpty
                         ? const Center(
@@ -622,8 +665,6 @@ class _OfficePickerSheetState extends State<_OfficePickerSheet> {
 class _OfficePickerResult {
   const _OfficePickerResult._(this.office);
 
-  const _OfficePickerResult.all() : this._(null);
-
   const _OfficePickerResult.office(OfficeOption office) : this._(office);
 
   final OfficeOption? office;
@@ -682,6 +723,127 @@ class _CredentialDownloadButton extends StatelessWidget {
             )
           : const Icon(Icons.download_rounded),
       label: Text(isDownloading ? 'Descargando...' : 'Descargar'),
+    );
+  }
+}
+
+class _CredentialsPaginationBar extends StatelessWidget {
+  const _CredentialsPaginationBar({
+    required this.currentPage,
+    required this.totalPages,
+    required this.totalResults,
+    required this.startIndex,
+    required this.endIndex,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final int currentPage;
+  final int totalPages;
+  final int totalResults;
+  final int startIndex;
+  final int endIndex;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final firstVisible = totalResults == 0 ? 0 : startIndex + 1;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppPalette.surfaceSoft,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isCompact = constraints.maxWidth < 560;
+          final summary = Text(
+            'Mostrando $firstVisible-$endIndex de $totalResults credenciales',
+            textAlign: isCompact ? TextAlign.center : TextAlign.start,
+            style: Theme.of(context).textTheme.bodyMedium,
+          );
+          final pageLabel = _CredentialsPageLabel(
+            currentPage: currentPage,
+            totalPages: totalPages,
+          );
+          final previousButton = OutlinedButton.icon(
+            onPressed: onPrevious,
+            icon: const Icon(Icons.chevron_left_rounded),
+            label: const Text('Anterior'),
+          );
+          final nextButton = OutlinedButton.icon(
+            onPressed: onNext,
+            icon: const Icon(Icons.chevron_right_rounded),
+            label: const Text('Siguiente'),
+          );
+
+          if (isCompact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                summary,
+                const SizedBox(height: 12),
+                Center(child: pageLabel),
+                const SizedBox(height: 12),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    SizedBox(width: 150, child: previousButton),
+                    SizedBox(width: 150, child: nextButton),
+                  ],
+                ),
+              ],
+            );
+          }
+
+          return Row(
+            children: [
+              Expanded(child: summary),
+              const SizedBox(width: 12),
+              previousButton,
+              const SizedBox(width: 10),
+              pageLabel,
+              const SizedBox(width: 10),
+              nextButton,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _CredentialsPageLabel extends StatelessWidget {
+  const _CredentialsPageLabel({
+    required this.currentPage,
+    required this.totalPages,
+  });
+
+  final int currentPage;
+  final int totalPages;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: AppPalette.orangeSoft,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: Text(
+        'Pagina ${currentPage + 1} de $totalPages',
+        textAlign: TextAlign.center,
+        style: Theme.of(
+          context,
+        ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+      ),
     );
   }
 }
@@ -1036,11 +1198,10 @@ class _CredentialPhotoPreview extends StatelessWidget {
               ),
               child: ClipPath(
                 clipper: const _CredentialPhotoClipper(),
-                child: Base64Avatar(
-                  size: 130,
-                  fallbackLabel: user.fullName,
-                  photoSource: user.fotoUrl,
-                  borderRadius: BorderRadius.zero,
+                child: _CredentialPdfPhotoImage(
+                  user: user,
+                  width: 104,
+                  height: 130,
                 ),
               ),
             ),
@@ -1064,6 +1225,94 @@ class _CredentialPhotoPreview extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CredentialPdfPhotoImage extends StatelessWidget {
+  const _CredentialPdfPhotoImage({
+    required this.user,
+    required this.width,
+    required this.height,
+  });
+
+  final AppUser user;
+  final double width;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final photoSource = user.fotoUrl?.trim();
+    final photoUri = _tryParseCredentialPhotoUri(photoSource);
+    final photoBytes = photoUri == null
+        ? _tryDecodeCredentialPhotoBytes(photoSource)
+        : null;
+    final pixelRatio = MediaQuery.devicePixelRatioOf(context);
+    final cacheWidth = (width * pixelRatio).round();
+    final cacheHeight = (height * pixelRatio).round();
+
+    if (photoUri != null) {
+      return CachedNetworkImage(
+        imageUrl: photoUri.toString(),
+        width: width,
+        height: height,
+        memCacheWidth: cacheWidth,
+        memCacheHeight: cacheHeight,
+        maxWidthDiskCache: cacheWidth,
+        maxHeightDiskCache: cacheHeight,
+        fit: BoxFit.fill,
+        filterQuality: FilterQuality.medium,
+        placeholder: (_, _) =>
+            _CredentialPhotoFallback(user: user, width: width, height: height),
+        errorWidget: (_, _, _) =>
+            _CredentialPhotoFallback(user: user, width: width, height: height),
+      );
+    }
+
+    if (photoBytes != null) {
+      return Image.memory(
+        photoBytes,
+        width: width,
+        height: height,
+        fit: BoxFit.fill,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, _, _) =>
+            _CredentialPhotoFallback(user: user, width: width, height: height),
+      );
+    }
+
+    return _CredentialPhotoFallback(user: user, width: width, height: height);
+  }
+}
+
+class _CredentialPhotoFallback extends StatelessWidget {
+  const _CredentialPhotoFallback({
+    required this.user,
+    required this.width,
+    required this.height,
+  });
+
+  final AppUser user;
+  final double width;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = user.fullName.trim();
+
+    return Container(
+      width: width,
+      height: height,
+      color: AppPalette.orangeSoft,
+      alignment: Alignment.center,
+      child: Text(
+        label.isEmpty ? 'U' : label.substring(0, 1).toUpperCase(),
+        style: TextStyle(
+          color: AppPalette.orange,
+          fontSize: width * 0.34,
+          fontWeight: FontWeight.w700,
         ),
       ),
     );
@@ -1222,6 +1471,36 @@ List<AppUser> _replaceUser(List<AppUser> users, AppUser updatedUser) {
   return users
       .map((user) => user.email == updatedUser.email ? updatedUser : user)
       .toList(growable: false);
+}
+
+Uri? _tryParseCredentialPhotoUri(String? photoSource) {
+  if (photoSource == null || photoSource.isEmpty) {
+    return null;
+  }
+
+  final parsedUri = Uri.tryParse(photoSource);
+
+  if (parsedUri == null) {
+    return null;
+  }
+
+  if (parsedUri.scheme == 'http' || parsedUri.scheme == 'https') {
+    return parsedUri;
+  }
+
+  return null;
+}
+
+Uint8List? _tryDecodeCredentialPhotoBytes(String? photoSource) {
+  if (photoSource == null || photoSource.isEmpty) {
+    return null;
+  }
+
+  try {
+    return base64Decode(photoSource);
+  } catch (_) {
+    return null;
+  }
 }
 
 bool _matchesOffice(AppUser user, OfficeOption office) {
