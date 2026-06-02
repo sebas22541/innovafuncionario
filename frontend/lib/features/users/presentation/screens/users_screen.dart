@@ -39,6 +39,7 @@ class _UsersScreenState extends State<UsersScreen> {
   String _searchQuery = '';
   List<AppUser>? _filteredUsersCache;
   OfficeOption? _selectedFilterOffice;
+  CargoOption? _selectedFilterCargo;
   String? _errorMessage;
   int _currentPage = 0;
 
@@ -57,6 +58,15 @@ class _UsersScreenState extends State<UsersScreen> {
 
     final query = _searchQuery;
     final selectedOffice = _selectedFilterOffice;
+    final selectedCargo = _selectedFilterCargo;
+
+    if (selectedCargo != null) {
+      final filteredUsers = _users
+          .where((user) => _userMatchesCargo(user, selectedCargo))
+          .toList(growable: false);
+      _filteredUsersCache = filteredUsers;
+      return filteredUsers;
+    }
 
     if (query.isEmpty && selectedOffice == null) {
       _filteredUsersCache = _users;
@@ -135,6 +145,7 @@ class _UsersScreenState extends State<UsersScreen> {
 
       setState(() {
         _searchQuery = nextQuery;
+        _selectedFilterCargo = null;
         _currentPage = 0;
         _invalidateUserFilters();
       });
@@ -546,6 +557,38 @@ class _UsersScreenState extends State<UsersScreen> {
     }
   }
 
+  Future<void> _loadCargosForFilter() async {
+    if (_cargos.isNotEmpty || _isLoadingReferenceData) {
+      return;
+    }
+
+    setState(() {
+      _isLoadingReferenceData = true;
+    });
+
+    try {
+      final cargos = await dependencies.authApiService.fetchCargos();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _cargos = cargos;
+      });
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar los cargos.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingReferenceData = false;
+        });
+      }
+    }
+  }
+
   Future<void> _pickFilterOffice() async {
     await _loadOfficesForFilter();
 
@@ -572,6 +615,40 @@ class _UsersScreenState extends State<UsersScreen> {
 
     setState(() {
       _selectedFilterOffice = office;
+      _selectedFilterCargo = null;
+      _currentPage = 0;
+      _invalidateUserFilters();
+    });
+  }
+
+  Future<void> _pickFilterCargo() async {
+    await _loadCargosForFilter();
+
+    if (!mounted || _cargos.isEmpty) {
+      return;
+    }
+
+    final cargo = await showModalBottomSheet<CargoOption>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _CargoSelectionSheet(
+        cargos: _cargos,
+        selectedCargo: _selectedFilterCargo,
+      ),
+    );
+
+    if (!mounted || cargo == null) {
+      return;
+    }
+
+    _searchDebounce?.cancel();
+
+    setState(() {
+      _selectedFilterCargo = cargo;
+      _selectedFilterOffice = null;
+      _searchController.clear();
+      _searchQuery = '';
       _currentPage = 0;
       _invalidateUserFilters();
     });
@@ -712,6 +789,21 @@ class _UsersScreenState extends State<UsersScreen> {
                         : () {
                             setState(() {
                               _selectedFilterOffice = null;
+                              _currentPage = 0;
+                              _invalidateUserFilters();
+                            });
+                          },
+                  ),
+                  const SizedBox(height: 12),
+                  _CargoFilterField(
+                    selectedCargo: _selectedFilterCargo,
+                    isLoading: _isLoadingReferenceData,
+                    onTap: _pickFilterCargo,
+                    onClear: _selectedFilterCargo == null
+                        ? null
+                        : () {
+                            setState(() {
+                              _selectedFilterCargo = null;
                               _currentPage = 0;
                               _invalidateUserFilters();
                             });
@@ -1440,6 +1532,60 @@ class _OfficeFilterField extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.bodyLarge?.copyWith(
             color: office == null ? AppPalette.muted : AppPalette.night,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CargoFilterField extends StatelessWidget {
+  const _CargoFilterField({
+    required this.selectedCargo,
+    required this.isLoading,
+    required this.onTap,
+    required this.onClear,
+  });
+
+  final CargoOption? selectedCargo;
+  final bool isLoading;
+  final Future<void> Function() onTap;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final cargo = selectedCargo;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: isLoading ? null : onTap,
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Filtrar solo por cargo',
+          prefixIcon: const Icon(Icons.badge_outlined),
+          suffixIcon: isLoading
+              ? const Padding(
+                  padding: EdgeInsets.all(14),
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : cargo == null
+              ? const Icon(Icons.search_rounded)
+              : IconButton(
+                  tooltip: 'Quitar filtro de cargo',
+                  onPressed: onClear,
+                  icon: const Icon(Icons.close_rounded),
+                ),
+        ),
+        child: Text(
+          cargo?.displayLabel ?? 'Todos los cargos',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+            color: cargo == null ? AppPalette.muted : AppPalette.night,
           ),
         ),
       ),
@@ -2866,6 +3012,20 @@ bool _userBelongsToOffice(AppUser user, OfficeOption office) {
   );
 
   return expectedName.isNotEmpty && userOfficeName == expectedName;
+}
+
+bool _userMatchesCargo(AppUser user, CargoOption cargo) {
+  final expectedCode = cargo.code.trim().toUpperCase();
+  final userCode = (user.cargoCodigo ?? '').trim().toUpperCase();
+
+  if (expectedCode.isNotEmpty && userCode == expectedCode) {
+    return true;
+  }
+
+  final expectedName = _normalizeSearchText(cargo.name);
+  final userCargo = _normalizeSearchText(user.cargo);
+
+  return expectedName.isNotEmpty && userCargo == expectedName;
 }
 
 bool _isPorteroCargo(CargoOption? cargo) {
