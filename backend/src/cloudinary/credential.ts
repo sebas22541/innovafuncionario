@@ -233,9 +233,10 @@ function drawFrontPageData(page: any, input: {
   const blue = rgb(0.00, 0.64, 0.82);
   const photoBorderBlue = rgb(0.00, 0.68, 0.86);
   const muted = rgb(0.13, 0.18, 0.26);
-  const horizontalMargin = width * 0.078;
-  const fieldX = horizontalMargin;
-  const fieldWidth = width - (horizontalMargin * 2);
+  const textHorizontalMargin = width * 0.045;
+  const photoHorizontalMargin = width * 0.06;
+  const fieldX = textHorizontalMargin;
+  const fieldWidth = width - (textHorizontalMargin * 2);
   const fieldGap = height * 0.052;
   const textBlockRaise = height * 0.035;
   const officeY = (height * 0.145) + textBlockRaise;
@@ -245,11 +246,11 @@ function drawFrontPageData(page: any, input: {
   const nameY = surnameY + (height * 0.058);
 
   if (input.photoImage) {
-    const photoRight = width - horizontalMargin;
+    const photoRight = width - photoHorizontalMargin;
     const photoFrame = {
-      x: width * 0.448,
+      x: width * 0.435,
       y: height * 0.452,
-      width: photoRight - (width * 0.448),
+      width: photoRight - (width * 0.435),
       height: height * 0.492,
     };
 
