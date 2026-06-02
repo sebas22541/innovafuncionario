@@ -166,6 +166,7 @@ class _UsersScreenState extends State<UsersScreen> {
   String _searchableTextForUser(AppUser user) {
     final cacheKey =
         '${user.id ?? 'new'}|${user.email}|${user.ci}|${user.fullName}|'
+        '${user.cargoCodigo}|${user.cargo}|'
         '${user.officeCode}|${user.officeName}|${user.primaryOfficeName}|'
         '${user.commissionOfficeName}|${user.unidad}|${user.lugar}';
     final cachedText = _userSearchIndex[cacheKey];
@@ -178,6 +179,7 @@ class _UsersScreenState extends State<UsersScreen> {
       '${user.ci} ${user.fullName} ${user.nombreCompleto} '
       '${user.primerApellido} ${user.segundoApellido} '
       '${user.tercerApellido} ${user.email} '
+      '${user.cargoCodigo ?? ''} ${user.cargo} '
       '${user.officeCode} ${user.officeName} '
       '${user.primaryOfficeName} ${user.commissionOfficeName} '
       '${user.unidad} ${user.lugar}',
@@ -768,7 +770,8 @@ class _UsersScreenState extends State<UsersScreen> {
                     onChanged: _handleSearchChanged,
                     decoration: InputDecoration(
                       labelText: 'Buscar usuarios',
-                      hintText: 'Busca por CI, nombre, usuario u oficina',
+                      hintText:
+                          'Busca por CI, nombre, usuario, cargo u oficina',
                       prefixIcon: const Icon(Icons.search_rounded),
                       suffixIcon: _searchController.text.trim().isEmpty
                           ? null
@@ -1561,7 +1564,7 @@ class _CargoFilterField extends StatelessWidget {
       onTap: isLoading ? null : onTap,
       child: InputDecorator(
         decoration: InputDecoration(
-          labelText: 'Filtrar solo por cargo',
+          labelText: 'Filtrar por cargo',
           prefixIcon: const Icon(Icons.badge_outlined),
           suffixIcon: isLoading
               ? const Padding(
