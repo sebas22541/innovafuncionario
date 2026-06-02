@@ -130,8 +130,32 @@ class AuthApiService {
     );
   }
 
-  Future<Uint8List> downloadCredentialPdf({required String email}) {
-    return _apiClient.postBytes('/api/auth/credential/pdf', {'email': email});
+  Future<Uint8List> downloadCredentialPdf({
+    required String email,
+    String? nombreCompleto,
+    String? primerApellido,
+    String? segundoApellido,
+    String? tercerApellido,
+  }) {
+    return _apiClient.postBytes('/api/auth/credential/pdf', {
+      'email': email,
+      'nombreCompleto': ?nombreCompleto,
+      'primerApellido': ?primerApellido,
+      'segundoApellido': ?segundoApellido,
+      'tercerApellido': ?tercerApellido,
+    });
+  }
+
+  Future<AppUser> updateCredentialPhoto({
+    required String email,
+    required String fotoData,
+  }) async {
+    final payload = await _apiClient.putJson('/api/auth/credential/photo', {
+      'email': email,
+      'fotoData': fotoData,
+    });
+
+    return AppUser.fromJson(_readMap(payload['data'], 'usuario'));
   }
 
   Future<AppUser> register({

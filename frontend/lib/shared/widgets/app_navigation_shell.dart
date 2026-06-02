@@ -8,6 +8,7 @@ import '../../features/events/presentation/screens/events_screen.dart';
 import '../../features/events/presentation/screens/user_events_screen.dart';
 import '../../features/credentials/presentation/screens/credentials_screen.dart';
 import '../../features/home/presentation/screens/home_screen.dart';
+import '../../features/permissions/presentation/screens/exit_permits_screen.dart';
 import '../../features/qr_scanner/presentation/screens/qr_scanner_screen.dart';
 import '../../features/reports/presentation/screens/qr_generation_map_screen.dart';
 import '../../features/reports/presentation/screens/reports_screen.dart';
@@ -209,6 +210,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 onUserUpdated: _handleCurrentUserUpdated,
                 onLogout: widget.onLogout,
               );
+      case AppSection.permissionExits:
+        return ExitPermitsScreen(currentUser: _currentUser);
       case AppSection.qrScanner:
         return _currentUser.canUseEventScanner
             ? QrScannerScreen(
@@ -713,7 +716,7 @@ class _BottomBarScrollHint extends StatelessWidget {
   }
 }
 
-class _DesktopSidebar extends StatelessWidget {
+class _DesktopSidebar extends StatefulWidget {
   const _DesktopSidebar({
     required this.currentUser,
     required this.selectedSection,
@@ -729,8 +732,57 @@ class _DesktopSidebar extends StatelessWidget {
   final VoidCallback onLogout;
 
   @override
+  State<_DesktopSidebar> createState() => _DesktopSidebarState();
+}
+
+class _DesktopSidebarState extends State<_DesktopSidebar> {
+  late bool _isAttendanceExpanded;
+  late bool _isPermissionsExpanded;
+
+  @override
+  void initState() {
+    super.initState();
+    _isAttendanceExpanded = _isAttendanceSection(widget.selectedSection);
+    _isPermissionsExpanded = _isPermissionSection(widget.selectedSection);
+  }
+
+  @override
+  void didUpdateWidget(covariant _DesktopSidebar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (_isAttendanceSection(widget.selectedSection) &&
+        oldWidget.selectedSection != widget.selectedSection) {
+      _isAttendanceExpanded = true;
+    }
+
+    if (_isPermissionSection(widget.selectedSection) &&
+        oldWidget.selectedSection != widget.selectedSection) {
+      _isPermissionsExpanded = true;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final attendanceSections = widget.visibleSections
+        .where(_isAttendanceSection)
+        .toList(growable: false);
+    final permissionSections = widget.visibleSections
+        .where(_isPermissionSection)
+        .toList(growable: false);
+    final leadingSections = widget.visibleSections
+        .where(
+          (section) =>
+              !_isAttendanceSection(section) &&
+              !_isPermissionSection(section) &&
+              section != AppSection.settings,
+        )
+        .toList(growable: false);
+    final trailingSections = widget.visibleSections
+        .where((section) => section == AppSection.settings)
+        .toList(growable: false);
+    final isAttendanceSelected = _isAttendanceSection(widget.selectedSection);
+    final isPermissionsSelected = _isPermissionSection(widget.selectedSection);
 
     return Container(
       decoration: BoxDecoration(
@@ -778,7 +830,10 @@ class _DesktopSidebar extends StatelessWidget {
                             ),
                             child: Row(
                               children: [
-                                _UserAvatar(currentUser: currentUser, size: 52),
+                                _UserAvatar(
+                                  currentUser: widget.currentUser,
+                                  size: 52,
+                                ),
                                 const SizedBox(width: 14),
                                 Expanded(
                                   child: Column(
@@ -786,14 +841,14 @@ class _DesktopSidebar extends StatelessWidget {
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        currentUser.fullName,
+                                        widget.currentUser.fullName,
                                         style: textTheme.titleMedium?.copyWith(
                                           color: Colors.white,
                                         ),
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
-                                        currentUser.email,
+                                        widget.currentUser.email,
                                         style: textTheme.bodySmall?.copyWith(
                                           color: AppPalette.onDarkMuted,
                                         ),
@@ -805,14 +860,105 @@ class _DesktopSidebar extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 28),
-                          for (final section in visibleSections) ...[
+                          for (final section in leadingSections) ...[
                             _DesktopNavItem(
-                              currentUser: currentUser,
+                              currentUser: widget.currentUser,
                               section: section,
-                              isSelected: section == selectedSection,
-                              onTap: () => onSelected(section),
+                              isSelected: section == widget.selectedSection,
+                              onTap: () => widget.onSelected(section),
                             ),
                             const SizedBox(height: 10),
+                          ],
+                          if (attendanceSections.isNotEmpty) ...[
+                            _DesktopNavGroup(
+                              label: 'Asistencias',
+                              icon: Icons.apps_rounded,
+                              isSelected: isAttendanceSelected,
+                              isExpanded: _isAttendanceExpanded,
+                              onTap: () => setState(() {
+                                _isAttendanceExpanded = !_isAttendanceExpanded;
+                              }),
+                            ),
+                            AnimatedCrossFade(
+                              firstChild: const SizedBox.shrink(),
+                              secondChild: Padding(
+                                padding: const EdgeInsets.only(
+                                  left: 14,
+                                  top: 8,
+                                  bottom: 2,
+                                ),
+                                child: Column(
+                                  children: [
+                                    for (final section
+                                        in attendanceSections) ...[
+                                      _DesktopSubNavItem(
+                                        currentUser: widget.currentUser,
+                                        section: section,
+                                        isSelected:
+                                            section == widget.selectedSection,
+                                        onTap: () => widget.onSelected(section),
+                                      ),
+                                      const SizedBox(height: 8),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              crossFadeState: _isAttendanceExpanded
+                                  ? CrossFadeState.showSecond
+                                  : CrossFadeState.showFirst,
+                              duration: const Duration(milliseconds: 180),
+                            ),
+                          ],
+                          if (permissionSections.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            _DesktopNavGroup(
+                              label: 'Permisos',
+                              icon: Icons.fact_check_outlined,
+                              isSelected: isPermissionsSelected,
+                              isExpanded: _isPermissionsExpanded,
+                              onTap: () => setState(() {
+                                _isPermissionsExpanded =
+                                    !_isPermissionsExpanded;
+                              }),
+                            ),
+                            AnimatedCrossFade(
+                              firstChild: const SizedBox.shrink(),
+                              secondChild: Padding(
+                                padding: const EdgeInsets.only(
+                                  left: 14,
+                                  top: 8,
+                                  bottom: 2,
+                                ),
+                                child: Column(
+                                  children: [
+                                    for (final section
+                                        in permissionSections) ...[
+                                      _DesktopSubNavItem(
+                                        currentUser: widget.currentUser,
+                                        section: section,
+                                        isSelected:
+                                            section == widget.selectedSection,
+                                        onTap: () => widget.onSelected(section),
+                                      ),
+                                      const SizedBox(height: 8),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              crossFadeState: _isPermissionsExpanded
+                                  ? CrossFadeState.showSecond
+                                  : CrossFadeState.showFirst,
+                              duration: const Duration(milliseconds: 180),
+                            ),
+                          ],
+                          for (final section in trailingSections) ...[
+                            const SizedBox(height: 10),
+                            _DesktopNavItem(
+                              currentUser: widget.currentUser,
+                              section: section,
+                              isSelected: section == widget.selectedSection,
+                              onTap: () => widget.onSelected(section),
+                            ),
                           ],
                         ],
                       ),
@@ -822,7 +968,7 @@ class _DesktopSidebar extends StatelessWidget {
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed: onLogout,
+                      onPressed: widget.onLogout,
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.white,
                         side: BorderSide(
@@ -999,6 +1145,126 @@ class _DesktopNavItem extends StatelessWidget {
   }
 }
 
+class _DesktopNavGroup extends StatelessWidget {
+  const _DesktopNavGroup({
+    required this.label,
+    required this.icon,
+    required this.isSelected,
+    required this.isExpanded,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool isSelected;
+  final bool isExpanded;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? Colors.white.withValues(alpha: 0.16)
+                : Colors.white.withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(24),
+            border: isSelected
+                ? Border.all(color: Colors.white.withValues(alpha: 0.12))
+                : null,
+          ),
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                color: isSelected ? Colors.white : AppPalette.onDarkMuted,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: isSelected ? Colors.white : AppPalette.onDarkMuted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              AnimatedRotation(
+                turns: isExpanded ? 0.5 : 0,
+                duration: const Duration(milliseconds: 180),
+                child: Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  color: isSelected ? Colors.white : AppPalette.onDarkMuted,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DesktopSubNavItem extends StatelessWidget {
+  const _DesktopSubNavItem({
+    required this.currentUser,
+    required this.section,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  final AppUser currentUser;
+  final AppSection section;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? Colors.white.withValues(alpha: 0.13)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                _sectionIconForUser(currentUser, section),
+                size: 20,
+                color: isSelected ? Colors.white : AppPalette.onDarkMuted,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _sectionLabelForUser(currentUser, section),
+                  style: TextStyle(
+                    color: isSelected ? Colors.white : AppPalette.onDarkMuted,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _BackgroundOrb extends StatelessWidget {
   const _BackgroundOrb({required this.size, required this.color});
 
@@ -1067,16 +1333,26 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
       AppSection.map,
       AppSection.users,
       AppSection.credentials,
+      AppSection.permissionExits,
       AppSection.settings,
     ];
   }
 
   if (user.isControl) {
-    return const [AppSection.home, AppSection.events, AppSection.settings];
+    return const [
+      AppSection.home,
+      AppSection.events,
+      AppSection.permissionExits,
+      AppSection.settings,
+    ];
   }
 
   if (user.isCredentials) {
-    return const [AppSection.credentials, AppSection.settings];
+    return const [
+      AppSection.credentials,
+      AppSection.permissionExits,
+      AppSection.settings,
+    ];
   }
 
   return const [
@@ -1084,8 +1360,45 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
     AppSection.events,
     AppSection.availableEvents,
     AppSection.myQr,
+    AppSection.permissionExits,
     AppSection.settings,
   ];
+}
+
+bool _isAttendanceSection(AppSection section) {
+  switch (section) {
+    case AppSection.events:
+    case AppSection.reports:
+    case AppSection.map:
+    case AppSection.users:
+    case AppSection.credentials:
+      return true;
+    case AppSection.home:
+    case AppSection.availableEvents:
+    case AppSection.permissionExits:
+    case AppSection.qrScanner:
+    case AppSection.myQr:
+    case AppSection.settings:
+      return false;
+  }
+}
+
+bool _isPermissionSection(AppSection section) {
+  switch (section) {
+    case AppSection.permissionExits:
+      return true;
+    case AppSection.home:
+    case AppSection.events:
+    case AppSection.availableEvents:
+    case AppSection.reports:
+    case AppSection.map:
+    case AppSection.users:
+    case AppSection.credentials:
+    case AppSection.qrScanner:
+    case AppSection.myQr:
+    case AppSection.settings:
+      return false;
+  }
 }
 
 AppSection _defaultSectionForUser(AppUser user) {
@@ -1131,6 +1444,8 @@ String _sectionTitleForUser(AppUser user, AppSection section) {
         return 'Escanear QR';
       case AppSection.myQr:
         return 'Mi QR';
+      case AppSection.permissionExits:
+        return 'Formulario de salida';
       case AppSection.settings:
         return 'Perfil';
       default:
@@ -1147,6 +1462,8 @@ String _sectionTitleForUser(AppUser user, AppSection section) {
       return 'Eventos programados';
     case AppSection.myQr:
       return 'Mi QR';
+    case AppSection.permissionExits:
+      return 'Formulario de salida';
     case AppSection.settings:
       return 'Mi perfil';
     default:

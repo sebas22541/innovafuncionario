@@ -22,7 +22,12 @@ import {
   storeUserProfilePhoto,
 } from "./cloudinary/index.ts";
 import { PrismaClient, type Prisma } from "./generated/prisma/client.ts";
-import { estado_asistencia, rol_usuario } from "./generated/prisma/enums.ts";
+import {
+  estado_asistencia,
+  estado_salida,
+  motivo_salida,
+  rol_usuario,
+} from "./generated/prisma/enums.ts";
 import { HttpError } from "./http-error.ts";
 import {
   logAccess,
@@ -610,12 +615,11 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/credential/pdf") {
-      const user = await resolveCredentialTargetUser(
-        authenticatedUser,
-        await readJsonBody(request),
-      );
+      const payload = await readJsonBody(request);
+      const user = await resolveCredentialTargetUser(authenticatedUser, payload);
+      const pdfUser = applyCredentialPdfOverrides(user, payload);
       const person = await ensurePersonIdentityForUser(prisma, user);
-      const pdfBytes = await generateUserCredentialPdf(user, person);
+      const pdfBytes = await generateUserCredentialPdf(pdfUser, person);
 
       sendPdf(
         response,
@@ -623,6 +627,184 @@ const server = http.createServer(async (request, response) => {
         Buffer.from(pdfBytes),
         buildCredentialPdfFilename(user),
       );
+      return;
+    }
+
+    if (request.method === "PUT" && url.pathname === "/api/auth/credential/photo") {
+      const payload = await readJsonBody(request);
+      await assertCredentialsRequester(
+        authenticatedUser.email,
+        "Solo un administrador o usuario de credenciales puede actualizar fotos de credenciales.",
+      );
+      const user = await resolveCredentialTargetUser(authenticatedUser, payload);
+      const body = expectRecord(payload);
+      const fotoData = readRequiredString(body, "fotoData", 20, 5_000_000);
+      const nextPhotoSource = await storeUserProfilePhoto({
+        photoSource: fotoData,
+        email: user.email,
+        ci: user.ci,
+        userId: user.id,
+      });
+      const updatedUser = await prisma.usuarios.update({
+        where: { id: user.id },
+        data: {
+          foto_url: nextPhotoSource,
+          updated_at: new Date(),
+        },
+        include: userWithOfficeInclude,
+      });
+      const person = await ensurePersonIdentityForUser(prisma, updatedUser);
+
+      sendJson(response, 200, {
+        data: serializeAppUser(updatedUser, person),
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/salidas") {
+      const input = parseCreateExitPermitInput(await readJsonBody(request));
+      const user = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+        include: userWithOfficeInclude,
+      });
+
+      if (!user || user.activo !== true) {
+        throw new HttpError(401, "Sesion invalida o expirada.");
+      }
+
+      if (user.rol !== rol_usuario.OPERADOR) {
+        throw new HttpError(
+          403,
+          "Solo un funcionario puede registrar formularios de salida.",
+        );
+      }
+
+      const salida = await prisma.salidas.create({
+        data: {
+          usuario_id: user.id,
+          motivo: input.motivo,
+          lugar_destino: input.lugarDestino,
+          descripcion: input.descripcion,
+          fecha_permiso: input.fechaPermiso,
+          hora_inicio: input.horaInicio,
+          hora_final: input.horaFinal,
+          solicitante_nombre_completo: buildUserDisplayName(user),
+          solicitante_ci: normalizeOptionalText(user.ci),
+          solicitante_numero_item: normalizeOptionalText(user.numero_item),
+          solicitante_cargo: normalizeOptionalText(user.cargo),
+          solicitante_oficina_id: resolveLinkedOfficeId(user),
+          solicitante_oficina: resolveLinkedOfficeName(user),
+        },
+      });
+
+      sendJson(response, 201, {
+        data: serializeExitPermit(salida),
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/salidas/pendientes") {
+      const approver = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+        include: userWithOfficeInclude,
+      });
+
+      if (!approver) {
+        throw new HttpError(403, "Solo un jefe puede revisar salidas.");
+      }
+
+      assertExitPermitApprover(approver);
+      const approverOfficeId = resolveLinkedOfficeId(approver);
+      const salidas = await prisma.salidas.findMany({
+        where: {
+          estado: estado_salida.PENDIENTE,
+          solicitante_oficina_id: approverOfficeId,
+          usuario_id: { not: approver.id },
+        },
+        orderBy: [
+          { fecha_permiso: "asc" },
+          { hora_inicio: "asc" },
+          { created_at: "asc" },
+          { id: "asc" },
+        ],
+      });
+
+      sendJson(response, 200, {
+        data: salidas.map(serializeExitPermit),
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/salidas") {
+      assertAuthenticatedRequester(authenticatedUser);
+      const fechaPermiso = readExitPermitQueryDate(url);
+      const where = isAdminUser(authenticatedUser)
+        ? { fecha_permiso: fechaPermiso }
+        : {
+            fecha_permiso: fechaPermiso,
+            usuario_id: authenticatedUser.id,
+          };
+      const salidas = await prisma.salidas.findMany({
+        where,
+        orderBy: [
+          { hora_inicio: "asc" },
+          { created_at: "asc" },
+          { id: "asc" },
+        ],
+      });
+
+      sendJson(response, 200, {
+        data: salidas.map(serializeExitPermit),
+      });
+      return;
+    }
+
+    const salidaEstadoMatch = /^\/api\/salidas\/(\d+)\/estado$/.exec(
+      url.pathname,
+    );
+
+    if (request.method === "PUT" && salidaEstadoMatch != null) {
+      const salidaId = Number.parseInt(salidaEstadoMatch[1] ?? "", 10);
+      const input = parseUpdateExitPermitStatusInput(await readJsonBody(request));
+      const approver = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+        include: userWithOfficeInclude,
+      });
+
+      if (!approver) {
+        throw new HttpError(403, "Solo un jefe puede revisar salidas.");
+      }
+
+      assertExitPermitApprover(approver);
+
+      const salida = await prisma.salidas.findUnique({
+        where: { id: salidaId },
+      });
+
+      if (!salida) {
+        throw new HttpError(404, "No se encontro la salida seleccionada.");
+      }
+
+      assertCanReviewExitPermit(approver, salida);
+
+      if (salida.estado !== estado_salida.PENDIENTE) {
+        throw new HttpError(409, "Esta salida ya fue revisada.");
+      }
+
+      const updatedSalida = await prisma.salidas.update({
+        where: { id: salida.id },
+        data: {
+          estado: input.estado,
+          aprobado_por_id: approver.id,
+          aprobado_por_nombre: buildUserDisplayName(approver),
+          aprobado_en: new Date(),
+          updated_at: new Date(),
+        },
+      });
+
+      sendJson(response, 200, {
+        data: serializeExitPermit(updatedSalida),
+      });
       return;
     }
 
@@ -1944,6 +2126,19 @@ type GenerateDynamicQrInput = {
   accuracy: number | null;
 };
 
+type CreateExitPermitInput = {
+  motivo: (typeof motivo_salida)[keyof typeof motivo_salida];
+  lugarDestino: string;
+  descripcion: string | null;
+  fechaPermiso: Date;
+  horaInicio: string;
+  horaFinal: string | null;
+};
+
+type UpdateExitPermitStatusInput = {
+  estado: typeof estado_salida.APROBADO | typeof estado_salida.RECHAZADO;
+};
+
 type RegisterUserInput = {
   email: string;
   password: string;
@@ -2623,6 +2818,104 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_evento_oficina_cargos_cargo_codigo"
       ON "evento_oficina_cargos" ("cargo_codigo")
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'motivo_salida') THEN
+        CREATE TYPE "motivo_salida" AS ENUM ('TRABAJO', 'PARTICULAR');
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'estado_salida') THEN
+        CREATE TYPE "estado_salida" AS ENUM ('PENDIENTE', 'APROBADO', 'RECHAZADO');
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "salidas" (
+      "id" SERIAL PRIMARY KEY,
+      "usuario_id" INTEGER NOT NULL,
+      "motivo" "motivo_salida" NOT NULL,
+      "estado" "estado_salida" NOT NULL DEFAULT 'PENDIENTE',
+      "lugar_destino" VARCHAR(255) NOT NULL,
+      "descripcion" TEXT,
+      "fecha_permiso" DATE NOT NULL,
+      "hora_inicio" VARCHAR(5) NOT NULL,
+      "hora_final" VARCHAR(5),
+      "solicitante_nombre_completo" VARCHAR(220) NOT NULL,
+      "solicitante_ci" VARCHAR(30),
+      "solicitante_numero_item" VARCHAR(50),
+      "solicitante_cargo" VARCHAR(120),
+      "solicitante_oficina_id" INTEGER,
+      "solicitante_oficina" VARCHAR(150),
+      "aprobado_por_id" INTEGER,
+      "aprobado_por_nombre" VARCHAR(220),
+      "aprobado_en" TIMESTAMPTZ(6),
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "salidas_usuario_id_fkey"
+        FOREIGN KEY ("usuario_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE "salidas"
+      ADD COLUMN IF NOT EXISTS "estado" "estado_salida" NOT NULL DEFAULT 'PENDIENTE',
+      ADD COLUMN IF NOT EXISTS "solicitante_oficina_id" INTEGER,
+      ADD COLUMN IF NOT EXISTS "aprobado_por_id" INTEGER,
+      ADD COLUMN IF NOT EXISTS "aprobado_por_nombre" VARCHAR(220),
+      ADD COLUMN IF NOT EXISTS "aprobado_en" TIMESTAMPTZ(6)
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'salidas_aprobado_por_id_fkey'
+      ) THEN
+        ALTER TABLE "salidas"
+          ADD CONSTRAINT "salidas_aprobado_por_id_fkey"
+          FOREIGN KEY ("aprobado_por_id")
+          REFERENCES "usuarios" ("id")
+          ON UPDATE NO ACTION;
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_estado"
+      ON "salidas" ("estado")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_fecha_permiso"
+      ON "salidas" ("fecha_permiso")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_solicitante_oficina_id"
+      ON "salidas" ("solicitante_oficina_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_aprobado_por_id"
+      ON "salidas" ("aprobado_por_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_usuario_id"
+      ON "salidas" ("usuario_id")
   `);
 }
 
@@ -3492,6 +3785,36 @@ async function resolveCredentialTargetUser(
   return user;
 }
 
+function applyCredentialPdfOverrides(user: any, payload: unknown) {
+  const body = expectRecord(payload);
+  const nombres = normalizeOptionalText(body["nombreCompleto"]);
+  const primerApellido = normalizeOptionalText(body["primerApellido"]);
+  const segundoApellido = normalizeOptionalText(body["segundoApellido"]);
+  const tercerApellido = normalizeOptionalText(body["tercerApellido"]);
+
+  if (
+    nombres == null &&
+    primerApellido == null &&
+    segundoApellido == null &&
+    tercerApellido == null
+  ) {
+    return user;
+  }
+
+  const pdfUser = {
+    ...user,
+    nombres: nombres ?? user.nombres,
+    primer_apellido: primerApellido ?? user.primer_apellido,
+    segundo_apellido: segundoApellido ?? user.segundo_apellido,
+    tercer_apellido: tercerApellido ?? user.tercer_apellido,
+  };
+
+  return {
+    ...pdfUser,
+    nombre_completo: buildUserDisplayName(pdfUser),
+  };
+}
+
 function readQueryEmailFromBody(payload: unknown) {
   const body = expectRecord(payload);
   return readRequiredLoginIdentifier(body, "email");
@@ -3557,6 +3880,46 @@ function parseGenerateDynamicQrInput(payload: unknown): GenerateDynamicQrInput {
     longitud: readRequiredFloat(body, "longitud", -180, 180),
     accuracy: readOptionalFloatOrNull(body, "accuracy", 0, 10_000),
   };
+}
+
+function parseCreateExitPermitInput(payload: unknown): CreateExitPermitInput {
+  const body = expectRecord(payload);
+
+  return {
+    motivo: readRequiredUppercaseChoice(body, "motivo", [
+      motivo_salida.TRABAJO,
+      motivo_salida.PARTICULAR,
+    ]) as (typeof motivo_salida)[keyof typeof motivo_salida],
+    lugarDestino: readRequiredString(body, "lugarDestino", 2, 255),
+    descripcion: readOptionalString(body, "descripcion", 0, 1000),
+    fechaPermiso: readRequiredDateOnly(body, "fechaPermiso"),
+    horaInicio: readRequiredTimeText(body, "horaInicio"),
+    horaFinal: readOptionalTimeText(body, "horaFinal"),
+  };
+}
+
+function parseUpdateExitPermitStatusInput(
+  payload: unknown,
+): UpdateExitPermitStatusInput {
+  const body = expectRecord(payload);
+  const estado = readRequiredUppercaseChoice(body, "estado", [
+    estado_salida.APROBADO,
+    estado_salida.RECHAZADO,
+  ]);
+
+  return {
+    estado: estado as typeof estado_salida.APROBADO | typeof estado_salida.RECHAZADO,
+  };
+}
+
+function readExitPermitQueryDate(url: URL) {
+  const rawValue = url.searchParams.get("fecha")?.trim();
+
+  if (rawValue == null || rawValue.length === 0) {
+    return readDateOnlyString(toDateOnlyText(new Date()), "fecha");
+  }
+
+  return readDateOnlyString(rawValue, "fecha");
 }
 
 function parseRegisterUserInput(payload: unknown): RegisterUserInput {
@@ -4053,6 +4416,76 @@ function readOptionalDate(source: JsonRecord, key: string) {
   return parsedDate;
 }
 
+function readRequiredDateOnly(source: JsonRecord, key: string) {
+  const value = source[key];
+
+  if (typeof value !== "string") {
+    throw new HttpError(400, `El campo ${key} es obligatorio.`);
+  }
+
+  return readDateOnlyString(value, key);
+}
+
+function readDateOnlyString(value: string, key: string) {
+  const normalizedValue = value.trim();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedValue)) {
+    throw new HttpError(400, `El campo ${key} debe tener formato YYYY-MM-DD.`);
+  }
+
+  const parsedDate = new Date(`${normalizedValue}T00:00:00.000Z`);
+
+  if (
+    Number.isNaN(parsedDate.getTime()) ||
+    toDateOnlyText(parsedDate) !== normalizedValue
+  ) {
+    throw new HttpError(400, `El campo ${key} no tiene una fecha valida.`);
+  }
+
+  return parsedDate;
+}
+
+function readRequiredTimeText(source: JsonRecord, key: string) {
+  const value = readRequiredString(source, key, 5, 5);
+
+  if (!isValidTimeText(value)) {
+    throw new HttpError(400, `El campo ${key} debe tener formato HH:mm.`);
+  }
+
+  return value;
+}
+
+function readOptionalTimeText(source: JsonRecord, key: string) {
+  const value = readOptionalString(source, key, 5, 5);
+
+  if (value == null) {
+    return null;
+  }
+
+  if (!isValidTimeText(value)) {
+    throw new HttpError(400, `El campo ${key} debe tener formato HH:mm.`);
+  }
+
+  return value;
+}
+
+function isValidTimeText(value: string) {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+
+  if (!match) {
+    return false;
+  }
+
+  const hours = Number.parseInt(match[1] ?? "", 10);
+  const minutes = Number.parseInt(match[2] ?? "", 10);
+
+  return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
+}
+
+function toDateOnlyText(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
 function readRequiredBoolean(source: JsonRecord, key: string) {
   const value = source[key];
 
@@ -4234,6 +4667,43 @@ function assertAuthenticatedRequester(user: AuthenticatedUser) {
   if (user.id <= 0 || user.activo !== true) {
     throw new HttpError(401, "Debes iniciar sesion para continuar.");
   }
+}
+
+function assertExitPermitApprover(user: any) {
+  if (!user || user.activo !== true || user.rol !== rol_usuario.OPERADOR) {
+    throw new HttpError(403, "Solo un jefe puede revisar salidas.");
+  }
+
+  if (!isBossJobTitle(user.cargo)) {
+    throw new HttpError(403, "Solo usuarios con cargo de jefe pueden revisar salidas.");
+  }
+
+  if (resolveLinkedOfficeId(user) == null) {
+    throw new HttpError(403, "Tu usuario no tiene oficina asignada para revisar salidas.");
+  }
+}
+
+function assertCanReviewExitPermit(approver: any, salida: any) {
+  const approverOfficeId = resolveLinkedOfficeId(approver);
+
+  if (
+    approverOfficeId == null ||
+    salida.solicitante_oficina_id == null ||
+    approverOfficeId !== salida.solicitante_oficina_id
+  ) {
+    throw new HttpError(
+      403,
+      "Solo puedes revisar salidas de funcionarios de tu misma oficina.",
+    );
+  }
+
+  if (salida.usuario_id === approver.id) {
+    throw new HttpError(403, "No puedes revisar tu propia salida.");
+  }
+}
+
+function isBossJobTitle(value: string | null | undefined) {
+  return normalizeTextForComparison(value).includes("jefe");
 }
 
 function assertPersonLookupRequester(user: AuthenticatedUser) {
@@ -5047,6 +5517,13 @@ function normalizeOptionalText(value: unknown) {
 
   const normalizedValue = value.trim();
   return normalizedValue.length > 0 ? normalizedValue : null;
+}
+
+function normalizeTextForComparison(value: unknown) {
+  return (normalizeOptionalText(value) ?? "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
 }
 
 function buildLegacyUserQrCode(user: {
@@ -5990,6 +6467,31 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     qrPayload: buildUserQrPayload(user, qrCode),
     personaId: linkedPerson?.id ?? null,
     authToken,
+  };
+}
+
+function serializeExitPermit(salida: any) {
+  return {
+    id: salida.id,
+    usuarioId: salida.usuario_id,
+    motivo: salida.motivo,
+    estado: salida.estado ?? estado_salida.PENDIENTE,
+    lugarDestino: salida.lugar_destino,
+    descripcion: salida.descripcion ?? "",
+    fechaPermiso: toDateOnlyText(salida.fecha_permiso),
+    horaInicio: salida.hora_inicio,
+    horaFinal: salida.hora_final ?? "",
+    solicitanteNombreCompleto: salida.solicitante_nombre_completo,
+    solicitanteCi: salida.solicitante_ci ?? "",
+    solicitanteNumeroItem: salida.solicitante_numero_item ?? "",
+    solicitanteCargo: salida.solicitante_cargo ?? "",
+    solicitanteOficinaId: salida.solicitante_oficina_id ?? null,
+    solicitanteOficina: salida.solicitante_oficina ?? "",
+    aprobadoPorId: salida.aprobado_por_id ?? null,
+    aprobadoPorNombre: salida.aprobado_por_nombre ?? "",
+    aprobadoEn: salida.aprobado_en?.toISOString() ?? null,
+    createdAt: salida.created_at.toISOString(),
+    updatedAt: salida.updated_at.toISOString(),
   };
 }
 

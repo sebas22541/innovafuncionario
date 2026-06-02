@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:printing/printing.dart';
 
 import '../../../../core/theme/app_palette.dart';
@@ -6,6 +9,7 @@ import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
+import '../../../../shared/widgets/base64_avatar.dart';
 import '../../../auth/domain/entities/office_option.dart';
 
 class CredentialsScreen extends StatefulWidget {
@@ -18,12 +22,14 @@ class CredentialsScreen extends StatefulWidget {
 }
 
 class _CredentialsScreenState extends State<CredentialsScreen> {
+  final ImagePicker _imagePicker = ImagePicker();
   final TextEditingController _ciController = TextEditingController();
   final TextEditingController _officeController = TextEditingController();
   List<AppUser> _users = const [];
   List<OfficeOption> _offices = const [];
   List<AppUser> _results = const [];
   Set<String> _downloadingEmails = const {};
+  Set<String> _updatingPhotoEmails = const {};
   int? _selectedOfficeId;
   bool _isLoading = true;
   bool _hasSearched = false;
@@ -141,7 +147,9 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
     });
   }
 
-  Future<void> _downloadCredential(AppUser user) async {
+  Future<void> _downloadCredential(_CredentialPdfDraft draft) async {
+    final user = draft.user;
+
     if (_downloadingEmails.contains(user.email)) {
       return;
     }
@@ -153,6 +161,10 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
     try {
       final pdfBytes = await dependencies.authApiService.downloadCredentialPdf(
         email: user.email,
+        nombreCompleto: draft.nombreCompleto,
+        primerApellido: draft.primerApellido,
+        segundoApellido: draft.segundoApellido,
+        tercerApellido: draft.tercerApellido,
       );
 
       await Printing.sharePdf(
@@ -171,6 +183,63 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
       if (mounted) {
         setState(() {
           _downloadingEmails = _downloadingEmails
+              .where((email) => email != user.email)
+              .toSet();
+        });
+      }
+    }
+  }
+
+  Future<void> _changeCredentialPhoto(AppUser user) async {
+    if (_updatingPhotoEmails.contains(user.email)) {
+      return;
+    }
+
+    final file = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 82,
+      maxWidth: 1200,
+      maxHeight: 1200,
+    );
+
+    if (file == null) {
+      return;
+    }
+
+    setState(() {
+      _updatingPhotoEmails = {..._updatingPhotoEmails, user.email};
+    });
+
+    try {
+      final bytes = await file.readAsBytes();
+      final updatedUser = await dependencies.authApiService
+          .updateCredentialPhoto(
+            email: user.email,
+            fotoData: base64Encode(bytes),
+          );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _users = _replaceUser(_users, updatedUser);
+        _results = _replaceUser(_results, updatedUser);
+      });
+
+      AppAlert.showSuccess(context, 'Foto actualizada.');
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        AppAlert.showError(context, error.message);
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible actualizar la foto.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingPhotoEmails = _updatingPhotoEmails
               .where((email) => email != user.email)
               .toSet();
         });
@@ -327,14 +396,18 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
               return _CredentialCardsList(
                 users: _results,
                 downloadingEmails: _downloadingEmails,
+                updatingPhotoEmails: _updatingPhotoEmails,
                 onDownload: _downloadCredential,
+                onChangePhoto: _changeCredentialPhoto,
               );
             }
 
             return _CredentialsTable(
               users: _results,
               downloadingEmails: _downloadingEmails,
+              updatingPhotoEmails: _updatingPhotoEmails,
               onDownload: _downloadCredential,
+              onChangePhoto: _changeCredentialPhoto,
             );
           },
         ),
@@ -617,72 +690,38 @@ class _CredentialsTable extends StatelessWidget {
   const _CredentialsTable({
     required this.users,
     required this.downloadingEmails,
+    required this.updatingPhotoEmails,
     required this.onDownload,
+    required this.onChangePhoto,
   });
 
   final List<AppUser> users;
   final Set<String> downloadingEmails;
-  final ValueChanged<AppUser> onDownload;
+  final Set<String> updatingPhotoEmails;
+  final ValueChanged<_CredentialPdfDraft> onDownload;
+  final ValueChanged<AppUser> onChangePhoto;
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          border: Border.all(color: AppPalette.line),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Table(
-          columnWidths: const {
-            0: FlexColumnWidth(2.3),
-            1: FlexColumnWidth(0.85),
-            2: FlexColumnWidth(2.7),
-            3: FlexColumnWidth(1.25),
-            4: FlexColumnWidth(0.75),
-          },
-          defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-          border: const TableBorder(
-            horizontalInside: BorderSide(color: AppPalette.line),
-          ),
-          children: [
-            TableRow(
-              decoration: const BoxDecoration(color: AppPalette.blueSoft),
-              children: [
-                _TableHeader('Nombre', style: textTheme.titleSmall),
-                _TableHeader('CI', style: textTheme.titleSmall),
-                _TableHeader('Oficina', style: textTheme.titleSmall),
-                _TableHeader('Cargo', style: textTheme.titleSmall),
-                _TableHeader('PDF', style: textTheme.titleSmall),
-              ],
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: AppPalette.line),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        children: [
+          const _CredentialsListHeader(),
+          for (final user in users)
+            _CredentialEditableRow(
+              key: ValueKey(user.email),
+              user: user,
+              compact: false,
+              isDownloading: downloadingEmails.contains(user.email),
+              isUpdatingPhoto: updatingPhotoEmails.contains(user.email),
+              onDownload: onDownload,
+              onChangePhoto: onChangePhoto,
             ),
-            for (final user in users)
-              TableRow(
-                children: [
-                  _TableCellText(user.fullName),
-                  _TableCellText(user.ci),
-                  _TableCellText(_resolvedOfficeName(user)),
-                  _TableCellText(_resolvedJobTitle(user)),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 8,
-                    ),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: _CredentialDownloadButton(
-                        compact: true,
-                        isDownloading: downloadingEmails.contains(user.email),
-                        onPressed: user.activo ? () => onDownload(user) : null,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-          ],
-        ),
+        ],
       ),
     );
   }
@@ -692,22 +731,30 @@ class _CredentialCardsList extends StatelessWidget {
   const _CredentialCardsList({
     required this.users,
     required this.downloadingEmails,
+    required this.updatingPhotoEmails,
     required this.onDownload,
+    required this.onChangePhoto,
   });
 
   final List<AppUser> users;
   final Set<String> downloadingEmails;
-  final ValueChanged<AppUser> onDownload;
+  final Set<String> updatingPhotoEmails;
+  final ValueChanged<_CredentialPdfDraft> onDownload;
+  final ValueChanged<AppUser> onChangePhoto;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
         for (final user in users) ...[
-          _CredentialResultTile(
+          _CredentialEditableRow(
+            key: ValueKey(user.email),
             user: user,
+            compact: true,
             isDownloading: downloadingEmails.contains(user.email),
-            onDownload: user.activo ? () => onDownload(user) : null,
+            isUpdatingPhoto: updatingPhotoEmails.contains(user.email),
+            onDownload: onDownload,
+            onChangePhoto: onChangePhoto,
           ),
           const SizedBox(height: 10),
         ],
@@ -716,53 +763,389 @@ class _CredentialCardsList extends StatelessWidget {
   }
 }
 
-class _CredentialResultTile extends StatelessWidget {
-  const _CredentialResultTile({
-    required this.user,
-    required this.isDownloading,
-    required this.onDownload,
-  });
-
-  final AppUser user;
-  final bool isDownloading;
-  final VoidCallback? onDownload;
+class _CredentialsListHeader extends StatelessWidget {
+  const _CredentialsListHeader();
 
   @override
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppPalette.surfaceSoft,
-        border: Border.all(color: AppPalette.line),
-        borderRadius: BorderRadius.circular(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: const BoxDecoration(
+        color: AppPalette.blueSoft,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(user.fullName, style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            children: [
-              _CredentialMeta(label: 'CI', value: user.ci),
-              _CredentialMeta(
-                label: 'Oficina',
-                value: _resolvedOfficeName(user),
-              ),
-              _CredentialMeta(label: 'Cargo', value: _resolvedJobTitle(user)),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _CredentialDownloadButton(
-            isDownloading: isDownloading,
-            onPressed: onDownload,
-          ),
-        ],
+      child: Text(
+        'Datos para credenciales',
+        style: Theme.of(context).textTheme.titleSmall,
       ),
     );
   }
+}
+
+class _CredentialEditableRow extends StatefulWidget {
+  const _CredentialEditableRow({
+    super.key,
+    required this.user,
+    required this.compact,
+    required this.isDownloading,
+    required this.isUpdatingPhoto,
+    required this.onDownload,
+    required this.onChangePhoto,
+  });
+
+  final AppUser user;
+  final bool compact;
+  final bool isDownloading;
+  final bool isUpdatingPhoto;
+  final ValueChanged<_CredentialPdfDraft> onDownload;
+  final ValueChanged<AppUser> onChangePhoto;
+
+  @override
+  State<_CredentialEditableRow> createState() => _CredentialEditableRowState();
+}
+
+class _CredentialEditableRowState extends State<_CredentialEditableRow> {
+  late final TextEditingController _nombreController;
+  late final TextEditingController _primerApellidoController;
+  late final TextEditingController _segundoApellidoController;
+  late final TextEditingController _tercerApellidoController;
+
+  @override
+  void initState() {
+    super.initState();
+    _nombreController = TextEditingController(text: widget.user.nombreCompleto);
+    _primerApellidoController = TextEditingController(
+      text: widget.user.primerApellido,
+    );
+    _segundoApellidoController = TextEditingController(
+      text: widget.user.segundoApellido,
+    );
+    _tercerApellidoController = TextEditingController(
+      text: widget.user.tercerApellido,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _CredentialEditableRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.user.email != widget.user.email) {
+      _nombreController.text = widget.user.nombreCompleto;
+      _primerApellidoController.text = widget.user.primerApellido;
+      _segundoApellidoController.text = widget.user.segundoApellido;
+      _tercerApellidoController.text = widget.user.tercerApellido;
+    }
+  }
+
+  @override
+  void dispose() {
+    _nombreController.dispose();
+    _primerApellidoController.dispose();
+    _segundoApellidoController.dispose();
+    _tercerApellidoController.dispose();
+    super.dispose();
+  }
+
+  void _download() {
+    widget.onDownload(
+      _CredentialPdfDraft(
+        user: widget.user,
+        nombreCompleto: _nombreController.text.trim(),
+        primerApellido: _primerApellidoController.text.trim(),
+        segundoApellido: _segundoApellidoController.text.trim(),
+        tercerApellido: _tercerApellidoController.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final content = widget.compact
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _CredentialPhotoPreview(
+                user: widget.user,
+                isUpdating: widget.isUpdatingPhoto,
+                onTap: () => widget.onChangePhoto(widget.user),
+              ),
+              const SizedBox(height: 14),
+              _buildEditableFields(context),
+              const SizedBox(height: 12),
+              _buildMetadata(context),
+              const SizedBox(height: 12),
+              _CredentialDownloadButton(
+                isDownloading: widget.isDownloading,
+                onPressed: widget.user.activo ? _download : null,
+              ),
+            ],
+          )
+        : Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _CredentialPhotoPreview(
+                user: widget.user,
+                isUpdating: widget.isUpdatingPhoto,
+                onTap: () => widget.onChangePhoto(widget.user),
+              ),
+              const SizedBox(width: 18),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildEditableFields(context),
+                    const SizedBox(height: 10),
+                    _buildMetadata(context),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              _CredentialDownloadButton(
+                compact: true,
+                isDownloading: widget.isDownloading,
+                onPressed: widget.user.activo ? _download : null,
+              ),
+            ],
+          );
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(widget.compact ? 14 : 16),
+      decoration: BoxDecoration(
+        color: AppPalette.surfaceSoft,
+        border: widget.compact
+            ? Border.all(color: AppPalette.line)
+            : const Border(top: BorderSide(color: AppPalette.line)),
+        borderRadius: BorderRadius.circular(widget.compact ? 16 : 0),
+      ),
+      child: content,
+    );
+  }
+
+  Widget _buildEditableFields(BuildContext context) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        _CredentialInlineField(
+          width: 190,
+          controller: _nombreController,
+          label: 'Nombres',
+        ),
+        _CredentialInlineField(
+          width: 150,
+          controller: _primerApellidoController,
+          label: 'Primer apellido',
+        ),
+        _CredentialInlineField(
+          width: 150,
+          controller: _segundoApellidoController,
+          label: 'Segundo apellido',
+        ),
+        _CredentialInlineField(
+          width: 150,
+          controller: _tercerApellidoController,
+          label: 'Tercer apellido',
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMetadata(BuildContext context) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      children: [
+        _CredentialMeta(label: 'CI', value: widget.user.ci),
+        _CredentialMeta(
+          label: 'Oficina',
+          value: _resolvedOfficeName(widget.user),
+        ),
+        _CredentialMeta(label: 'Cargo', value: _resolvedJobTitle(widget.user)),
+        if (widget.user.lugar.trim().isNotEmpty)
+          _CredentialMeta(label: 'Lugar', value: widget.user.lugar),
+        _CredentialMeta(label: 'Tipo', value: widget.user.tipoVinculo),
+        if (widget.user.numeroItem.trim().isNotEmpty)
+          _CredentialMeta(label: 'Item', value: widget.user.numeroItem),
+        _CredentialMeta(label: 'Estado', value: widget.user.estadoLabel),
+      ],
+    );
+  }
+}
+
+class _CredentialInlineField extends StatelessWidget {
+  const _CredentialInlineField({
+    required this.width,
+    required this.controller,
+    required this.label,
+  });
+
+  final double width;
+  final TextEditingController controller;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: width,
+      child: TextField(
+        controller: controller,
+        decoration: InputDecoration(
+          labelText: label,
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 12,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CredentialPhotoPreview extends StatelessWidget {
+  const _CredentialPhotoPreview({
+    required this.user,
+    required this.isUpdating,
+    required this.onTap,
+  });
+
+  final AppUser user;
+  final bool isUpdating;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Cambiar foto',
+      child: InkWell(
+        onTap: isUpdating ? null : onTap,
+        borderRadius: BorderRadius.circular(26),
+        child: Stack(
+          children: [
+            Container(
+              width: 112,
+              height: 138,
+              padding: const EdgeInsets.all(4),
+              decoration: ShapeDecoration(
+                color: Colors.white,
+                shape: _CredentialPhotoBorderShape(
+                  side: const BorderSide(color: AppPalette.orange, width: 2.2),
+                ),
+              ),
+              child: ClipPath(
+                clipper: const _CredentialPhotoClipper(),
+                child: Base64Avatar(
+                  size: 130,
+                  fallbackLabel: user.fullName,
+                  photoSource: user.fotoUrl,
+                  borderRadius: BorderRadius.zero,
+                ),
+              ),
+            ),
+            Positioned(
+              right: 4,
+              bottom: 4,
+              child: CircleAvatar(
+                radius: 15,
+                backgroundColor: AppPalette.night,
+                foregroundColor: Colors.white,
+                child: isUpdating
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.photo_camera_outlined, size: 16),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CredentialPhotoClipper extends CustomClipper<Path> {
+  const _CredentialPhotoClipper();
+
+  @override
+  Path getClip(Size size) {
+    return _credentialPhotoPath(size);
+  }
+
+  @override
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
+}
+
+class _CredentialPhotoBorderShape extends ShapeBorder {
+  const _CredentialPhotoBorderShape({required this.side});
+
+  final BorderSide side;
+
+  @override
+  EdgeInsetsGeometry get dimensions => EdgeInsets.all(side.width);
+
+  @override
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) {
+    return _credentialPhotoPath(rect.size).shift(rect.topLeft);
+  }
+
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
+    return _credentialPhotoPath(rect.size).shift(rect.topLeft);
+  }
+
+  @override
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {
+    final paint = side.toPaint();
+    canvas.drawPath(getOuterPath(rect), paint);
+  }
+
+  @override
+  ShapeBorder scale(double t) {
+    return _CredentialPhotoBorderShape(side: side.scale(t));
+  }
+}
+
+Path _credentialPhotoPath(Size size) {
+  final topRightRadius = size.width * 0.42;
+  final bottomLeftRadius = size.width * 0.30;
+
+  return Path()
+    ..moveTo(bottomLeftRadius, 0)
+    ..lineTo(size.width, 0)
+    ..lineTo(size.width, size.height - topRightRadius)
+    ..quadraticBezierTo(
+      size.width,
+      size.height,
+      size.width - topRightRadius,
+      size.height,
+    )
+    ..lineTo(0, size.height)
+    ..lineTo(0, bottomLeftRadius)
+    ..quadraticBezierTo(0, 0, bottomLeftRadius, 0)
+    ..close();
+}
+
+class _CredentialPdfDraft {
+  const _CredentialPdfDraft({
+    required this.user,
+    required this.nombreCompleto,
+    required this.primerApellido,
+    required this.segundoApellido,
+    required this.tercerApellido,
+  });
+
+  final AppUser user;
+  final String nombreCompleto;
+  final String primerApellido;
+  final String segundoApellido;
+  final String tercerApellido;
 }
 
 class _CredentialMeta extends StatelessWidget {
@@ -827,54 +1210,18 @@ class _CredentialsStateMessage extends StatelessWidget {
   }
 }
 
-class _TableHeader extends StatelessWidget {
-  const _TableHeader(this.value, {required this.style});
-
-  final String value;
-  final TextStyle? style;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-      child: Text(
-        value,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: style,
-      ),
-    );
-  }
-}
-
-class _TableCellText extends StatelessWidget {
-  const _TableCellText(this.value);
-
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Text(
-        value.trim().isEmpty ? '-' : value,
-        maxLines: 3,
-        overflow: TextOverflow.ellipsis,
-        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-          color: AppPalette.muted,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-}
-
 String _resolvedOfficeName(AppUser user) {
   final officeName = (user.officeName ?? '').trim().isNotEmpty
       ? user.officeName!.trim()
       : user.unidad.trim();
 
   return officeName.isEmpty ? 'Sin oficina' : officeName;
+}
+
+List<AppUser> _replaceUser(List<AppUser> users, AppUser updatedUser) {
+  return users
+      .map((user) => user.email == updatedUser.email ? updatedUser : user)
+      .toList(growable: false);
 }
 
 bool _matchesOffice(AppUser user, OfficeOption office) {
@@ -982,9 +1329,9 @@ Set<String> _officeSearchTokens(String value) {
 }
 
 String _normalizeExactOfficeValue(String value) {
-  return _stripTextAccents(value.trim().toLowerCase())
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
+  return _stripTextAccents(
+    value.trim().toLowerCase(),
+  ).replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
 String _resolvedJobTitle(AppUser user) {
