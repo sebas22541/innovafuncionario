@@ -2873,7 +2873,7 @@ bool _isPorteroCargo(CargoOption? cargo) {
     return false;
   }
 
-  return _normalizeSearchText(cargo.name) == 'portero';
+  return _normalizeSearchText(cargo.name).startsWith('portero');
 }
 
 bool _officeTextLooksSimilar(String value, String query) {

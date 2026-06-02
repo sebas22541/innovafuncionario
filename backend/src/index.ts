@@ -3539,7 +3539,7 @@ function normalizeLooseMatchText(value: unknown) {
 }
 
 function isPorteroCargo(cargo: string | null | undefined) {
-  return normalizeLooseMatchText(cargo) === "PORTERO";
+  return normalizeLooseMatchText(cargo)?.startsWith("PORTERO") === true;
 }
 
 function resolvePorteroLugar(cargo: string | null | undefined, lugar: string | null) {
