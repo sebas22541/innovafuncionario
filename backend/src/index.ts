@@ -351,7 +351,11 @@ const server = http.createServer(async (request, response) => {
       const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
       const resolvedCargo = selectedCargo?.cargo ?? input.cargo;
       const resolvedCargoCode = selectedCargo?.codigo ?? null;
-      const resolvedLugar = resolvePorteroLugar(resolvedCargo, input.lugar);
+      const resolvedLugar = resolvePorteroLugar(
+        resolvedCargo,
+        resolvedCargoCode,
+        input.lugar,
+      );
       const duplicatedUser = await findUserByLoginOrCi(prisma, {
         login: input.email,
         ci: input.ci,
@@ -909,7 +913,11 @@ const server = http.createServer(async (request, response) => {
       const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
       const resolvedCargo = selectedCargo?.cargo ?? input.cargo;
       const resolvedCargoCode = selectedCargo?.codigo ?? null;
-      const resolvedLugar = resolvePorteroLugar(resolvedCargo, input.lugar);
+      const resolvedLugar = resolvePorteroLugar(
+        resolvedCargo,
+        resolvedCargoCode,
+        input.lugar,
+      );
       const existingUser = await prisma.usuarios.findUnique({
         where: { email: input.email },
       });
@@ -1055,6 +1063,7 @@ const server = http.createServer(async (request, response) => {
           const resolvedCargoCode = selectedCargo?.codigo ?? null;
           const resolvedLugar = resolvePorteroLugar(
             resolvedCargo,
+            resolvedCargoCode,
             managedInput.lugar,
           );
           const nextPhotoSource = managedInput.fotoData == null
@@ -3538,12 +3547,25 @@ function normalizeLooseMatchText(value: unknown) {
     .trim();
 }
 
-function isPorteroCargo(cargo: string | null | undefined) {
-  return normalizeLooseMatchText(cargo)?.startsWith("PORTERO") === true;
+function isPorteroCargo(
+  cargo: string | null | undefined,
+  cargoCodigo: string | null | undefined,
+) {
+  const porteroCargoCodes = new Set(["CA116", "CA082", "CA096", "CA087"]);
+  const normalizedCode = normalizeOptionalText(cargoCodigo)?.toUpperCase();
+
+  return (
+    (normalizedCode != null && porteroCargoCodes.has(normalizedCode)) ||
+    normalizeLooseMatchText(cargo)?.startsWith("PORTERO") === true
+  );
 }
 
-function resolvePorteroLugar(cargo: string | null | undefined, lugar: string | null) {
-  if (!isPorteroCargo(cargo)) {
+function resolvePorteroLugar(
+  cargo: string | null | undefined,
+  cargoCodigo: string | null | undefined,
+  lugar: string | null,
+) {
+  if (!isPorteroCargo(cargo, cargoCodigo)) {
     return null;
   }
 

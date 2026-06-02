@@ -2873,7 +2873,11 @@ bool _isPorteroCargo(CargoOption? cargo) {
     return false;
   }
 
-  return _normalizeSearchText(cargo.name).startsWith('portero');
+  const porteroCargoCodes = {'CA116', 'CA082', 'CA096', 'CA087'};
+  final normalizedCode = cargo.code.trim().toUpperCase();
+
+  return porteroCargoCodes.contains(normalizedCode) ||
+      _normalizeSearchText(cargo.name).startsWith('portero');
 }
 
 bool _officeTextLooksSimilar(String value, String query) {
