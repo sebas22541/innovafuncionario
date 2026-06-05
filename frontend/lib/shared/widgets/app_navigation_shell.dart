@@ -1360,7 +1360,8 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
     AppSection.events,
     AppSection.availableEvents,
     AppSection.myQr,
-    AppSection.permissionExits,
+    // Oculto temporalmente para funcionarios. Reactivar cuando vuelvan a usar Salidas.
+    // AppSection.permissionExits,
     AppSection.settings,
   ];
 }
