@@ -648,7 +648,6 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
               DataColumn(label: Text('Hora')),
               DataColumn(label: Text('Motivo')),
               DataColumn(label: Text('Solicitante')),
-              DataColumn(label: Text('CI')),
               DataColumn(label: Text('Item')),
               DataColumn(label: Text('Cargo')),
               DataColumn(label: Text('Oficina')),
@@ -666,7 +665,6 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
                     DataCell(
                       _ConstrainedCell(record.applicantFullName, width: 180),
                     ),
-                    DataCell(Text(record.applicantCi)),
                     DataCell(Text(record.applicantItemNumber)),
                     DataCell(
                       _ConstrainedCell(record.applicantJobTitle, width: 160),
@@ -727,7 +725,6 @@ class _ExitPermitReviewCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          _SummaryRow(label: 'CI', value: record.applicantCi),
           _SummaryRow(label: 'Item', value: record.applicantItemNumber),
           _SummaryRow(label: 'Cargo', value: record.applicantJobTitle),
           _SummaryRow(label: 'Oficina', value: record.applicantOffice),
@@ -785,7 +782,6 @@ class _ApplicantSummaryCard extends StatelessWidget {
             ),
             const SizedBox(height: 14),
             _SummaryRow(label: 'Nombre', value: currentUser.fullName),
-            _SummaryRow(label: 'CI', value: currentUser.ci),
             _SummaryRow(label: 'Numero de item', value: currentUser.numeroItem),
             _SummaryRow(label: 'Cargo', value: currentUser.cargo),
             _SummaryRow(

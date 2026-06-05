@@ -165,7 +165,7 @@ class _UsersScreenState extends State<UsersScreen> {
 
   String _searchableTextForUser(AppUser user) {
     final cacheKey =
-        '${user.id ?? 'new'}|${user.email}|${user.ci}|${user.fullName}|'
+        '${user.id ?? 'new'}|${user.email}|${user.ci}|${user.celular}|${user.fullName}|'
         '${user.cargoCodigo}|${user.cargo}|'
         '${user.officeCode}|${user.officeName}|${user.primaryOfficeName}|'
         '${user.commissionOfficeName}|${user.unidad}|${user.lugar}';
@@ -176,7 +176,7 @@ class _UsersScreenState extends State<UsersScreen> {
     }
 
     final searchableText = _normalizeSearchText(
-      '${user.ci} ${user.fullName} ${user.nombreCompleto} '
+      '${user.ci} ${user.celular} ${user.fullName} ${user.nombreCompleto} '
       '${user.primerApellido} ${user.segundoApellido} '
       '${user.tercerApellido} ${user.email} '
       '${user.cargoCodigo ?? ''} ${user.cargo} '
@@ -271,6 +271,7 @@ class _UsersScreenState extends State<UsersScreen> {
         segundoApellido: draft.segundoApellido,
         tercerApellido: draft.tercerApellido,
         ci: draft.ci,
+        celular: draft.celular,
         tipoVinculo: draft.tipoVinculo,
         oficinaId: draft.office.id,
         oficinaComisionId: draft.commissionOffice?.id,
@@ -422,6 +423,7 @@ class _UsersScreenState extends State<UsersScreen> {
         segundoApellido: draft.segundoApellido,
         tercerApellido: draft.tercerApellido,
         ci: draft.ci,
+        celular: draft.celular,
         tipoVinculo: draft.tipoVinculo,
         oficinaId: draft.office.id,
         oficinaComisionId: draft.commissionOffice?.id,
@@ -1217,6 +1219,8 @@ class _UserListCard extends StatelessWidget {
                   runSpacing: 10,
                   children: [
                     _UserMeta(label: 'CI', value: user.ci),
+                    if (user.celular.trim().isNotEmpty)
+                      _UserMeta(label: 'Celular', value: user.celular),
                     _UserMeta(label: 'Usuario', value: user.email),
                     _UserMeta(
                       label: 'Oficina',
@@ -1615,6 +1619,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final ImagePicker _imagePicker = ImagePicker();
   final TextEditingController _ciController = TextEditingController();
+  final TextEditingController _celularController = TextEditingController();
   final TextEditingController _nombreCompletoController =
       TextEditingController();
   final TextEditingController _primerApellidoController =
@@ -1666,6 +1671,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     };
     _selectedActivo = user.activo;
     _ciController.text = user.ci;
+    _celularController.text = user.celular;
     _nombreCompletoController.text = user.nombreCompleto;
     _primerApellidoController.text = user.primerApellido;
     _segundoApellidoController.text = user.segundoApellido;
@@ -1697,6 +1703,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   @override
   void dispose() {
     _ciController.dispose();
+    _celularController.dispose();
     _nombreCompletoController.dispose();
     _primerApellidoController.dispose();
     _segundoApellidoController.dispose();
@@ -1862,6 +1869,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
         tipoVinculo: _selectedTipoVinculo,
         activo: _selectedActivo,
         ci: _ciController.text.trim(),
+        celular: _celularController.text.trim(),
         nombreCompleto: _nombreCompletoController.text.trim(),
         primerApellido: _primerApellidoController.text.trim(),
         segundoApellido: _segundoApellidoController.text.trim(),
@@ -2001,6 +2009,17 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         isRequired: true,
                         validator: _requiredValidator('Ingresa el CI.'),
                         onChanged: (_) => setState(() {}),
+                      ),
+                      const SizedBox(height: 14),
+                      _FormField(
+                        controller: _celularController,
+                        label: 'Celular',
+                        hint: 'Ingresa el numero de celular',
+                        isRequired: true,
+                        keyboardType: TextInputType.phone,
+                        validator: _requiredValidator(
+                          'Ingresa el numero de celular.',
+                        ),
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -2315,6 +2334,7 @@ class _ManagedUserDraft {
     required this.tipoVinculo,
     required this.activo,
     required this.ci,
+    required this.celular,
     required this.nombreCompleto,
     required this.primerApellido,
     required this.segundoApellido,
@@ -2333,6 +2353,7 @@ class _ManagedUserDraft {
   final String tipoVinculo;
   final bool activo;
   final String ci;
+  final String celular;
   final String nombreCompleto;
   final String primerApellido;
   final String segundoApellido;
@@ -2413,6 +2434,7 @@ class _FormField extends StatelessWidget {
     this.suffixIcon,
     this.onChanged,
     this.onFieldSubmitted,
+    this.keyboardType,
     this.isRequired = false,
   });
 
@@ -2424,12 +2446,14 @@ class _FormField extends StatelessWidget {
   final Widget? suffixIcon;
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onFieldSubmitted;
+  final TextInputType? keyboardType;
   final bool isRequired;
 
   @override
   Widget build(BuildContext context) {
     return TextFormField(
       controller: controller,
+      keyboardType: keyboardType,
       obscureText: obscureText,
       validator: validator,
       onChanged: onChanged,

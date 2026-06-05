@@ -1120,6 +1120,8 @@ class _CredentialEditableRowState extends State<_CredentialEditableRow> {
       runSpacing: 8,
       children: [
         _CredentialMeta(label: 'CI', value: widget.user.ci),
+        if (widget.user.celular.trim().isNotEmpty)
+          _CredentialMeta(label: 'Celular', value: widget.user.celular),
         _CredentialMeta(
           label: 'Oficina',
           value: _resolvedOfficeName(widget.user),

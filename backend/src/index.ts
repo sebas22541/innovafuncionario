@@ -384,6 +384,7 @@ const server = http.createServer(async (request, response) => {
           segundo_apellido: input.segundoApellido,
           tercer_apellido: input.tercerApellido,
           ci: input.ci,
+          celular: input.celular,
           tipo_vinculo: input.tipoVinculo,
           unidad: resolvedUnit,
           oficina_id: resolvedOfficeId,
@@ -693,7 +694,6 @@ const server = http.createServer(async (request, response) => {
           hora_inicio: input.horaInicio,
           hora_final: input.horaFinal,
           solicitante_nombre_completo: buildUserDisplayName(user),
-          solicitante_ci: normalizeOptionalText(user.ci),
           solicitante_numero_item: normalizeOptionalText(user.numero_item),
           solicitante_cargo: normalizeOptionalText(user.cargo),
           solicitante_oficina_id: resolveLinkedOfficeId(user),
@@ -953,6 +953,7 @@ const server = http.createServer(async (request, response) => {
           segundo_apellido: input.segundoApellido,
           tercer_apellido: input.tercerApellido,
           ci: input.ci,
+          celular: input.celular,
           tipo_vinculo: input.tipoVinculo,
           unidad: resolvedUnit,
           oficina_id: resolvedOfficeId,
@@ -1087,6 +1088,7 @@ const server = http.createServer(async (request, response) => {
               segundo_apellido: managedInput.segundoApellido,
               tercer_apellido: managedInput.tercerApellido,
               ci: managedInput.ci,
+              celular: managedInput.celular,
               tipo_vinculo: managedInput.tipoVinculo,
               unidad: resolvedUnit,
               oficina_id: resolvedOfficeId,
@@ -2156,6 +2158,7 @@ type RegisterUserInput = {
   segundoApellido: string;
   tercerApellido: string | null;
   ci: string;
+  celular: string;
   tipoVinculo: string;
   unidad: string | null;
   oficinaId: number | null;
@@ -2752,6 +2755,11 @@ async function ensureRuntimeSchema() {
 
   await pool.query(`
     ALTER TABLE "usuarios"
+    ADD COLUMN IF NOT EXISTS "celular" VARCHAR(30)
+  `);
+
+  await pool.query(`
+    ALTER TABLE "usuarios"
       ADD COLUMN IF NOT EXISTS "session_version" INTEGER NOT NULL DEFAULT 0
   `);
 
@@ -2859,7 +2867,6 @@ async function ensureRuntimeSchema() {
       "hora_inicio" VARCHAR(5) NOT NULL,
       "hora_final" VARCHAR(5),
       "solicitante_nombre_completo" VARCHAR(220) NOT NULL,
-      "solicitante_ci" VARCHAR(30),
       "solicitante_numero_item" VARCHAR(50),
       "solicitante_cargo" VARCHAR(120),
       "solicitante_oficina_id" INTEGER,
@@ -2883,6 +2890,11 @@ async function ensureRuntimeSchema() {
       ADD COLUMN IF NOT EXISTS "aprobado_por_id" INTEGER,
       ADD COLUMN IF NOT EXISTS "aprobado_por_nombre" VARCHAR(220),
       ADD COLUMN IF NOT EXISTS "aprobado_en" TIMESTAMPTZ(6)
+  `);
+
+  await pool.query(`
+    ALTER TABLE "salidas"
+      DROP COLUMN IF EXISTS "solicitante_ci"
   `);
 
   await pool.query(`
@@ -3982,6 +3994,7 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
     segundoApellido: readRequiredString(body, "segundoApellido", 2, 80),
     tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
     ci: readRequiredString(body, "ci", 3, 30),
+    celular: readRequiredString(body, "celular", 5, 30),
     tipoVinculo,
     unidad,
     oficinaId,
@@ -4065,6 +4078,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     segundoApellido: readRequiredString(body, "segundoApellido", 2, 80),
     tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
     ci,
+    celular: readRequiredString(body, "celular", 5, 30),
     tipoVinculo,
     unidad,
     oficinaId,
@@ -6469,6 +6483,7 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     tercerApellido: user.tercer_apellido ?? "",
     nombreVisible: buildUserDisplayName(user),
     ci: user.ci ?? "",
+    celular: user.celular ?? "",
     tipoVinculo: user.tipo_vinculo ?? "ITEM",
     unidad: officeName ?? user.unidad ?? "",
     oficinaId: resolveLinkedOfficeId(user),
@@ -6504,7 +6519,6 @@ function serializeExitPermit(salida: any) {
     horaInicio: salida.hora_inicio,
     horaFinal: salida.hora_final ?? "",
     solicitanteNombreCompleto: salida.solicitante_nombre_completo,
-    solicitanteCi: salida.solicitante_ci ?? "",
     solicitanteNumeroItem: salida.solicitante_numero_item ?? "",
     solicitanteCargo: salida.solicitante_cargo ?? "",
     solicitanteOficinaId: salida.solicitante_oficina_id ?? null,

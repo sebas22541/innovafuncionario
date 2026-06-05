@@ -98,7 +98,6 @@ class ExitPermitRecord {
     required this.startTime,
     required this.endTime,
     required this.applicantFullName,
-    required this.applicantCi,
     required this.applicantItemNumber,
     required this.applicantJobTitle,
     required this.applicantOfficeId,
@@ -120,7 +119,6 @@ class ExitPermitRecord {
   final String startTime;
   final String endTime;
   final String applicantFullName;
-  final String applicantCi;
   final String applicantItemNumber;
   final String applicantJobTitle;
   final int? applicantOfficeId;
@@ -152,7 +150,6 @@ class ExitPermitRecord {
         source['solicitanteNombreCompleto'],
         'solicitanteNombreCompleto',
       ),
-      applicantCi: _readString(source['solicitanteCi'], 'solicitanteCi'),
       applicantItemNumber: _readString(
         source['solicitanteNumeroItem'],
         'solicitanteNumeroItem',

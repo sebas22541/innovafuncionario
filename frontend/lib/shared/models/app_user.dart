@@ -38,6 +38,7 @@ class AppUser {
     required this.segundoApellido,
     required this.tercerApellido,
     required this.ci,
+    required this.celular,
     required this.tipoVinculo,
     required this.unidad,
     required this.cargo,
@@ -69,6 +70,7 @@ class AppUser {
   final String segundoApellido;
   final String tercerApellido;
   final String ci;
+  final String celular;
   final String tipoVinculo;
   final String unidad;
   final String cargo;
@@ -101,6 +103,7 @@ class AppUser {
       segundoApellido: segundoApellido,
       tercerApellido: tercerApellido,
       ci: ci,
+      celular: celular,
       tipoVinculo: tipoVinculo,
       unidad: unidad,
       cargo: cargo,
@@ -138,6 +141,7 @@ class AppUser {
       ),
       tercerApellido: _readString(source['tercerApellido'], 'tercerApellido'),
       ci: _readString(source['ci'], 'ci'),
+      celular: source['celular'] as String? ?? '',
       tipoVinculo: _readString(source['tipoVinculo'], 'tipoVinculo'),
       unidad: _readString(source['unidad'], 'unidad'),
       cargo: _readString(source['cargo'], 'cargo'),
@@ -172,6 +176,7 @@ class AppUser {
       'segundoApellido': segundoApellido,
       'tercerApellido': tercerApellido,
       'ci': ci,
+      'celular': celular,
       'tipoVinculo': tipoVinculo,
       'unidad': unidad,
       'cargo': cargo,

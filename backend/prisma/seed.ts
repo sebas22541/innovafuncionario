@@ -35,6 +35,7 @@ async function main() {
       segundo_apellido: adminSecondLastName,
       tercer_apellido: null,
       ci: adminCi,
+      celular: "0",
       tipo_vinculo: "ITEM",
       unidad: "Administracion",
       oficina_id: null,
@@ -54,6 +55,7 @@ async function main() {
       segundo_apellido: adminSecondLastName,
       tercer_apellido: null,
       ci: adminCi,
+      celular: "0",
       tipo_vinculo: "ITEM",
       unidad: "Administracion",
       oficina_id: null,
@@ -102,6 +104,7 @@ async function ensurePersonIdentityForSeedUser(user: {
   segundo_apellido: string | null;
   tercer_apellido: string | null;
   ci: string | null;
+  celular?: string | null;
   tipo_vinculo: string | null;
   unidad: string | null;
   cargo: string | null;

@@ -200,6 +200,7 @@ model usuarios {
   segundo_apellido     String?                @db.VarChar(80)
   tercer_apellido      String?                @db.VarChar(80)
   ci                   String?                @db.VarChar(30)
+  celular              String?                @db.VarChar(30)
   tipo_vinculo         String?                @db.VarChar(30)
   unidad               String?                @db.VarChar(120)
   oficina_id           Int?
@@ -260,7 +261,6 @@ model salidas {
   hora_inicio                 String        @db.VarChar(5)
   hora_final                  String?       @db.VarChar(5)
   solicitante_nombre_completo String        @db.VarChar(220)
-  solicitante_ci              String?       @db.VarChar(30)
   solicitante_numero_item     String?       @db.VarChar(50)
   solicitante_cargo           String?       @db.VarChar(120)
   solicitante_oficina_id      Int?

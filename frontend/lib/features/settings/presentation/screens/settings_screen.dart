@@ -602,6 +602,12 @@ class _SettingsScreenState extends State<SettingsScreen>
                   ),
                   const SizedBox(height: 14),
                   _UserDataRow(
+                    label: 'Celular',
+                    value: currentUser.celular,
+                    icon: Icons.phone_outlined,
+                  ),
+                  const SizedBox(height: 14),
+                  _UserDataRow(
                     label: 'Numero item',
                     value: currentUser.numeroItem,
                     icon: Icons.confirmation_number_outlined,
