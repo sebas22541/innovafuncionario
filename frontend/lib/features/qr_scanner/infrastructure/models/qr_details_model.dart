@@ -53,9 +53,9 @@ class QrEventAttendanceRecordModel {
     return QrEventAttendanceRecord(
       status: status,
       registeredAt: registeredAt,
-      controls: controls.map((control) => control.toEntity()).toList(
-        growable: false,
-      ),
+      controls: controls
+          .map((control) => control.toEntity())
+          .toList(growable: false),
       registeredControlsCount: registeredControlsCount,
       attendedControlsCount: attendedControlsCount,
       observedControlsCount: observedControlsCount,
@@ -78,6 +78,8 @@ class QrDetailsModel {
     this.cargoCodigo,
     this.photoUrl,
     this.eventAttendance,
+    this.canRegisterInActiveEvent,
+    this.eventRegistrationMessage,
   });
 
   final String id;
@@ -93,6 +95,8 @@ class QrDetailsModel {
   final String? cargoCodigo;
   final String? photoUrl;
   final QrEventAttendanceRecordModel? eventAttendance;
+  final bool? canRegisterInActiveEvent;
+  final String? eventRegistrationMessage;
 
   factory QrDetailsModel.fromMap(Map<String, dynamic> map) {
     return QrDetailsModel(
@@ -109,6 +113,8 @@ class QrDetailsModel {
       cargoCodigo: map['cargoCodigo'] as String?,
       photoUrl: (map['photoUrl'] ?? map['photoBase64']) as String?,
       eventAttendance: null,
+      canRegisterInActiveEvent: map['canRegisterInActiveEvent'] as bool?,
+      eventRegistrationMessage: map['eventRegistrationMessage'] as String?,
     );
   }
 
@@ -127,6 +133,8 @@ class QrDetailsModel {
       cargoCodigo: cargoCodigo,
       photoUrl: photoUrl,
       eventAttendance: eventAttendance?.toEntity(),
+      canRegisterInActiveEvent: canRegisterInActiveEvent,
+      eventRegistrationMessage: eventRegistrationMessage,
     );
   }
 }

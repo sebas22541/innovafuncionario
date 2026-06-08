@@ -43,6 +43,9 @@ class AttendanceReportRecord {
     required this.eventDate,
     required this.registeredAt,
     required this.status,
+    this.registeredControlsCount = 0,
+    this.attendedControlsCount = 0,
+    this.observedControlsCount = 0,
     this.officeName,
     this.eventAddress,
     this.note,
@@ -58,6 +61,9 @@ class AttendanceReportRecord {
   final DateTime eventDate;
   final DateTime registeredAt;
   final String status;
+  final int registeredControlsCount;
+  final int attendedControlsCount;
+  final int observedControlsCount;
   final String? eventAddress;
   final String? note;
 

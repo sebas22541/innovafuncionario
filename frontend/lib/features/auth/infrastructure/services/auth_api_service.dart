@@ -130,8 +130,32 @@ class AuthApiService {
     );
   }
 
-  Future<Uint8List> downloadCredentialPdf({required String email}) {
-    return _apiClient.postBytes('/api/auth/credential/pdf', {'email': email});
+  Future<Uint8List> downloadCredentialPdf({
+    required String email,
+    String? nombreCompleto,
+    String? primerApellido,
+    String? segundoApellido,
+    String? tercerApellido,
+  }) {
+    return _apiClient.postBytes('/api/auth/credential/pdf', {
+      'email': email,
+      'nombreCompleto': ?nombreCompleto,
+      'primerApellido': ?primerApellido,
+      'segundoApellido': ?segundoApellido,
+      'tercerApellido': ?tercerApellido,
+    });
+  }
+
+  Future<AppUser> updateCredentialPhoto({
+    required String email,
+    required String fotoData,
+  }) async {
+    final payload = await _apiClient.putJson('/api/auth/credential/photo', {
+      'email': email,
+      'fotoData': fotoData,
+    });
+
+    return AppUser.fromJson(_readMap(payload['data'], 'usuario'));
   }
 
   Future<AppUser> register({
@@ -142,12 +166,14 @@ class AuthApiService {
     required String segundoApellido,
     required String tercerApellido,
     required String ci,
+    required String celular,
     required String tipoVinculo,
     required int? oficinaId,
     int? oficinaComisionId,
     required String? cargoCodigo,
     required String unidad,
     required String cargo,
+    String lugar = '',
     required String numeroItem,
     required bool activo,
     required String fotoData,
@@ -160,12 +186,14 @@ class AuthApiService {
       'segundoApellido': segundoApellido,
       'tercerApellido': tercerApellido,
       'ci': ci,
+      'celular': celular,
       'tipoVinculo': tipoVinculo,
       'oficinaId': oficinaId,
       'oficinaComisionId': oficinaComisionId,
       'cargoCodigo': cargoCodigo,
       'unidad': unidad,
       'cargo': cargo,
+      'lugar': lugar,
       'numeroItem': numeroItem,
       'activo': activo,
       'fotoData': fotoData,
@@ -194,12 +222,14 @@ class AuthApiService {
     required String segundoApellido,
     required String tercerApellido,
     required String ci,
+    required String celular,
     required String tipoVinculo,
     required int? oficinaId,
     int? oficinaComisionId,
     required String? cargoCodigo,
     required String unidad,
     required String cargo,
+    required String lugar,
     required String numeroItem,
     required bool activo,
     required String fotoData,
@@ -213,12 +243,14 @@ class AuthApiService {
       'segundoApellido': segundoApellido,
       'tercerApellido': tercerApellido,
       'ci': ci,
+      'celular': celular,
       'tipoVinculo': tipoVinculo,
       'oficinaId': oficinaId,
       'oficinaComisionId': oficinaComisionId,
       'cargoCodigo': cargoCodigo,
       'unidad': unidad,
       'cargo': cargo,
+      'lugar': lugar,
       'numeroItem': numeroItem,
       'activo': activo,
       'fotoData': fotoData,
@@ -253,12 +285,14 @@ class AuthApiService {
     required String segundoApellido,
     required String tercerApellido,
     required String ci,
+    required String celular,
     required String tipoVinculo,
     required int? oficinaId,
     int? oficinaComisionId,
     required String? cargoCodigo,
     required String unidad,
     required String cargo,
+    required String lugar,
     required String numeroItem,
     required bool activo,
     required String? fotoData,
@@ -273,12 +307,14 @@ class AuthApiService {
       'segundoApellido': segundoApellido,
       'tercerApellido': tercerApellido,
       'ci': ci,
+      'celular': celular,
       'tipoVinculo': tipoVinculo,
       'oficinaId': oficinaId,
       'oficinaComisionId': oficinaComisionId,
       'cargoCodigo': cargoCodigo,
       'unidad': unidad,
       'cargo': cargo,
+      'lugar': lugar,
       'numeroItem': numeroItem,
       'activo': activo,
       'fotoData': ?fotoData,

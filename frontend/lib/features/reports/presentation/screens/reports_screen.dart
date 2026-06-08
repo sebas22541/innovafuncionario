@@ -15,8 +15,8 @@ const Map<int, pw.TableColumnWidth> _eventReportPdfColumnWidths = {
   0: pw.FixedColumnWidth(20),
   1: pw.FixedColumnWidth(62),
   2: pw.FixedColumnWidth(92),
-  3: pw.FixedColumnWidth(132),
-  4: pw.FixedColumnWidth(76),
+  3: pw.FixedColumnWidth(45),
+  4: pw.FixedColumnWidth(163),
   5: pw.FixedColumnWidth(60),
 };
 
@@ -329,11 +329,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
               'Oficina: ${report.person.officeName ?? 'Sin oficina'}',
               style: const pw.TextStyle(fontSize: _reportPdfFontSize),
             ),
-            if ((report.person.email ?? '').isNotEmpty)
-              pw.Text(
-                'Correo: ${report.person.email}',
-                style: const pw.TextStyle(fontSize: _reportPdfFontSize),
-              ),
             if ((report.person.jobTitle ?? '').isNotEmpty)
               pw.Text(
                 'Cargo: ${report.person.jobTitle}',
@@ -342,11 +337,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
             if ((report.person.numeroItem ?? '').isNotEmpty)
               pw.Text(
                 'Numero item: ${report.person.numeroItem}',
-                style: const pw.TextStyle(fontSize: _reportPdfFontSize),
-              ),
-            if ((report.person.qrCode ?? '').isNotEmpty)
-              pw.Text(
-                'Codigo QR: ${report.person.qrCode}',
                 style: const pw.TextStyle(fontSize: _reportPdfFontSize),
               ),
             pw.SizedBox(height: 16),
@@ -774,10 +764,6 @@ class _ReportPersonCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                       Text('CI: ${report.person.ci}'),
-                      if ((report.person.email ?? '').isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Text(report.person.email!),
-                      ],
                     ],
                   ),
                 ),
@@ -805,10 +791,6 @@ class _ReportPersonCard extends StatelessWidget {
                 label: 'Numero item',
                 value: report.person.numeroItem!,
               ),
-            ],
-            if ((report.person.qrCode ?? '').isNotEmpty) ...[
-              const SizedBox(height: 4),
-              _ReportInfoLine(label: 'Codigo QR', value: report.person.qrCode!),
             ],
             const SizedBox(height: 10),
             Text(
@@ -1676,9 +1658,9 @@ List<List<String>> _buildEventPdfRows(List<EventRosterEntry> entries) {
               ? entry.value.ci!.trim()
               : 'Sin CI',
           entry.value.fullName,
+          _eventRosterTipoLabel(entry.value.tipoVinculo),
           entry.value.officeName ?? 'Sin oficina',
           _formatDateTime(entry.value.registeredAt),
-          _eventRosterTipoLabel(entry.value.tipoVinculo),
         ],
       )
       .toList(growable: false);

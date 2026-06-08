@@ -36,6 +36,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final TextEditingController _tercerApellidoController =
       TextEditingController();
   final TextEditingController _ciController = TextEditingController();
+  final TextEditingController _celularController = TextEditingController();
   final TextEditingController _unidadController = TextEditingController();
   final TextEditingController _cargoController = TextEditingController();
   final TextEditingController _numeroItemController = TextEditingController();
@@ -79,6 +80,7 @@ class _AuthScreenState extends State<AuthScreen> {
     _segundoApellidoController.dispose();
     _tercerApellidoController.dispose();
     _ciController.dispose();
+    _celularController.dispose();
     _unidadController.dispose();
     _cargoController.dispose();
     _numeroItemController.dispose();
@@ -324,6 +326,10 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Future<void> _submit() async {
+    if (_isSubmitting) {
+      return;
+    }
+
     final form = _formKey.currentState;
 
     if (form == null || !form.validate()) {
@@ -358,6 +364,7 @@ class _AuthScreenState extends State<AuthScreen> {
               segundoApellido: _segundoApellidoController.text.trim(),
               tercerApellido: _tercerApellidoController.text.trim(),
               ci: _ciController.text.trim(),
+              celular: _celularController.text.trim(),
               tipoVinculo: _selectedTipoVinculo,
               oficinaId: _selectedOffice?.id,
               cargoCodigo: _selectedCargo?.code,
@@ -449,6 +456,7 @@ class _AuthScreenState extends State<AuthScreen> {
                       segundoApellidoController: _segundoApellidoController,
                       tercerApellidoController: _tercerApellidoController,
                       ciController: _ciController,
+                      celularController: _celularController,
                       unidadController: _unidadController,
                       cargoController: _cargoController,
                       numeroItemController: _numeroItemController,
@@ -587,6 +595,7 @@ class _AuthFormCard extends StatelessWidget {
     required this.segundoApellidoController,
     required this.tercerApellidoController,
     required this.ciController,
+    required this.celularController,
     required this.unidadController,
     required this.cargoController,
     required this.numeroItemController,
@@ -629,6 +638,7 @@ class _AuthFormCard extends StatelessWidget {
   final TextEditingController segundoApellidoController;
   final TextEditingController tercerApellidoController;
   final TextEditingController ciController;
+  final TextEditingController celularController;
   final TextEditingController unidadController;
   final TextEditingController cargoController;
   final TextEditingController numeroItemController;
@@ -782,6 +792,16 @@ class _AuthFormCard extends StatelessWidget {
           isRequired: true,
           textInputAction: TextInputAction.next,
           validator: _requiredValidator('Ingresa tu CI.'),
+        ),
+        const SizedBox(height: 12),
+        _AuthField(
+          controller: celularController,
+          label: 'Celular',
+          hint: 'Celular',
+          isRequired: true,
+          keyboardType: TextInputType.phone,
+          textInputAction: TextInputAction.next,
+          validator: _requiredValidator('Ingresa tu numero de celular.'),
         ),
         const SizedBox(height: 12),
         _DropdownField<String>(

@@ -1,4 +1,4 @@
-enum AppUserRole { admin, control, external }
+enum AppUserRole { admin, control, credentials, external }
 
 extension AppUserRoleX on AppUserRole {
   String get apiValue {
@@ -7,6 +7,8 @@ extension AppUserRoleX on AppUserRole {
         return 'ADMIN';
       case AppUserRole.control:
         return 'CONTROL';
+      case AppUserRole.credentials:
+        return 'CREDENCIALES';
       case AppUserRole.external:
         return 'OPERADOR';
     }
@@ -18,6 +20,8 @@ extension AppUserRoleX on AppUserRole {
         return 'Administrador';
       case AppUserRole.control:
         return 'Control';
+      case AppUserRole.credentials:
+        return 'Credenciales';
       case AppUserRole.external:
         return 'Funcionario';
     }
@@ -34,9 +38,11 @@ class AppUser {
     required this.segundoApellido,
     required this.tercerApellido,
     required this.ci,
+    required this.celular,
     required this.tipoVinculo,
     required this.unidad,
     required this.cargo,
+    required this.lugar,
     required this.numeroItem,
     required this.activo,
     this.cargoCodigo,
@@ -64,9 +70,11 @@ class AppUser {
   final String segundoApellido;
   final String tercerApellido;
   final String ci;
+  final String celular;
   final String tipoVinculo;
   final String unidad;
   final String cargo;
+  final String lugar;
   final String numeroItem;
   final bool activo;
   final String? cargoCodigo;
@@ -95,9 +103,11 @@ class AppUser {
       segundoApellido: segundoApellido,
       tercerApellido: tercerApellido,
       ci: ci,
+      celular: celular,
       tipoVinculo: tipoVinculo,
       unidad: unidad,
       cargo: cargo,
+      lugar: lugar,
       numeroItem: numeroItem,
       activo: activo,
       cargoCodigo: cargoCodigo,
@@ -131,9 +141,11 @@ class AppUser {
       ),
       tercerApellido: _readString(source['tercerApellido'], 'tercerApellido'),
       ci: _readString(source['ci'], 'ci'),
+      celular: source['celular'] as String? ?? '',
       tipoVinculo: _readString(source['tipoVinculo'], 'tipoVinculo'),
       unidad: _readString(source['unidad'], 'unidad'),
       cargo: _readString(source['cargo'], 'cargo'),
+      lugar: source['lugar'] as String? ?? '',
       numeroItem: _readString(source['numeroItem'], 'numeroItem'),
       activo: source['activo'] as bool? ?? true,
       cargoCodigo: source['cargoCodigo'] as String?,
@@ -164,9 +176,11 @@ class AppUser {
       'segundoApellido': segundoApellido,
       'tercerApellido': tercerApellido,
       'ci': ci,
+      'celular': celular,
       'tipoVinculo': tipoVinculo,
       'unidad': unidad,
       'cargo': cargo,
+      'lugar': lugar,
       'cargoCodigo': cargoCodigo,
       'numeroItem': numeroItem,
       'activo': activo,
@@ -226,6 +240,8 @@ class AppUser {
 
   bool get isControl => role == AppUserRole.control;
 
+  bool get isCredentials => role == AppUserRole.credentials;
+
   bool get isExternalUser => role == AppUserRole.external;
 
   bool get canManageEvents => isAdmin;
@@ -265,6 +281,10 @@ AppUserRole _readRole(dynamic value) {
 
   if (value == 'CONTROL') {
     return AppUserRole.control;
+  }
+
+  if (value == 'CREDENCIALES') {
+    return AppUserRole.credentials;
   }
 
   return AppUserRole.external;

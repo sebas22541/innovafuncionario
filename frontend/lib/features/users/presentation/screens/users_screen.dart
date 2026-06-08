@@ -39,11 +39,14 @@ class _UsersScreenState extends State<UsersScreen> {
   String _searchQuery = '';
   List<AppUser>? _filteredUsersCache;
   OfficeOption? _selectedFilterOffice;
+  CargoOption? _selectedFilterCargo;
   String? _errorMessage;
   int _currentPage = 0;
 
   int get _adminCount => _users.where((user) => user.isAdmin).length;
   int get _controlCount => _users.where((user) => user.isControl).length;
+  int get _credentialsCount =>
+      _users.where((user) => user.isCredentials).length;
   int get _externalCount => _users.where((user) => user.isExternalUser).length;
   int get _activeUsersCount => _users.where((user) => user.activo).length;
   List<AppUser> get _filteredUsers {
@@ -55,6 +58,15 @@ class _UsersScreenState extends State<UsersScreen> {
 
     final query = _searchQuery;
     final selectedOffice = _selectedFilterOffice;
+    final selectedCargo = _selectedFilterCargo;
+
+    if (selectedCargo != null) {
+      final filteredUsers = _users
+          .where((user) => _userMatchesCargo(user, selectedCargo))
+          .toList(growable: false);
+      _filteredUsersCache = filteredUsers;
+      return filteredUsers;
+    }
 
     if (query.isEmpty && selectedOffice == null) {
       _filteredUsersCache = _users;
@@ -133,6 +145,7 @@ class _UsersScreenState extends State<UsersScreen> {
 
       setState(() {
         _searchQuery = nextQuery;
+        _selectedFilterCargo = null;
         _currentPage = 0;
         _invalidateUserFilters();
       });
@@ -152,9 +165,10 @@ class _UsersScreenState extends State<UsersScreen> {
 
   String _searchableTextForUser(AppUser user) {
     final cacheKey =
-        '${user.id ?? 'new'}|${user.email}|${user.ci}|${user.fullName}|'
+        '${user.id ?? 'new'}|${user.email}|${user.ci}|${user.celular}|${user.fullName}|'
+        '${user.cargoCodigo}|${user.cargo}|'
         '${user.officeCode}|${user.officeName}|${user.primaryOfficeName}|'
-        '${user.commissionOfficeName}|${user.unidad}';
+        '${user.commissionOfficeName}|${user.unidad}|${user.lugar}';
     final cachedText = _userSearchIndex[cacheKey];
 
     if (cachedText != null) {
@@ -162,12 +176,13 @@ class _UsersScreenState extends State<UsersScreen> {
     }
 
     final searchableText = _normalizeSearchText(
-      '${user.ci} ${user.fullName} ${user.nombreCompleto} '
+      '${user.ci} ${user.celular} ${user.fullName} ${user.nombreCompleto} '
       '${user.primerApellido} ${user.segundoApellido} '
       '${user.tercerApellido} ${user.email} '
+      '${user.cargoCodigo ?? ''} ${user.cargo} '
       '${user.officeCode} ${user.officeName} '
       '${user.primaryOfficeName} ${user.commissionOfficeName} '
-      '${user.unidad}',
+      '${user.unidad} ${user.lugar}',
     );
     _userSearchIndex[cacheKey] = searchableText;
 
@@ -256,12 +271,14 @@ class _UsersScreenState extends State<UsersScreen> {
         segundoApellido: draft.segundoApellido,
         tercerApellido: draft.tercerApellido,
         ci: draft.ci,
+        celular: draft.celular,
         tipoVinculo: draft.tipoVinculo,
         oficinaId: draft.office.id,
         oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
         unidad: draft.office.name,
         cargo: draft.cargo.name,
+        lugar: draft.lugar,
         numeroItem: draft.numeroItem,
         activo: draft.activo,
         fotoData: draft.fotoData!,
@@ -406,12 +423,14 @@ class _UsersScreenState extends State<UsersScreen> {
         segundoApellido: draft.segundoApellido,
         tercerApellido: draft.tercerApellido,
         ci: draft.ci,
+        celular: draft.celular,
         tipoVinculo: draft.tipoVinculo,
         oficinaId: draft.office.id,
         oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
         unidad: draft.office.name,
         cargo: draft.cargo.name,
+        lugar: draft.lugar,
         numeroItem: draft.numeroItem,
         activo: draft.activo,
         fotoData: draft.fotoData,
@@ -542,6 +561,38 @@ class _UsersScreenState extends State<UsersScreen> {
     }
   }
 
+  Future<void> _loadCargosForFilter() async {
+    if (_cargos.isNotEmpty || _isLoadingReferenceData) {
+      return;
+    }
+
+    setState(() {
+      _isLoadingReferenceData = true;
+    });
+
+    try {
+      final cargos = await dependencies.authApiService.fetchCargos();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _cargos = cargos;
+      });
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar los cargos.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingReferenceData = false;
+        });
+      }
+    }
+  }
+
   Future<void> _pickFilterOffice() async {
     await _loadOfficesForFilter();
 
@@ -568,6 +619,40 @@ class _UsersScreenState extends State<UsersScreen> {
 
     setState(() {
       _selectedFilterOffice = office;
+      _selectedFilterCargo = null;
+      _currentPage = 0;
+      _invalidateUserFilters();
+    });
+  }
+
+  Future<void> _pickFilterCargo() async {
+    await _loadCargosForFilter();
+
+    if (!mounted || _cargos.isEmpty) {
+      return;
+    }
+
+    final cargo = await showModalBottomSheet<CargoOption>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _CargoSelectionSheet(
+        cargos: _cargos,
+        selectedCargo: _selectedFilterCargo,
+      ),
+    );
+
+    if (!mounted || cargo == null) {
+      return;
+    }
+
+    _searchDebounce?.cancel();
+
+    setState(() {
+      _selectedFilterCargo = cargo;
+      _selectedFilterOffice = null;
+      _searchController.clear();
+      _searchQuery = '';
       _currentPage = 0;
       _invalidateUserFilters();
     });
@@ -610,7 +695,7 @@ class _UsersScreenState extends State<UsersScreen> {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              'Aqui el administrador puede gestionar las cuentas con rol administrador, control y funcionario.',
+                              'Aqui el administrador puede gestionar las cuentas con rol administrador, control, credenciales y funcionario.',
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
                           ],
@@ -635,6 +720,11 @@ class _UsersScreenState extends State<UsersScreen> {
                         label: 'Control',
                         value: '$_controlCount',
                         icon: Icons.fact_check_outlined,
+                      ),
+                      _UserStatItem(
+                        label: 'Credenciales',
+                        value: '$_credentialsCount',
+                        icon: Icons.badge_outlined,
                       ),
                       _UserStatItem(
                         label: 'Funcionarios',
@@ -682,7 +772,8 @@ class _UsersScreenState extends State<UsersScreen> {
                     onChanged: _handleSearchChanged,
                     decoration: InputDecoration(
                       labelText: 'Buscar usuarios',
-                      hintText: 'Busca por CI, nombre, usuario u oficina',
+                      hintText:
+                          'Busca por CI, nombre, usuario, cargo u oficina',
                       prefixIcon: const Icon(Icons.search_rounded),
                       suffixIcon: _searchController.text.trim().isEmpty
                           ? null
@@ -703,6 +794,21 @@ class _UsersScreenState extends State<UsersScreen> {
                         : () {
                             setState(() {
                               _selectedFilterOffice = null;
+                              _currentPage = 0;
+                              _invalidateUserFilters();
+                            });
+                          },
+                  ),
+                  const SizedBox(height: 12),
+                  _CargoFilterField(
+                    selectedCargo: _selectedFilterCargo,
+                    isLoading: _isLoadingReferenceData,
+                    onTap: _pickFilterCargo,
+                    onClear: _selectedFilterCargo == null
+                        ? null
+                        : () {
+                            setState(() {
+                              _selectedFilterCargo = null;
                               _currentPage = 0;
                               _invalidateUserFilters();
                             });
@@ -1113,6 +1219,8 @@ class _UserListCard extends StatelessWidget {
                   runSpacing: 10,
                   children: [
                     _UserMeta(label: 'CI', value: user.ci),
+                    if (user.celular.trim().isNotEmpty)
+                      _UserMeta(label: 'Celular', value: user.celular),
                     _UserMeta(label: 'Usuario', value: user.email),
                     _UserMeta(
                       label: 'Oficina',
@@ -1125,6 +1233,8 @@ class _UserListCard extends StatelessWidget {
                         value: user.primaryOfficeName!,
                       ),
                     _UserMeta(label: 'Cargo', value: user.cargo),
+                    if (user.lugar.trim().isNotEmpty)
+                      _UserMeta(label: 'Lugar', value: user.lugar),
                     _UserMeta(
                       label: 'Tipo',
                       value: _tipoVinculoLabel(user.tipoVinculo),
@@ -1168,11 +1278,13 @@ class _RoleChip extends StatelessWidget {
     final accentColor = switch (role) {
       AppUserRole.admin => AppPalette.orange,
       AppUserRole.control => AppPalette.night,
+      AppUserRole.credentials => AppPalette.orange,
       AppUserRole.external => AppPalette.muted,
     };
     final backgroundColor = switch (role) {
       AppUserRole.admin => AppPalette.orangeSoft,
       AppUserRole.control => AppPalette.blueSoftStrong,
+      AppUserRole.credentials => AppPalette.orangeSoft,
       AppUserRole.external => AppPalette.surfaceSoft,
     };
 
@@ -1434,6 +1546,60 @@ class _OfficeFilterField extends StatelessWidget {
   }
 }
 
+class _CargoFilterField extends StatelessWidget {
+  const _CargoFilterField({
+    required this.selectedCargo,
+    required this.isLoading,
+    required this.onTap,
+    required this.onClear,
+  });
+
+  final CargoOption? selectedCargo;
+  final bool isLoading;
+  final Future<void> Function() onTap;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final cargo = selectedCargo;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: isLoading ? null : onTap,
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Filtrar por cargo',
+          prefixIcon: const Icon(Icons.badge_outlined),
+          suffixIcon: isLoading
+              ? const Padding(
+                  padding: EdgeInsets.all(14),
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : cargo == null
+              ? const Icon(Icons.search_rounded)
+              : IconButton(
+                  tooltip: 'Quitar filtro de cargo',
+                  onPressed: onClear,
+                  icon: const Icon(Icons.close_rounded),
+                ),
+        ),
+        child: Text(
+          cargo?.displayLabel ?? 'Todos los cargos',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+            color: cargo == null ? AppPalette.muted : AppPalette.night,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ManagedUserDialog extends StatefulWidget {
   const _ManagedUserDialog({
     required this.offices,
@@ -1453,6 +1619,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final ImagePicker _imagePicker = ImagePicker();
   final TextEditingController _ciController = TextEditingController();
+  final TextEditingController _celularController = TextEditingController();
   final TextEditingController _nombreCompletoController =
       TextEditingController();
   final TextEditingController _primerApellidoController =
@@ -1465,6 +1632,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   final TextEditingController _commissionOfficeController =
       TextEditingController();
   final TextEditingController _cargoController = TextEditingController();
+  final TextEditingController _lugarController = TextEditingController();
   final TextEditingController _numeroItemController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController =
@@ -1503,6 +1671,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     };
     _selectedActivo = user.activo;
     _ciController.text = user.ci;
+    _celularController.text = user.celular;
     _nombreCompletoController.text = user.nombreCompleto;
     _primerApellidoController.text = user.primerApellido;
     _segundoApellidoController.text = user.segundoApellido;
@@ -1528,11 +1697,13 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
         _selectedCommissionOffice?.name ?? user.commissionOfficeName ?? '';
     _selectedCargo = _findInitialCargo(user);
     _cargoController.text = _selectedCargo?.name ?? user.cargo;
+    _lugarController.text = user.lugar;
   }
 
   @override
   void dispose() {
     _ciController.dispose();
+    _celularController.dispose();
     _nombreCompletoController.dispose();
     _primerApellidoController.dispose();
     _segundoApellidoController.dispose();
@@ -1540,6 +1711,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _unidadController.dispose();
     _commissionOfficeController.dispose();
     _cargoController.dispose();
+    _lugarController.dispose();
     _numeroItemController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
@@ -1585,6 +1757,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     setState(() {
       _selectedCargo = cargo;
       _cargoController.text = cargo.name;
+
+      if (!_isPorteroCargo(cargo)) {
+        _lugarController.clear();
+      }
     });
   }
 
@@ -1693,6 +1869,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
         tipoVinculo: _selectedTipoVinculo,
         activo: _selectedActivo,
         ci: _ciController.text.trim(),
+        celular: _celularController.text.trim(),
         nombreCompleto: _nombreCompletoController.text.trim(),
         primerApellido: _primerApellidoController.text.trim(),
         segundoApellido: _segundoApellidoController.text.trim(),
@@ -1700,6 +1877,9 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
         office: _selectedOffice!,
         commissionOffice: _hasCommission ? _selectedCommissionOffice : null,
         cargo: _selectedCargo!,
+        lugar: _isPorteroCargo(_selectedCargo)
+            ? _lugarController.text.trim()
+            : '',
         numeroItem: _numeroItemController.text.trim(),
         email: _ciController.text.trim(),
         password: _isEditing
@@ -1773,6 +1953,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                             child: Text('Administrador'),
                           ),
                           DropdownMenuItem(
+                            value: AppUserRole.credentials,
+                            child: Text('Credenciales'),
+                          ),
+                          DropdownMenuItem(
                             value: AppUserRole.external,
                             child: Text('Funcionario'),
                           ),
@@ -1825,6 +2009,17 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         isRequired: true,
                         validator: _requiredValidator('Ingresa el CI.'),
                         onChanged: (_) => setState(() {}),
+                      ),
+                      const SizedBox(height: 14),
+                      _FormField(
+                        controller: _celularController,
+                        label: 'Celular',
+                        hint: 'Ingresa el numero de celular',
+                        isRequired: true,
+                        keyboardType: TextInputType.phone,
+                        validator: _requiredValidator(
+                          'Ingresa el numero de celular.',
+                        ),
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -1960,6 +2155,16 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                               : FontWeight.w600,
                         ),
                       ),
+                      if (_isPorteroCargo(_selectedCargo)) ...[
+                        const SizedBox(height: 14),
+                        _FormField(
+                          controller: _lugarController,
+                          label: 'Lugar',
+                          hint: 'Ingresa el lugar al que pertenece',
+                          isRequired: true,
+                          validator: _requiredValidator('Ingresa el lugar.'),
+                        ),
+                      ],
                       if (_selectedTipoVinculo == 'ITEM') ...[
                         const SizedBox(height: 14),
                         _FormField(
@@ -2129,6 +2334,7 @@ class _ManagedUserDraft {
     required this.tipoVinculo,
     required this.activo,
     required this.ci,
+    required this.celular,
     required this.nombreCompleto,
     required this.primerApellido,
     required this.segundoApellido,
@@ -2136,6 +2342,7 @@ class _ManagedUserDraft {
     required this.office,
     required this.commissionOffice,
     required this.cargo,
+    required this.lugar,
     required this.numeroItem,
     required this.email,
     required this.password,
@@ -2146,6 +2353,7 @@ class _ManagedUserDraft {
   final String tipoVinculo;
   final bool activo;
   final String ci;
+  final String celular;
   final String nombreCompleto;
   final String primerApellido;
   final String segundoApellido;
@@ -2153,6 +2361,7 @@ class _ManagedUserDraft {
   final OfficeOption office;
   final OfficeOption? commissionOffice;
   final CargoOption cargo;
+  final String lugar;
   final String numeroItem;
   final String email;
   final String? password;
@@ -2225,6 +2434,7 @@ class _FormField extends StatelessWidget {
     this.suffixIcon,
     this.onChanged,
     this.onFieldSubmitted,
+    this.keyboardType,
     this.isRequired = false,
   });
 
@@ -2236,12 +2446,14 @@ class _FormField extends StatelessWidget {
   final Widget? suffixIcon;
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onFieldSubmitted;
+  final TextInputType? keyboardType;
   final bool isRequired;
 
   @override
   Widget build(BuildContext context) {
     return TextFormField(
       controller: controller,
+      keyboardType: keyboardType,
       obscureText: obscureText,
       validator: validator,
       onChanged: onChanged,
@@ -2785,8 +2997,10 @@ int _userRoleOrder(AppUserRole role) {
       return 0;
     case AppUserRole.control:
       return 1;
-    case AppUserRole.external:
+    case AppUserRole.credentials:
       return 2;
+    case AppUserRole.external:
+      return 3;
   }
 }
 
@@ -2825,6 +3039,32 @@ bool _userBelongsToOffice(AppUser user, OfficeOption office) {
   );
 
   return expectedName.isNotEmpty && userOfficeName == expectedName;
+}
+
+bool _userMatchesCargo(AppUser user, CargoOption cargo) {
+  final expectedCode = cargo.code.trim().toUpperCase();
+  final userCode = (user.cargoCodigo ?? '').trim().toUpperCase();
+
+  if (expectedCode.isNotEmpty && userCode == expectedCode) {
+    return true;
+  }
+
+  final expectedName = _normalizeSearchText(cargo.name);
+  final userCargo = _normalizeSearchText(user.cargo);
+
+  return expectedName.isNotEmpty && userCargo == expectedName;
+}
+
+bool _isPorteroCargo(CargoOption? cargo) {
+  if (cargo == null) {
+    return false;
+  }
+
+  const porteroCargoCodes = {'CA116', 'CA082', 'CA096', 'CA087'};
+  final normalizedCode = cargo.code.trim().toUpperCase();
+
+  return porteroCargoCodes.contains(normalizedCode) ||
+      _normalizeSearchText(cargo.name).startsWith('portero');
 }
 
 bool _officeTextLooksSimilar(String value, String query) {
@@ -2883,9 +3123,9 @@ Set<String> _officeSearchTokens(String value) {
 }
 
 String _normalizeExactOfficeValue(String value) {
-  return _stripTextAccents(value.trim().toLowerCase())
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
+  return _stripTextAccents(
+    value.trim().toLowerCase(),
+  ).replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
 String _tipoVinculoLabel(String value) {

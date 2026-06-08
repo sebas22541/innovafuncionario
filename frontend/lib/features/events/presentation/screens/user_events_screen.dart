@@ -423,6 +423,10 @@ class _UserAttendedEventCard extends StatelessWidget {
                   label: _formatTime(record.eventDate),
                 ),
                 const _InfoPill(icon: Icons.verified_rounded, label: 'Asistio'),
+                _InfoPill(
+                  icon: Icons.fact_check_outlined,
+                  label: _formatUserControlCount(record),
+                ),
               ],
             ),
             const SizedBox(height: 14),
@@ -457,6 +461,20 @@ class _UserAttendedEventCard extends StatelessWidget {
       ),
     );
   }
+}
+
+String _formatUserControlCount(AttendanceReportRecord record) {
+  final totalControls = record.registeredControlsCount;
+
+  if (totalControls <= 0) {
+    return 'Sin controles registrados';
+  }
+
+  final controlLabel = totalControls == 1
+      ? 'control realizado'
+      : 'controles realizados';
+
+  return '$totalControls $controlLabel';
 }
 
 class _UserOfficeEventCard extends StatelessWidget {
@@ -922,30 +940,63 @@ List<EventRecord> _filterEventsForCurrentUser(
         ? currentUser.commissionOfficeName ?? ''
         : _resolvedOfficeName(currentUser),
   );
-  final cargoCodigo = (currentUser.cargoCodigo ?? '').trim();
+  final cargoCodigo = (currentUser.cargoCodigo ?? '').trim().toUpperCase();
   final cargoName = _normalizeOfficeSearchText(currentUser.cargo);
 
   return events
       .where((event) {
-        final matchingOffice = event.offices.cast<EventOffice?>().firstWhere(
-          (office) {
-            if (office == null) {
-              return false;
-            }
+        final selectedJobTitleCodes = event.selectedJobTitleCodes
+            .map((code) => code.trim().toUpperCase())
+            .where((code) => code.isNotEmpty)
+            .toSet();
+        final matchesSelectedJobTitleCode =
+            cargoCodigo.isNotEmpty &&
+            selectedJobTitleCodes.contains(cargoCodigo);
+        final matchesJobTitle =
+            matchesSelectedJobTitleCode ||
+            event.jobTitles.any((jobTitle) {
+              final eventJobTitleCode = jobTitle.code.trim().toUpperCase();
 
-            if (officeId != null && office.id == officeId) {
-              return true;
-            }
+              if (cargoCodigo.isNotEmpty && eventJobTitleCode == cargoCodigo) {
+                return true;
+              }
 
-            return _eventOfficeMatchesUserOffice(
-              office,
-              userOfficeName: officeName,
-              userOfficeCode: officeCode,
-            );
-          },
-          orElse: () => null,
-        );
-        final hasOfficeJobTitleRules = event.officeJobTitleSelections.isNotEmpty;
+              if (cargoName.isEmpty) {
+                return false;
+              }
+
+              final eventJobTitleName = _normalizeOfficeSearchText(
+                jobTitle.name,
+              );
+
+              return eventJobTitleName == cargoName ||
+                  eventJobTitleName.contains(cargoName) ||
+                  cargoName.contains(eventJobTitleName);
+            });
+
+        if (matchesJobTitle) {
+          return true;
+        }
+
+        final matchingOffice = event.offices.cast<EventOffice?>().firstWhere((
+          office,
+        ) {
+          if (office == null) {
+            return false;
+          }
+
+          if (officeId != null && office.id == officeId) {
+            return true;
+          }
+
+          return _eventOfficeMatchesUserOffice(
+            office,
+            userOfficeName: officeName,
+            userOfficeCode: officeCode,
+          );
+        }, orElse: () => null);
+        final hasOfficeJobTitleRules =
+            event.officeJobTitleSelections.isNotEmpty;
 
         if (hasOfficeJobTitleRules) {
           if (matchingOffice == null) {
@@ -964,28 +1015,10 @@ List<EventRecord> _filterEventsForCurrentUser(
           }
 
           return officeSelection.jobTitleCodes.any(
-            (code) => cargoCodigo.isNotEmpty && code == cargoCodigo,
+            (code) =>
+                cargoCodigo.isNotEmpty &&
+                code.trim().toUpperCase() == cargoCodigo,
           );
-        }
-
-        final matchesJobTitle = event.jobTitles.any((jobTitle) {
-          if (cargoCodigo.isNotEmpty && jobTitle.code == cargoCodigo) {
-            return true;
-          }
-
-          if (cargoName.isEmpty) {
-            return false;
-          }
-
-          final eventJobTitleName = _normalizeOfficeSearchText(jobTitle.name);
-
-          return eventJobTitleName == cargoName ||
-              eventJobTitleName.contains(cargoName) ||
-              cargoName.contains(eventJobTitleName);
-        });
-
-        if (matchesJobTitle) {
-          return true;
         }
 
         if (officeId != null && event.selectedOfficeIds.contains(officeId)) {

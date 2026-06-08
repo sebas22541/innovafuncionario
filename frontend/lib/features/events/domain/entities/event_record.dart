@@ -198,6 +198,14 @@ class EventRecord {
   int get officeCount => officeCountOverride ?? offices.length;
 
   String get officeCountLabel {
+    if (officeCount == 0 && jobTitleCount > 0) {
+      return 'Por cargos';
+    }
+
+    if (officeCount == 0) {
+      return 'Sin oficinas';
+    }
+
     if (officeCount == 1) {
       return '1 oficina';
     }
@@ -206,6 +214,10 @@ class EventRecord {
   }
 
   String get officeLabel {
+    if (offices.isEmpty && jobTitleCount > 0) {
+      return 'Por cargos';
+    }
+
     if (offices.isEmpty) {
       return 'Sin oficinas';
     }

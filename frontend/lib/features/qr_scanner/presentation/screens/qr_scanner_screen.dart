@@ -47,14 +47,54 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
 
   QrScanResultModel? _lastScanModel;
   final TextEditingController _ciController = TextEditingController();
+  final FocusNode _ciFocusNode = FocusNode();
+  final GlobalKey _manualCiSearchKey = GlobalKey();
   bool _isHandlingDetection = false;
   bool _isSearchingCi = false;
 
   @override
+  void initState() {
+    super.initState();
+    _ciFocusNode.addListener(_handleCiFocusChange);
+  }
+
+  @override
   void dispose() {
+    _ciFocusNode.removeListener(_handleCiFocusChange);
+    _ciFocusNode.dispose();
     _ciController.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _handleCiFocusChange() {
+    if (!_ciFocusNode.hasFocus) {
+      return;
+    }
+
+    Future<void>.delayed(
+      const Duration(milliseconds: 320),
+      _scrollManualCiSearchIntoView,
+    );
+  }
+
+  Future<void> _scrollManualCiSearchIntoView() async {
+    if (!mounted) {
+      return;
+    }
+
+    final searchContext = _manualCiSearchKey.currentContext;
+
+    if (searchContext == null) {
+      return;
+    }
+
+    await Scrollable.ensureVisible(
+      searchContext,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+      alignment: 0.92,
+    );
   }
 
   Future<void> _openDetailsScreen({
@@ -207,12 +247,14 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth >= 900;
 
         return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+          padding: EdgeInsets.fromLTRB(20, 20, 20, 24 + keyboardInset),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -256,7 +298,9 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
               ],
               const SizedBox(height: 12),
               _ManualCiSearchCard(
+                key: _manualCiSearchKey,
                 controller: _ciController,
+                focusNode: _ciFocusNode,
                 isSearching: _isSearchingCi,
                 onSearch: _searchByCi,
               ),
@@ -319,12 +363,15 @@ class _ActiveEventCard extends StatelessWidget {
 
 class _ManualCiSearchCard extends StatelessWidget {
   const _ManualCiSearchCard({
+    super.key,
     required this.controller,
+    required this.focusNode,
     required this.isSearching,
     required this.onSearch,
   });
 
   final TextEditingController controller;
+  final FocusNode focusNode;
   final bool isSearching;
   final VoidCallback onSearch;
 
@@ -348,6 +395,7 @@ class _ManualCiSearchCard extends StatelessWidget {
             const SizedBox(height: 14),
             TextField(
               controller: controller,
+              focusNode: focusNode,
               textInputAction: TextInputAction.search,
               onSubmitted: (_) => onSearch(),
               decoration: InputDecoration(

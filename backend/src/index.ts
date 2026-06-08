@@ -22,7 +22,12 @@ import {
   storeUserProfilePhoto,
 } from "./cloudinary/index.ts";
 import { PrismaClient, type Prisma } from "./generated/prisma/client.ts";
-import { estado_asistencia, rol_usuario } from "./generated/prisma/enums.ts";
+import {
+  estado_asistencia,
+  estado_salida,
+  motivo_salida,
+  rol_usuario,
+} from "./generated/prisma/enums.ts";
 import { HttpError } from "./http-error.ts";
 import {
   logAccess,
@@ -54,7 +59,6 @@ const DYNAMIC_QR_TTL_SECONDS = clampInt(
   30,
   3600,
 );
-const DYNAMIC_QR_MIN_REUSE_SECONDS = 15;
 const DYNAMIC_QR_HISTORY_LIMIT = clampInt(
   process.env.QR_DYNAMIC_HISTORY_LIMIT ?? null,
   20,
@@ -63,6 +67,7 @@ const DYNAMIC_QR_HISTORY_LIMIT = clampInt(
 );
 const DYNAMIC_QR_VERSION = "DQR1";
 const DYNAMIC_QR_SIGNATURE_LENGTH = 16;
+const STATIC_DYNAMIC_QR_EXPIRES_AT = new Date("2099-12-31T23:59:59.000Z");
 const JWT_TTL_SECONDS = clampInt(
   process.env.JWT_TTL_SECONDS ?? null,
   31_536_000,
@@ -72,43 +77,6 @@ const JWT_TTL_SECONDS = clampInt(
 const JWT_SECRET =
   process.env.JWT_SECRET ??
   createHash("sha256").update(`${DATABASE_URL}:jwt`).digest("hex");
-const RATE_LIMIT_MAX_REQUESTS = clampInt(
-  process.env.RATE_LIMIT_MAX_REQUESTS ?? null,
-  100,
-  1,
-  100,
-);
-const IP_RATE_LIMIT_MAX_REQUESTS = clampInt(
-  process.env.IP_RATE_LIMIT_MAX_REQUESTS ?? null,
-  60,
-  1,
-  100,
-);
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_BAN_MS = clampInt(
-  process.env.RATE_LIMIT_BAN_SECONDS ?? null,
-  300,
-  60,
-  3600,
-) * 1000;
-const SUSPICIOUS_IP_MAX_STRIKES = clampInt(
-  process.env.SUSPICIOUS_IP_MAX_STRIKES ?? null,
-  5,
-  1,
-  100,
-);
-const SUSPICIOUS_IP_WINDOW_MS = clampInt(
-  process.env.SUSPICIOUS_IP_WINDOW_SECONDS ?? null,
-  900,
-  60,
-  86_400,
-) * 1000;
-const SUSPICIOUS_IP_BAN_MS = clampInt(
-  process.env.SUSPICIOUS_IP_BAN_SECONDS ?? null,
-  1800,
-  60,
-  86_400,
-) * 1000;
 const ALLOWED_CORS_ORIGINS = parseAllowedCorsOrigins(
   process.env.CORS_ALLOWED_ORIGINS,
 );
@@ -125,6 +93,7 @@ const PAYLOAD_RESPONSE_ENCRYPTION_ENABLED =
 const REFERENCE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DASHBOARD_CACHE_TTL_MS = 30 * 1000;
 const EVENT_SUMMARY_CACHE_TTL_MS = 15 * 1000;
+const EVENT_ATTENDANCE_CONTEXT_CACHE_TTL_MS = 60 * 1000;
 const SEED_ADMIN_EMAIL = normalizeEmailValue(
   process.env.SEED_ADMIN_EMAIL ?? "admin@admin.com",
 );
@@ -253,18 +222,6 @@ type CacheEntry<T> = {
   expiresAt: number;
 };
 
-type RateLimitBucket = {
-  count: number;
-  resetAt: number;
-  bannedUntil?: number;
-};
-
-type SuspiciousIpBucket = {
-  strikes: number;
-  resetAt: number;
-  bannedUntil?: number;
-};
-
 let officesCache: CacheEntry<any[]> | null = null;
 let cargosCache: CacheEntry<any[]> | null = null;
 let dashboardSummaryCache: CacheEntry<{
@@ -273,8 +230,7 @@ let dashboardSummaryCache: CacheEntry<{
   eventos: number;
 }> | null = null;
 let eventSummaryCache: CacheEntry<any[]> | null = null;
-const rateLimitBuckets = new Map<string, RateLimitBucket>();
-const suspiciousIpBuckets = new Map<string, SuspiciousIpBucket>();
+const eventAttendanceContextCache = new Map<number, CacheEntry<any>>();
 
 await ensureRuntimeSchema();
 
@@ -299,37 +255,18 @@ const server = http.createServer(async (request, response) => {
     });
   });
 
-  if (rejectSuspiciousIpIfBanned(request, response, requestId)) {
+  if (!request.url || !request.method) {
+    sendJson(response, 400, { error: "Solicitud invalida." });
     return;
   }
 
-  try {
-    enforceRateLimit(request, response, null);
-  } catch (error) {
-    if (error instanceof HttpError) {
-      logWarning(error.message, buildRequestLogFields(request, requestId, {
-        statusCode: error.statusCode,
-      }));
-      sendJson(response, error.statusCode, { error: error.message });
-      return;
-    }
-
-    throw error;
-  }
+  const url = new URL(
+    request.url,
+    `http://${request.headers.host ?? "localhost"}`,
+  );
+  requestPath = buildSafeRequestPath(url);
 
   if (!applyCors(request, response)) {
-    if (
-      recordSuspiciousIpActivity(request, response, requestId, {
-        reason: "Origen no permitido.",
-        strikes: 3,
-      })
-    ) {
-      sendJson(response, 429, {
-        error: "IP bloqueada temporalmente por actividad sospechosa.",
-      });
-      return;
-    }
-
     logWarning("Origen no permitido.", buildRequestLogFields(request, requestId, {
       statusCode: 403,
     }));
@@ -343,31 +280,10 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
-  if (!request.url || !request.method) {
-    sendJson(response, 400, { error: "Solicitud invalida." });
-    return;
-  }
-
-  const url = new URL(
-    request.url,
-    `http://${request.headers.host ?? "localhost"}`,
-  );
-  requestPath = buildSafeRequestPath(url);
-
   try {
-    if (recordSuspiciousPathActivity(request, response, requestId, url)) {
-      sendJson(response, 429, {
-        error: "IP bloqueada temporalmente por actividad sospechosa.",
-      });
-      return;
-    }
-
     const authenticatedUser = await authenticateRequestIfRequired(request, url);
 
     authenticatedUserForLog = authenticatedUser;
-    if (authenticatedUser.id > 0) {
-      enforceRateLimit(request, response, authenticatedUser);
-    }
 
     if (request.method === "GET" && url.pathname === "/") {
       sendJson(response, 404, { error: "No encontrado." });
@@ -435,6 +351,11 @@ const server = http.createServer(async (request, response) => {
       const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
       const resolvedCargo = selectedCargo?.cargo ?? input.cargo;
       const resolvedCargoCode = selectedCargo?.codigo ?? null;
+      const resolvedLugar = resolvePorteroLugar(
+        resolvedCargo,
+        resolvedCargoCode,
+        input.lugar,
+      );
       const duplicatedUser = await findUserByLoginOrCi(prisma, {
         login: input.email,
         ci: input.ci,
@@ -463,12 +384,14 @@ const server = http.createServer(async (request, response) => {
           segundo_apellido: input.segundoApellido,
           tercer_apellido: input.tercerApellido,
           ci: input.ci,
+          celular: input.celular,
           tipo_vinculo: input.tipoVinculo,
           unidad: resolvedUnit,
           oficina_id: resolvedOfficeId,
           oficina_comision_id: resolvedCommissionOfficeId,
           cargo_codigo: resolvedCargoCode,
           cargo: resolvedCargo,
+          lugar: resolvedLugar,
           numero_item: input.numeroItem,
           foto_url: storedProfilePhoto,
           email: input.email,
@@ -697,12 +620,11 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/credential/pdf") {
-      const user = await resolveCredentialTargetUser(
-        authenticatedUser,
-        await readJsonBody(request),
-      );
+      const payload = await readJsonBody(request);
+      const user = await resolveCredentialTargetUser(authenticatedUser, payload);
+      const pdfUser = applyCredentialPdfOverrides(user, payload);
       const person = await ensurePersonIdentityForUser(prisma, user);
-      const pdfBytes = await generateUserCredentialPdf(user, person);
+      const pdfBytes = await generateUserCredentialPdf(pdfUser, person);
 
       sendPdf(
         response,
@@ -710,6 +632,183 @@ const server = http.createServer(async (request, response) => {
         Buffer.from(pdfBytes),
         buildCredentialPdfFilename(user),
       );
+      return;
+    }
+
+    if (request.method === "PUT" && url.pathname === "/api/auth/credential/photo") {
+      const payload = await readJsonBody(request);
+      await assertCredentialsRequester(
+        authenticatedUser.email,
+        "Solo un administrador o usuario de credenciales puede actualizar fotos de credenciales.",
+      );
+      const user = await resolveCredentialTargetUser(authenticatedUser, payload);
+      const body = expectRecord(payload);
+      const fotoData = readRequiredString(body, "fotoData", 20, 5_000_000);
+      const nextPhotoSource = await storeUserProfilePhoto({
+        photoSource: fotoData,
+        email: user.email,
+        ci: user.ci,
+        userId: user.id,
+      });
+      const updatedUser = await prisma.usuarios.update({
+        where: { id: user.id },
+        data: {
+          foto_url: nextPhotoSource,
+          updated_at: new Date(),
+        },
+        include: userWithOfficeInclude,
+      });
+      const person = await ensurePersonIdentityForUser(prisma, updatedUser);
+
+      sendJson(response, 200, {
+        data: serializeAppUser(updatedUser, person),
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/salidas") {
+      const input = parseCreateExitPermitInput(await readJsonBody(request));
+      const user = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+        include: userWithOfficeInclude,
+      });
+
+      if (!user || user.activo !== true) {
+        throw new HttpError(401, "Sesion invalida o expirada.");
+      }
+
+      if (user.rol !== rol_usuario.OPERADOR) {
+        throw new HttpError(
+          403,
+          "Solo un funcionario puede registrar formularios de salida.",
+        );
+      }
+
+      const salida = await prisma.salidas.create({
+        data: {
+          usuario_id: user.id,
+          motivo: input.motivo,
+          lugar_destino: input.lugarDestino,
+          descripcion: input.descripcion,
+          fecha_permiso: input.fechaPermiso,
+          hora_inicio: input.horaInicio,
+          hora_final: input.horaFinal,
+          solicitante_nombre_completo: buildUserDisplayName(user),
+          solicitante_numero_item: normalizeOptionalText(user.numero_item),
+          solicitante_cargo: normalizeOptionalText(user.cargo),
+          solicitante_oficina_id: resolveLinkedOfficeId(user),
+          solicitante_oficina: resolveLinkedOfficeName(user),
+        },
+      });
+
+      sendJson(response, 201, {
+        data: serializeExitPermit(salida),
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/salidas/pendientes") {
+      const approver = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+        include: userWithOfficeInclude,
+      });
+
+      if (!approver) {
+        throw new HttpError(403, "Solo un jefe puede revisar salidas.");
+      }
+
+      assertExitPermitApprover(approver);
+      const approverOfficeId = resolveLinkedOfficeId(approver);
+      const salidas = await prisma.salidas.findMany({
+        where: {
+          estado: estado_salida.PENDIENTE,
+          solicitante_oficina_id: approverOfficeId,
+          usuario_id: { not: approver.id },
+        },
+        orderBy: [
+          { fecha_permiso: "asc" },
+          { hora_inicio: "asc" },
+          { created_at: "asc" },
+          { id: "asc" },
+        ],
+      });
+
+      sendJson(response, 200, {
+        data: salidas.map(serializeExitPermit),
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/salidas") {
+      assertAuthenticatedRequester(authenticatedUser);
+      const fechaPermiso = readExitPermitQueryDate(url);
+      const where = isAdminUser(authenticatedUser)
+        ? { fecha_permiso: fechaPermiso }
+        : {
+            fecha_permiso: fechaPermiso,
+            usuario_id: authenticatedUser.id,
+          };
+      const salidas = await prisma.salidas.findMany({
+        where,
+        orderBy: [
+          { hora_inicio: "asc" },
+          { created_at: "asc" },
+          { id: "asc" },
+        ],
+      });
+
+      sendJson(response, 200, {
+        data: salidas.map(serializeExitPermit),
+      });
+      return;
+    }
+
+    const salidaEstadoMatch = /^\/api\/salidas\/(\d+)\/estado$/.exec(
+      url.pathname,
+    );
+
+    if (request.method === "PUT" && salidaEstadoMatch != null) {
+      const salidaId = Number.parseInt(salidaEstadoMatch[1] ?? "", 10);
+      const input = parseUpdateExitPermitStatusInput(await readJsonBody(request));
+      const approver = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+        include: userWithOfficeInclude,
+      });
+
+      if (!approver) {
+        throw new HttpError(403, "Solo un jefe puede revisar salidas.");
+      }
+
+      assertExitPermitApprover(approver);
+
+      const salida = await prisma.salidas.findUnique({
+        where: { id: salidaId },
+      });
+
+      if (!salida) {
+        throw new HttpError(404, "No se encontro la salida seleccionada.");
+      }
+
+      assertCanReviewExitPermit(approver, salida);
+
+      if (salida.estado !== estado_salida.PENDIENTE) {
+        throw new HttpError(409, "Esta salida ya fue revisada.");
+      }
+
+      const updatedSalida = await prisma.salidas.update({
+        where: { id: salida.id },
+        data: {
+          estado: input.estado,
+          aprobado_por_id: approver.id,
+          aprobado_por_nombre: buildUserDisplayName(approver),
+          aprobado_en: new Date(),
+          updated_at: new Date(),
+        },
+      });
+
+      sendJson(response, 200, {
+        data: serializeExitPermit(updatedSalida),
+      });
       return;
     }
 
@@ -744,9 +843,9 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/usuarios") {
-      await assertAdminRequester(
+      await assertCredentialsRequester(
         authenticatedUser.email,
-        "Solo un administrador puede gestionar usuarios.",
+        "Solo un administrador o usuario de credenciales puede consultar credenciales.",
       );
       const usuarios = await prisma.usuarios.findMany({
         where: {
@@ -814,6 +913,11 @@ const server = http.createServer(async (request, response) => {
       const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
       const resolvedCargo = selectedCargo?.cargo ?? input.cargo;
       const resolvedCargoCode = selectedCargo?.codigo ?? null;
+      const resolvedLugar = resolvePorteroLugar(
+        resolvedCargo,
+        resolvedCargoCode,
+        input.lugar,
+      );
       const existingUser = await prisma.usuarios.findUnique({
         where: { email: input.email },
       });
@@ -849,12 +953,14 @@ const server = http.createServer(async (request, response) => {
           segundo_apellido: input.segundoApellido,
           tercer_apellido: input.tercerApellido,
           ci: input.ci,
+          celular: input.celular,
           tipo_vinculo: input.tipoVinculo,
           unidad: resolvedUnit,
           oficina_id: resolvedOfficeId,
           oficina_comision_id: resolvedCommissionOfficeId,
           cargo_codigo: resolvedCargoCode,
           cargo: resolvedCargo,
+          lugar: resolvedLugar,
           numero_item: input.numeroItem,
           foto_url: storedProfilePhoto,
           email: input.email,
@@ -956,6 +1062,11 @@ const server = http.createServer(async (request, response) => {
           const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
           const resolvedCargo = selectedCargo?.cargo ?? managedInput.cargo;
           const resolvedCargoCode = selectedCargo?.codigo ?? null;
+          const resolvedLugar = resolvePorteroLugar(
+            resolvedCargo,
+            resolvedCargoCode,
+            managedInput.lugar,
+          );
           const nextPhotoSource = managedInput.fotoData == null
             ? existingUser.foto_url
             : await storeUserProfilePhoto({
@@ -977,12 +1088,14 @@ const server = http.createServer(async (request, response) => {
               segundo_apellido: managedInput.segundoApellido,
               tercer_apellido: managedInput.tercerApellido,
               ci: managedInput.ci,
+              celular: managedInput.celular,
               tipo_vinculo: managedInput.tipoVinculo,
               unidad: resolvedUnit,
               oficina_id: resolvedOfficeId,
               oficina_comision_id: resolvedCommissionOfficeId,
               cargo_codigo: resolvedCargoCode,
               cargo: resolvedCargo,
+              lugar: resolvedLugar,
               numero_item: managedInput.numeroItem,
               foto_url: nextPhotoSource,
               email: managedInput.email,
@@ -1084,13 +1197,15 @@ const server = http.createServer(async (request, response) => {
           input.oficinaIdsFinales,
         );
 
-        await tx.evento_oficinas.createMany({
-          data: resolvedOfficeSelection.expandedOffices.map((office) => ({
-            evento_id: createdEvent.id,
-            oficina_id: office.id,
-            seleccion_directa: office.isDirectSelection,
-          })),
-        });
+        if (resolvedOfficeSelection.expandedOffices.length > 0) {
+          await tx.evento_oficinas.createMany({
+            data: resolvedOfficeSelection.expandedOffices.map((office) => ({
+              evento_id: createdEvent.id,
+              oficina_id: office.id,
+              seleccion_directa: office.isDirectSelection,
+            })),
+          });
+        }
 
         await syncEventJobTitles(tx, createdEvent.id, input.cargoCodigos);
         await syncEventOfficeJobTitles(
@@ -1115,6 +1230,7 @@ const server = http.createServer(async (request, response) => {
         });
       });
       invalidateEventSummaryCache();
+      invalidateEventAttendanceContextCache(evento.id);
       invalidateDashboardSummaryCache();
 
       sendJson(response, 201, {
@@ -1185,13 +1301,15 @@ const server = http.createServer(async (request, response) => {
           input.oficinaIdsFinales,
         );
 
-        await tx.evento_oficinas.createMany({
-          data: resolvedOfficeSelection.expandedOffices.map((office) => ({
-            evento_id: eventId,
-            oficina_id: office.id,
-            seleccion_directa: office.isDirectSelection,
-          })),
-        });
+        if (resolvedOfficeSelection.expandedOffices.length > 0) {
+          await tx.evento_oficinas.createMany({
+            data: resolvedOfficeSelection.expandedOffices.map((office) => ({
+              evento_id: eventId,
+              oficina_id: office.id,
+              seleccion_directa: office.isDirectSelection,
+            })),
+          });
+        }
 
         await syncEventJobTitles(tx, eventId, input.cargoCodigos);
         await syncEventOfficeJobTitles(
@@ -1216,6 +1334,7 @@ const server = http.createServer(async (request, response) => {
         });
       });
       invalidateEventSummaryCache();
+      invalidateEventAttendanceContextCache(eventId);
 
       sendJson(response, 200, {
         data: serializeEvent(evento),
@@ -1241,6 +1360,7 @@ const server = http.createServer(async (request, response) => {
         where: { id: eventId },
       });
       invalidateEventSummaryCache();
+      invalidateEventAttendanceContextCache(eventId);
       invalidateDashboardSummaryCache();
 
       sendJson(response, 200, {
@@ -1525,36 +1645,7 @@ const server = http.createServer(async (request, response) => {
         );
       }
 
-      const evento = await prisma.eventos.findUnique({
-        where: { id: input.eventId },
-        include: {
-          evento_oficinas: {
-            include: {
-              oficinas: true,
-            },
-          },
-          evento_cargos: {
-            include: {
-              cargos: true,
-            },
-          },
-          evento_oficina_cargos: {
-            include: {
-              cargos: true,
-            },
-          },
-          evento_controles: {
-            select: {
-              id: true,
-              nombre: true,
-              orden: true,
-            },
-            orderBy: {
-              orden: "asc",
-            },
-          },
-        },
-      });
+      const evento = await getEventAttendanceContext(input.eventId);
 
       if (!evento) {
         throw new HttpError(404, "No se encontro el evento seleccionado.");
@@ -1579,9 +1670,7 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(404, "No se encontro una persona con ese CI.");
       }
 
-      if (input.estado === estado_asistencia.ASISTIO) {
-        await assertPersonCanAttendEvent(persona, evento);
-      }
+      await assertPersonCanAttendEvent(persona, evento);
 
       const operador = await assertEventOperator(authenticatedUser.id);
       const registeredAt = new Date();
@@ -1627,7 +1716,7 @@ const server = http.createServer(async (request, response) => {
           },
         });
 
-        await tx.asistencia_controles.upsert({
+        const controlAttendance = await tx.asistencia_controles.upsert({
           where: {
             asistencia_id_control_id: {
               asistencia_id: baseAttendance.id,
@@ -1656,22 +1745,22 @@ const server = http.createServer(async (request, response) => {
           },
         });
 
-        const controlAttendances = await tx.asistencia_controles.findMany({
-          where: {
-            asistencia_id: baseAttendance.id,
-          },
-          select: {
-            estado: true,
-          },
-        });
-        const resolvedAttendanceState = controlAttendances.some(
-          (item: { estado: estado_asistencia }) =>
-            item.estado === estado_asistencia.ASISTIO,
-        )
+        const attendedControl = input.estado === estado_asistencia.ASISTIO
+          ? { id: controlAttendance.id }
+          : await tx.asistencia_controles.findFirst({
+              where: {
+                asistencia_id: baseAttendance.id,
+                estado: estado_asistencia.ASISTIO,
+              },
+              select: {
+                id: true,
+              },
+            });
+        const resolvedAttendanceState = attendedControl != null
           ? estado_asistencia.ASISTIO
           : estado_asistencia.OBSERVADO;
 
-        await tx.asistencias.update({
+        const updatedAttendance = await tx.asistencias.update({
           where: { id: baseAttendance.id },
           data: {
             nombre_snapshot: buildResolvedPersonDisplayName(persona),
@@ -1682,37 +1771,36 @@ const server = http.createServer(async (request, response) => {
             registrado_por_id: operador.id,
             registrado_en: registeredAt,
           },
+          select: {
+            id: true,
+            persona_id: true,
+            evento_id: true,
+            estado: true,
+            registrado_en: true,
+          },
         });
 
-        return tx.asistencias.findUniqueOrThrow({
-          where: {
-            id: baseAttendance.id,
+        return {
+          id: updatedAttendance.id,
+          personaId: updatedAttendance.persona_id,
+          eventoId: updatedAttendance.evento_id,
+          estado: updatedAttendance.estado,
+          registradoEn: updatedAttendance.registrado_en.toISOString(),
+          control: {
+            id: controlAttendance.id,
+            controlId: controlAttendance.control_id,
+            controlNombre: selectedControl.nombre,
+            controlOrden: selectedControl.orden,
+            estado: controlAttendance.estado,
+            observacion: controlAttendance.observacion,
+            registradoEn: controlAttendance.registrado_en.toISOString(),
           },
-          include: {
-            personas: {
-              include: {
-                departamentos: true,
-                usuario: {
-                  include: userWithOfficeInclude,
-                },
-              },
-            },
-            eventos: true,
-            asistencia_controles: {
-              include: {
-                evento_controles: true,
-              },
-              orderBy: {
-                control_id: "asc",
-              },
-            },
-          },
-        });
+        };
       });
       invalidateEventSummaryCache();
 
       sendJson(response, 200, {
-        data: serializeAttendanceRecord(asistencia),
+        data: asistencia,
       });
       return;
     }
@@ -1762,8 +1850,11 @@ const server = http.createServer(async (request, response) => {
       }
 
       let eventAttendance = null;
+      let eventPermission = null;
 
       if (eventId != null) {
+        eventPermission = await resolvePersonEventPermission(persona, eventId);
+
         const attendance = await prisma.asistencias.findUnique({
           where: {
             evento_id_persona_id: {
@@ -1789,7 +1880,10 @@ const server = http.createServer(async (request, response) => {
       }
 
       sendJson(response, 200, {
-        data: serializeQrPersonDetail(persona, { eventAttendance }),
+        data: serializeQrPersonDetail(persona, {
+          eventAttendance,
+          eventPermission,
+        }),
       });
       return;
     }
@@ -1824,8 +1918,11 @@ const server = http.createServer(async (request, response) => {
       }
 
       let eventAttendance = null;
+      let eventPermission = null;
 
       if (eventId != null) {
+        eventPermission = await resolvePersonEventPermission(persona, eventId);
+
         const attendance = await prisma.asistencias.findUnique({
           where: {
             evento_id_persona_id: {
@@ -1851,7 +1948,10 @@ const server = http.createServer(async (request, response) => {
       }
 
       sendJson(response, 200, {
-        data: serializeQrPersonDetail(persona, { eventAttendance }),
+        data: serializeQrPersonDetail(persona, {
+          eventAttendance,
+          eventPermission,
+        }),
       });
       return;
     }
@@ -1865,23 +1965,7 @@ const server = http.createServer(async (request, response) => {
         userId: authenticatedUserForLog?.id,
         userEmail: authenticatedUserForLog?.email,
       }));
-      if (
-        recordSuspiciousHttpError(
-          request,
-          response,
-          requestId,
-          url,
-          error,
-          authenticatedUserForLog,
-        )
-      ) {
-        sendJson(response, 429, {
-          error: "IP bloqueada temporalmente por actividad sospechosa.",
-        });
-        return;
-      }
-
-      sendJson(response, error.statusCode, { error: error.message });
+      sendErrorJson(response, error.statusCode, error.message);
       return;
     }
 
@@ -2053,6 +2137,19 @@ type GenerateDynamicQrInput = {
   accuracy: number | null;
 };
 
+type CreateExitPermitInput = {
+  motivo: (typeof motivo_salida)[keyof typeof motivo_salida];
+  lugarDestino: string;
+  descripcion: string | null;
+  fechaPermiso: Date;
+  horaInicio: string;
+  horaFinal: string | null;
+};
+
+type UpdateExitPermitStatusInput = {
+  estado: typeof estado_salida.APROBADO | typeof estado_salida.RECHAZADO;
+};
+
 type RegisterUserInput = {
   email: string;
   password: string;
@@ -2061,12 +2158,14 @@ type RegisterUserInput = {
   segundoApellido: string;
   tercerApellido: string | null;
   ci: string;
+  celular: string;
   tipoVinculo: string;
   unidad: string | null;
   oficinaId: number | null;
   oficinaComisionId: number | null;
   cargoCodigo: string | null;
   cargo: string;
+  lugar: string | null;
   numeroItem: string | null;
   activo: boolean;
   fotoData: string;
@@ -2188,13 +2287,7 @@ function buildSafeRequestPath(url: URL) {
 }
 
 function getClientIp(request: IncomingMessage) {
-  const forwardedFor = readSingleHeader(request.headers["x-forwarded-for"]);
-
-  if (forwardedFor != null && forwardedFor.trim().length > 0) {
-    return forwardedFor.split(",")[0]?.trim();
-  }
-
-  return request.socket.remoteAddress;
+  return readClientIp(request);
 }
 
 function buildRequestLogFields(
@@ -2245,6 +2338,18 @@ function sendJson(
   response.setHeader("Pragma", "no-cache");
   response.writeHead(statusCode);
   response.end(JSON.stringify(payload, null, 2));
+}
+
+function sendErrorJson(
+  response: ServerResponse,
+  statusCode: number,
+  message: string,
+) {
+  sendJson(response, statusCode, {
+    status: statusCode,
+    message,
+    error: message,
+  });
 }
 
 function sendPdf(
@@ -2326,6 +2431,15 @@ function invalidateEventSummaryCache() {
   eventSummaryCache = null;
 }
 
+function invalidateEventAttendanceContextCache(eventId?: number) {
+  if (eventId == null) {
+    eventAttendanceContextCache.clear();
+    return;
+  }
+
+  eventAttendanceContextCache.delete(eventId);
+}
+
 function parseAllowedCorsOrigins(value: string | undefined) {
   const defaultOrigins = [
     "https://innovafuncionario.cochabamba.bo",
@@ -2351,333 +2465,64 @@ function normalizeOptionalEnvValue(value: string | undefined) {
     : normalizedValue;
 }
 
-function rejectSuspiciousIpIfBanned(
-  request: IncomingMessage,
-  response: ServerResponse,
-  requestId: string,
-) {
-  const now = Date.now();
-  pruneSuspiciousIpBuckets(now);
-  const bucket = suspiciousIpBuckets.get(readClientIp(request));
-
-  if (bucket?.bannedUntil == null || bucket.bannedUntil <= now) {
-    return false;
-  }
-
-  setSuspiciousIpBanHeaders(response, bucket, now);
-  logWarning(
-    "IP bloqueada temporalmente por actividad sospechosa.",
-    buildRequestLogFields(request, requestId, {
-      statusCode: 429,
-      strikes: bucket.strikes,
-      bannedUntil: new Date(bucket.bannedUntil).toISOString(),
-    }),
-  );
-  sendJson(response, 429, {
-    error: "IP bloqueada temporalmente por actividad sospechosa.",
-  });
-
-  return true;
-}
-
-function recordSuspiciousPathActivity(
-  request: IncomingMessage,
-  response: ServerResponse,
-  requestId: string,
-  url: URL,
-) {
-  const strikes = readSuspiciousPathStrikes(url);
-
-  if (strikes <= 0) {
-    return false;
-  }
-
-  return recordSuspiciousIpActivity(request, response, requestId, {
-    reason: "Ruta sospechosa.",
-    strikes,
-    extraFields: { path: buildSafeRequestPath(url) },
-  });
-}
-
-function recordSuspiciousHttpError(
-  request: IncomingMessage,
-  response: ServerResponse,
-  requestId: string,
-  url: URL,
-  error: HttpError,
-  authenticatedUser: AuthenticatedUser | null,
-) {
-  const strikes = readSuspiciousHttpErrorStrikes(request, url, error, authenticatedUser);
-
-  if (strikes <= 0) {
-    return false;
-  }
-
-  return recordSuspiciousIpActivity(request, response, requestId, {
-    reason: error.message,
-    strikes,
-    extraFields: {
-      path: buildSafeRequestPath(url),
-      statusCode: error.statusCode,
-    },
-  });
-}
-
-function recordSuspiciousIpActivity(
-  request: IncomingMessage,
-  response: ServerResponse,
-  requestId: string,
-  input: {
-    reason: string;
-    strikes: number;
-    extraFields?: Record<string, unknown>;
-  },
-) {
-  const now = Date.now();
-  pruneSuspiciousIpBuckets(now);
-  const ip = readClientIp(request);
-  const currentBucket = suspiciousIpBuckets.get(ip);
-  const bucket =
-    currentBucket == null || currentBucket.resetAt <= now
-      ? {
-          strikes: 0,
-          resetAt: now + SUSPICIOUS_IP_WINDOW_MS,
-        }
-      : currentBucket;
-
-  bucket.strikes += input.strikes;
-  suspiciousIpBuckets.set(ip, bucket);
-
-  if (bucket.strikes < SUSPICIOUS_IP_MAX_STRIKES) {
-    return false;
-  }
-
-  bucket.bannedUntil = now + SUSPICIOUS_IP_BAN_MS;
-  setSuspiciousIpBanHeaders(response, bucket, now);
-  logWarning(
-    "IP bloqueada temporalmente por actividad sospechosa.",
-    buildRequestLogFields(request, requestId, {
-      statusCode: 429,
-      reason: input.reason,
-      strikes: bucket.strikes,
-      bannedUntil: new Date(bucket.bannedUntil).toISOString(),
-      ...input.extraFields,
-    }),
-  );
-
-  return true;
-}
-
-function readSuspiciousPathStrikes(url: URL) {
-  const pathname = url.pathname.toLowerCase();
-
-  if (pathname === "/" || pathname === "/health" || pathname.startsWith("/api/")) {
-    return 0;
-  }
-
-  if (pathname === "/favicon.ico" || pathname === "/robots.txt") {
-    return 0;
-  }
-
-  if (
-    pathname.includes("..") ||
-    pathname.includes(";") ||
-    pathname.includes("\\") ||
-    pathname.includes("/content/dam") ||
-    pathname.includes("wp-") ||
-    pathname.includes("php") ||
-    pathname.includes(".env") ||
-    pathname.includes("config") ||
-    pathname.includes("media-cache") ||
-    pathname.includes("validator") ||
-    pathname.includes("tidy") ||
-    pathname.includes("infinity")
-  ) {
-    return SUSPICIOUS_IP_MAX_STRIKES;
-  }
-
-  return 2;
-}
-
-function readSuspiciousHttpErrorStrikes(
-  request: IncomingMessage,
-  url: URL,
-  error: HttpError,
-  authenticatedUser: AuthenticatedUser | null,
-) {
-  if (authenticatedUser != null && authenticatedUser.id > 0) {
-    return 0;
-  }
-
-  if (error.statusCode === 404) {
-    return readSuspiciousPathStrikes(url) > 0 ? 2 : 0;
-  }
-
-  if (error.statusCode === 403) {
-    return 2;
-  }
-
-  if (error.statusCode === 400 && isEncryptedJsonEnvelopeError(error)) {
-    return 2;
-  }
-
-  if (error.statusCode !== 401) {
-    return 0;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/auth/login") {
-    return 3;
-  }
-
-  const hasToken = readOptionalBearerToken(request) != null;
-
-  if (!hasToken) {
-    return 1;
-  }
-
-  if (
-    error.message.includes("Token de sesion invalido") ||
-    error.message.includes("Sesion invalida")
-  ) {
-    return 2;
-  }
-
-  return 0;
-}
-
-function isEncryptedJsonEnvelopeError(error: HttpError) {
-  return (
-    error.message.includes("JSON") ||
-    error.message.includes("cifrado") ||
-    error.message.includes("descifrar")
-  );
-}
-
-function pruneSuspiciousIpBuckets(now: number) {
-  for (const [key, bucket] of suspiciousIpBuckets) {
-    if (
-      bucket.resetAt <= now &&
-      (bucket.bannedUntil == null || bucket.bannedUntil <= now)
-    ) {
-      suspiciousIpBuckets.delete(key);
-    }
-  }
-}
-
-function setSuspiciousIpBanHeaders(
-  response: ServerResponse,
-  bucket: SuspiciousIpBucket,
-  now: number,
-) {
-  if (bucket.bannedUntil == null) {
-    return;
-  }
-
-  response.setHeader("Retry-After", Math.max(
-    1,
-    Math.ceil((bucket.bannedUntil - now) / 1000),
-  ).toString());
-}
-
-function enforceRateLimit(
-  request: IncomingMessage,
-  response: ServerResponse,
-  authenticatedUser: AuthenticatedUser | null,
-) {
-  const key = readRateLimitKey(request, authenticatedUser);
-  const scope = authenticatedUser == null ? "ip" : "user";
-  const maxRequests =
-    scope === "ip" ? IP_RATE_LIMIT_MAX_REQUESTS : RATE_LIMIT_MAX_REQUESTS;
-  const now = Date.now();
-  pruneExpiredRateLimitBuckets(now);
-  const bucket = rateLimitBuckets.get(key);
-
-  if (bucket?.bannedUntil != null && bucket.bannedUntil > now) {
-    setRateLimitHeaders(response, bucket, scope, maxRequests);
-    response.setHeader(
-      "Retry-After",
-      Math.max(1, Math.ceil((bucket.bannedUntil - now) / 1000)).toString(),
-    );
-    throw new HttpError(
-      429,
-      "Demasiadas solicitudes. Intenta nuevamente mas tarde.",
-    );
-  }
-
-  if (bucket == null || bucket.resetAt <= now) {
-    const nextBucket = {
-      count: 1,
-      resetAt: now + RATE_LIMIT_WINDOW_MS,
-    };
-    rateLimitBuckets.set(key, nextBucket);
-    setRateLimitHeaders(response, nextBucket, scope, maxRequests);
-    return;
-  }
-
-  bucket.count += 1;
-  setRateLimitHeaders(response, bucket, scope, maxRequests);
-
-  if (bucket.count > maxRequests) {
-    bucket.bannedUntil = now + RATE_LIMIT_BAN_MS;
-    response.setHeader(
-      "Retry-After",
-      Math.max(1, Math.ceil(RATE_LIMIT_BAN_MS / 1000)).toString(),
-    );
-    throw new HttpError(
-      429,
-      "Demasiadas solicitudes. Intenta nuevamente mas tarde.",
-    );
-  }
-}
-
-function readRateLimitKey(
-  request: IncomingMessage,
-  authenticatedUser: AuthenticatedUser | null,
-) {
-  if (authenticatedUser != null && authenticatedUser.id > 0) {
-    return `user:${authenticatedUser.id}`;
-  }
-
-  return `ip:${readClientIp(request)}`;
-}
-
-function pruneExpiredRateLimitBuckets(now: number) {
-  for (const [key, bucket] of rateLimitBuckets) {
-    if (bucket.resetAt <= now && (bucket.bannedUntil == null || bucket.bannedUntil <= now)) {
-      rateLimitBuckets.delete(key);
-    }
-  }
-}
-
-function setRateLimitHeaders(
-  response: ServerResponse,
-  bucket: RateLimitBucket,
-  scope: "ip" | "user",
-  maxRequests: number,
-) {
-  response.setHeader("X-RateLimit-Limit", maxRequests.toString());
-  response.setHeader("X-RateLimit-Scope", scope);
-  response.setHeader(
-    "X-RateLimit-Remaining",
-    Math.max(0, maxRequests - bucket.count).toString(),
-  );
-  response.setHeader(
-    "X-RateLimit-Reset",
-    Math.ceil(bucket.resetAt / 1000).toString(),
-  );
-}
-
 function readClientIp(request: IncomingMessage) {
+  const remoteAddress = request.socket.remoteAddress;
   const forwardedFor = request.headers["x-forwarded-for"];
   const firstForwardedIp = Array.isArray(forwardedFor)
     ? forwardedFor[0]
     : forwardedFor?.split(",")[0];
 
+  if (
+    remoteAddress != null &&
+    isTrustedProxyAddress(remoteAddress) &&
+    firstForwardedIp != null &&
+    firstForwardedIp.trim().length > 0
+  ) {
+    return firstForwardedIp.trim();
+  }
+
   return (
-    firstForwardedIp?.trim() ??
-    request.socket.remoteAddress ??
+    remoteAddress ??
     "unknown"
   );
+}
+
+function isTrustedProxyAddress(address: string) {
+  const normalizedAddress = normalizeSocketAddress(address);
+
+  if (
+    normalizedAddress === "::1" ||
+    normalizedAddress === "127.0.0.1" ||
+    normalizedAddress === "localhost"
+  ) {
+    return true;
+  }
+
+  if (
+    normalizedAddress.startsWith("10.") ||
+    normalizedAddress.startsWith("192.168.") ||
+    normalizedAddress.startsWith("169.254.")
+  ) {
+    return true;
+  }
+
+  const match172 = /^172\.(\d{1,3})\./.exec(normalizedAddress);
+
+  if (match172 != null) {
+    const secondOctet = Number.parseInt(match172[1] ?? "", 10);
+
+    return secondOctet >= 16 && secondOctet <= 31;
+  }
+
+  return (
+    normalizedAddress.startsWith("fc") ||
+    normalizedAddress.startsWith("fd") ||
+    normalizedAddress.startsWith("fe80:")
+  );
+}
+
+function normalizeSocketAddress(address: string) {
+  return address.trim().toLowerCase().replace(/^::ffff:/, "");
 }
 
 async function authenticateRequestIfRequired(
@@ -2905,6 +2750,16 @@ async function ensureRuntimeSchema() {
 
   await pool.query(`
     ALTER TABLE "usuarios"
+    ADD COLUMN IF NOT EXISTS "lugar" VARCHAR(120)
+  `);
+
+  await pool.query(`
+    ALTER TABLE "usuarios"
+    ADD COLUMN IF NOT EXISTS "celular" VARCHAR(30)
+  `);
+
+  await pool.query(`
+    ALTER TABLE "usuarios"
       ADD COLUMN IF NOT EXISTS "session_version" INTEGER NOT NULL DEFAULT 0
   `);
 
@@ -2980,6 +2835,108 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_evento_oficina_cargos_cargo_codigo"
       ON "evento_oficina_cargos" ("cargo_codigo")
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'motivo_salida') THEN
+        CREATE TYPE "motivo_salida" AS ENUM ('TRABAJO', 'PARTICULAR');
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'estado_salida') THEN
+        CREATE TYPE "estado_salida" AS ENUM ('PENDIENTE', 'APROBADO', 'RECHAZADO');
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "salidas" (
+      "id" SERIAL PRIMARY KEY,
+      "usuario_id" INTEGER NOT NULL,
+      "motivo" "motivo_salida" NOT NULL,
+      "estado" "estado_salida" NOT NULL DEFAULT 'PENDIENTE',
+      "lugar_destino" VARCHAR(255) NOT NULL,
+      "descripcion" TEXT,
+      "fecha_permiso" DATE NOT NULL,
+      "hora_inicio" VARCHAR(5) NOT NULL,
+      "hora_final" VARCHAR(5),
+      "solicitante_nombre_completo" VARCHAR(220) NOT NULL,
+      "solicitante_numero_item" VARCHAR(50),
+      "solicitante_cargo" VARCHAR(120),
+      "solicitante_oficina_id" INTEGER,
+      "solicitante_oficina" VARCHAR(150),
+      "aprobado_por_id" INTEGER,
+      "aprobado_por_nombre" VARCHAR(220),
+      "aprobado_en" TIMESTAMPTZ(6),
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "salidas_usuario_id_fkey"
+        FOREIGN KEY ("usuario_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE "salidas"
+      ADD COLUMN IF NOT EXISTS "estado" "estado_salida" NOT NULL DEFAULT 'PENDIENTE',
+      ADD COLUMN IF NOT EXISTS "solicitante_oficina_id" INTEGER,
+      ADD COLUMN IF NOT EXISTS "aprobado_por_id" INTEGER,
+      ADD COLUMN IF NOT EXISTS "aprobado_por_nombre" VARCHAR(220),
+      ADD COLUMN IF NOT EXISTS "aprobado_en" TIMESTAMPTZ(6)
+  `);
+
+  await pool.query(`
+    ALTER TABLE "salidas"
+      DROP COLUMN IF EXISTS "solicitante_ci"
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'salidas_aprobado_por_id_fkey'
+      ) THEN
+        ALTER TABLE "salidas"
+          ADD CONSTRAINT "salidas_aprobado_por_id_fkey"
+          FOREIGN KEY ("aprobado_por_id")
+          REFERENCES "usuarios" ("id")
+          ON UPDATE NO ACTION;
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_estado"
+      ON "salidas" ("estado")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_fecha_permiso"
+      ON "salidas" ("fecha_permiso")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_solicitante_oficina_id"
+      ON "salidas" ("solicitante_oficina_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_aprobado_por_id"
+      ON "salidas" ("aprobado_por_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_usuario_id"
+      ON "salidas" ("usuario_id")
   `);
 }
 
@@ -3170,7 +3127,7 @@ function parseEventInputPayload(payload: unknown) {
   const direccion = readRequiredString(body, "direccion", 5, 255);
   const latitud = readRequiredFloat(body, "latitud", -90, 90);
   const longitud = readRequiredFloat(body, "longitud", -180, 180);
-  const oficinaIds = readRequiredIntList(body, "oficinaIds", "oficinaId");
+  const oficinaIds = readOptionalIntList(body, "oficinaIds");
   const oficinaIdsFinales = readOptionalIntList(
     body,
     "oficinaIdsFinales",
@@ -3182,6 +3139,20 @@ function parseEventInputPayload(payload: unknown) {
   const cargoCodigos = readOptionalStringList(body, "cargoCodigos", "cargoCodigo");
   const cargoCodigosPorOficina = parseOfficeJobTitleInput(body);
   const controles = parseEventControlsInput(body);
+
+  if (oficinaIds.length === 0 && cargoCodigos.length === 0) {
+    throw new HttpError(
+      400,
+      "Debes seleccionar al menos una oficina o un cargo para el evento.",
+    );
+  }
+
+  if (oficinaIds.length === 0 && cargoCodigosPorOficina.length > 0) {
+    throw new HttpError(
+      400,
+      "Los cargos por oficina requieren seleccionar una o mas oficinas.",
+    );
+  }
 
   return {
     nombre,
@@ -3339,6 +3310,54 @@ async function createEventControls(
       orden: control.orden,
     })),
   });
+}
+
+async function getEventAttendanceContext(eventId: number) {
+  const cachedEvent = readCacheValue(eventAttendanceContextCache.get(eventId) ?? null);
+
+  if (cachedEvent != null) {
+    return cachedEvent;
+  }
+
+  const event = await prisma.eventos.findUnique({
+    where: { id: eventId },
+    include: {
+      evento_oficinas: {
+        include: {
+          oficinas: true,
+        },
+      },
+      evento_cargos: {
+        include: {
+          cargos: true,
+        },
+      },
+      evento_oficina_cargos: {
+        include: {
+          cargos: true,
+        },
+      },
+      evento_controles: {
+        select: {
+          id: true,
+          nombre: true,
+          orden: true,
+        },
+        orderBy: {
+          orden: "asc",
+        },
+      },
+    },
+  });
+
+  if (event != null) {
+    eventAttendanceContextCache.set(
+      eventId,
+      createCacheEntry(event, EVENT_ATTENDANCE_CONTEXT_CACHE_TTL_MS),
+    );
+  }
+
+  return event;
 }
 
 async function syncEventJobTitles(
@@ -3538,6 +3557,37 @@ function normalizeLooseMatchText(value: unknown) {
     .replace(/[^A-Z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isPorteroCargo(
+  cargo: string | null | undefined,
+  cargoCodigo: string | null | undefined,
+) {
+  const porteroCargoCodes = new Set(["CA116", "CA082", "CA096", "CA087"]);
+  const normalizedCode = normalizeOptionalText(cargoCodigo)?.toUpperCase();
+
+  return (
+    (normalizedCode != null && porteroCargoCodes.has(normalizedCode)) ||
+    normalizeLooseMatchText(cargo)?.startsWith("PORTERO") === true
+  );
+}
+
+function resolvePorteroLugar(
+  cargo: string | null | undefined,
+  cargoCodigo: string | null | undefined,
+  lugar: string | null,
+) {
+  if (!isPorteroCargo(cargo, cargoCodigo)) {
+    return null;
+  }
+
+  const normalizedLugar = normalizeOptionalText(lugar);
+
+  if (normalizedLugar == null) {
+    throw new HttpError(400, "Debes ingresar el lugar del portero.");
+  }
+
+  return normalizedLugar;
 }
 
 function matchesCargoSelection(
@@ -3744,9 +3794,9 @@ async function resolveCredentialTargetUser(
   const targetLogin = requestedLogin ?? authenticatedUser.email;
 
   if (requestedLogin != null && requestedLogin !== authenticatedUser.email) {
-    await assertAdminRequester(
+    await assertCredentialsRequester(
       authenticatedUser.email,
-      "Solo un administrador puede descargar credenciales de otros usuarios.",
+      "Solo un administrador o usuario de credenciales puede descargar credenciales de otros usuarios.",
     );
   }
 
@@ -3767,6 +3817,36 @@ async function resolveCredentialTargetUser(
   }
 
   return user;
+}
+
+function applyCredentialPdfOverrides(user: any, payload: unknown) {
+  const body = expectRecord(payload);
+  const nombres = normalizeOptionalText(body["nombreCompleto"]);
+  const primerApellido = normalizeOptionalText(body["primerApellido"]);
+  const segundoApellido = normalizeOptionalText(body["segundoApellido"]);
+  const tercerApellido = normalizeOptionalText(body["tercerApellido"]);
+
+  if (
+    nombres == null &&
+    primerApellido == null &&
+    segundoApellido == null &&
+    tercerApellido == null
+  ) {
+    return user;
+  }
+
+  const pdfUser = {
+    ...user,
+    nombres: nombres ?? user.nombres,
+    primer_apellido: primerApellido ?? user.primer_apellido,
+    segundo_apellido: segundoApellido ?? user.segundo_apellido,
+    tercer_apellido: tercerApellido ?? user.tercer_apellido,
+  };
+
+  return {
+    ...pdfUser,
+    nombre_completo: buildUserDisplayName(pdfUser),
+  };
 }
 
 function readQueryEmailFromBody(payload: unknown) {
@@ -3836,6 +3916,46 @@ function parseGenerateDynamicQrInput(payload: unknown): GenerateDynamicQrInput {
   };
 }
 
+function parseCreateExitPermitInput(payload: unknown): CreateExitPermitInput {
+  const body = expectRecord(payload);
+
+  return {
+    motivo: readRequiredUppercaseChoice(body, "motivo", [
+      motivo_salida.TRABAJO,
+      motivo_salida.PARTICULAR,
+    ]) as (typeof motivo_salida)[keyof typeof motivo_salida],
+    lugarDestino: readRequiredString(body, "lugarDestino", 2, 255),
+    descripcion: readOptionalString(body, "descripcion", 0, 1000),
+    fechaPermiso: readRequiredDateOnly(body, "fechaPermiso"),
+    horaInicio: readRequiredTimeText(body, "horaInicio"),
+    horaFinal: readOptionalTimeText(body, "horaFinal"),
+  };
+}
+
+function parseUpdateExitPermitStatusInput(
+  payload: unknown,
+): UpdateExitPermitStatusInput {
+  const body = expectRecord(payload);
+  const estado = readRequiredUppercaseChoice(body, "estado", [
+    estado_salida.APROBADO,
+    estado_salida.RECHAZADO,
+  ]);
+
+  return {
+    estado: estado as typeof estado_salida.APROBADO | typeof estado_salida.RECHAZADO,
+  };
+}
+
+function readExitPermitQueryDate(url: URL) {
+  const rawValue = url.searchParams.get("fecha")?.trim();
+
+  if (rawValue == null || rawValue.length === 0) {
+    return readDateOnlyString(toDateOnlyText(new Date()), "fecha");
+  }
+
+  return readDateOnlyString(rawValue, "fecha");
+}
+
 function parseRegisterUserInput(payload: unknown): RegisterUserInput {
   const body = expectRecord(payload);
   const tipoVinculo = readRequiredUppercaseChoice(
@@ -3848,6 +3968,7 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
   const unidad = readOptionalString(body, "unidad", 0, 120);
   const cargoCodigo = readOptionalString(body, "cargoCodigo", 1, 50);
   const cargo = readOptionalString(body, "cargo", 2, 120);
+  const lugar = readOptionalString(body, "lugar", 0, 120);
   const ci = readRequiredString(body, "ci", 3, 30);
   const primerApellido = readRequiredString(body, "primerApellido", 2, 80);
   const loginIdentifier = normalizeEmailValue(normalizeCiValue(ci));
@@ -3873,12 +3994,14 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
     segundoApellido: readRequiredString(body, "segundoApellido", 2, 80),
     tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
     ci: readRequiredString(body, "ci", 3, 30),
+    celular: readRequiredString(body, "celular", 5, 30),
     tipoVinculo,
     unidad,
     oficinaId,
     oficinaComisionId,
     cargoCodigo,
     cargo: cargo ?? "",
+    lugar,
     numeroItem:
       tipoVinculo === "ITEM"
         ? readRequiredString(body, "numeroItem", 1, 50)
@@ -3894,6 +4017,7 @@ function parseManagedUserInput(payload: unknown): ManagedUserInput {
   const requestedRole = readRequiredUppercaseChoice(body, "rol", [
     rol_usuario.ADMIN,
     rol_usuario.CONTROL,
+    rol_usuario.CREDENCIALES,
     rol_usuario.OPERADOR,
   ]) as (typeof rol_usuario)[keyof typeof rol_usuario];
   const requesterEmail = readRequiredLoginIdentifier(body, "requesterEmail");
@@ -3926,9 +4050,11 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
   const unidad = readOptionalString(body, "unidad", 0, 120);
   const cargoCodigo = readOptionalString(body, "cargoCodigo", 1, 50);
   const cargo = readOptionalString(body, "cargo", 2, 120);
+  const lugar = readOptionalString(body, "lugar", 0, 120);
   const requestedRole = readRequiredUppercaseChoice(body, "rol", [
     rol_usuario.ADMIN,
     rol_usuario.CONTROL,
+    rol_usuario.CREDENCIALES,
     rol_usuario.OPERADOR,
   ]) as (typeof rol_usuario)[keyof typeof rol_usuario];
   const ci = readRequiredString(body, "ci", 3, 30);
@@ -3952,12 +4078,14 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     segundoApellido: readRequiredString(body, "segundoApellido", 2, 80),
     tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
     ci,
+    celular: readRequiredString(body, "celular", 5, 30),
     tipoVinculo,
     unidad,
     oficinaId,
     oficinaComisionId,
     cargoCodigo,
     cargo: cargo ?? "",
+    lugar,
     numeroItem:
       tipoVinculo === "ITEM"
         ? readRequiredString(body, "numeroItem", 1, 50)
@@ -4324,6 +4452,76 @@ function readOptionalDate(source: JsonRecord, key: string) {
   return parsedDate;
 }
 
+function readRequiredDateOnly(source: JsonRecord, key: string) {
+  const value = source[key];
+
+  if (typeof value !== "string") {
+    throw new HttpError(400, `El campo ${key} es obligatorio.`);
+  }
+
+  return readDateOnlyString(value, key);
+}
+
+function readDateOnlyString(value: string, key: string) {
+  const normalizedValue = value.trim();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedValue)) {
+    throw new HttpError(400, `El campo ${key} debe tener formato YYYY-MM-DD.`);
+  }
+
+  const parsedDate = new Date(`${normalizedValue}T00:00:00.000Z`);
+
+  if (
+    Number.isNaN(parsedDate.getTime()) ||
+    toDateOnlyText(parsedDate) !== normalizedValue
+  ) {
+    throw new HttpError(400, `El campo ${key} no tiene una fecha valida.`);
+  }
+
+  return parsedDate;
+}
+
+function readRequiredTimeText(source: JsonRecord, key: string) {
+  const value = readRequiredString(source, key, 5, 5);
+
+  if (!isValidTimeText(value)) {
+    throw new HttpError(400, `El campo ${key} debe tener formato HH:mm.`);
+  }
+
+  return value;
+}
+
+function readOptionalTimeText(source: JsonRecord, key: string) {
+  const value = readOptionalString(source, key, 5, 5);
+
+  if (value == null) {
+    return null;
+  }
+
+  if (!isValidTimeText(value)) {
+    throw new HttpError(400, `El campo ${key} debe tener formato HH:mm.`);
+  }
+
+  return value;
+}
+
+function isValidTimeText(value: string) {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+
+  if (!match) {
+    return false;
+  }
+
+  const hours = Number.parseInt(match[1] ?? "", 10);
+  const minutes = Number.parseInt(match[2] ?? "", 10);
+
+  return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
+}
+
+function toDateOnlyText(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
 function readRequiredBoolean(source: JsonRecord, key: string) {
   const value = source[key];
 
@@ -4474,6 +4672,25 @@ async function assertAdminRequester(
   return user;
 }
 
+async function assertCredentialsRequester(
+  email: string,
+  message = "Solo un administrador o usuario de credenciales puede realizar esta accion.",
+) {
+  const user = await prisma.usuarios.findUnique({
+    where: { email: email.toLowerCase() },
+  });
+
+  if (
+    !user ||
+    (user.rol !== rol_usuario.ADMIN && user.rol !== rol_usuario.CREDENCIALES) ||
+    user.activo !== true
+  ) {
+    throw new HttpError(403, message);
+  }
+
+  return user;
+}
+
 function isAdminUser(user: AuthenticatedUser) {
   return user.rol === rol_usuario.ADMIN;
 }
@@ -4486,6 +4703,43 @@ function assertAuthenticatedRequester(user: AuthenticatedUser) {
   if (user.id <= 0 || user.activo !== true) {
     throw new HttpError(401, "Debes iniciar sesion para continuar.");
   }
+}
+
+function assertExitPermitApprover(user: any) {
+  if (!user || user.activo !== true || user.rol !== rol_usuario.OPERADOR) {
+    throw new HttpError(403, "Solo un jefe puede revisar salidas.");
+  }
+
+  if (!isBossJobTitle(user.cargo)) {
+    throw new HttpError(403, "Solo usuarios con cargo de jefe pueden revisar salidas.");
+  }
+
+  if (resolveLinkedOfficeId(user) == null) {
+    throw new HttpError(403, "Tu usuario no tiene oficina asignada para revisar salidas.");
+  }
+}
+
+function assertCanReviewExitPermit(approver: any, salida: any) {
+  const approverOfficeId = resolveLinkedOfficeId(approver);
+
+  if (
+    approverOfficeId == null ||
+    salida.solicitante_oficina_id == null ||
+    approverOfficeId !== salida.solicitante_oficina_id
+  ) {
+    throw new HttpError(
+      403,
+      "Solo puedes revisar salidas de funcionarios de tu misma oficina.",
+    );
+  }
+
+  if (salida.usuario_id === approver.id) {
+    throw new HttpError(403, "No puedes revisar tu propia salida.");
+  }
+}
+
+function isBossJobTitle(value: string | null | undefined) {
+  return normalizeTextForComparison(value).includes("jefe");
 }
 
 function assertPersonLookupRequester(user: AuthenticatedUser) {
@@ -4693,32 +4947,14 @@ async function issueDynamicQrForUser(
   tx: any,
   person: any,
   user: any,
-  input: GenerateDynamicQrInput,
+  _input: GenerateDynamicQrInput,
 ) {
-  const activeDynamicQr = readActiveDynamicQrSession(person, user);
-
-  if (isReusableDynamicQrSession(activeDynamicQr)) {
-    return activeDynamicQr;
-  }
-
   const qrCode = person.codigo_qr ?? buildUserQrCode(user);
-  const issuedAt = new Date();
-  const expiresAt = new Date(
-    issuedAt.getTime() + (DYNAMIC_QR_TTL_SECONDS * 1000),
-  );
-  const qrPayload = buildDynamicQrPayload(qrCode, expiresAt);
+  const staticQr = buildStaticDynamicQrSession(person, user);
   const nextMetadata = buildStoredUserQrMetadata(
     user,
     qrCode,
     person.datos_qr ?? null,
-    {
-      qrPayload,
-      issuedAt,
-      expiresAt,
-      latitud: input.latitud,
-      longitud: input.longitud,
-      accuracy: input.accuracy,
-    },
   );
 
   await tx.personas.update({
@@ -4730,60 +4966,32 @@ async function issueDynamicQrForUser(
     },
   });
 
-  return {
-    qrCode,
-    qrPayload,
-    generatedAt: issuedAt.toISOString(),
-    expiresAt: expiresAt.toISOString(),
-    ttlSeconds: DYNAMIC_QR_TTL_SECONDS,
-    location: {
-      latitud: input.latitud,
-      longitud: input.longitud,
-      accuracy: input.accuracy,
-    },
-  };
-}
-
-function isReusableDynamicQrSession(
-  session: ReturnType<typeof readActiveDynamicQrSession>,
-) {
-  return (
-    session != null &&
-    new Date(session.expiresAt).getTime() - Date.now() >
-      DYNAMIC_QR_MIN_REUSE_SECONDS * 1000
-  );
+  return staticQr;
 }
 
 function readActiveDynamicQrSession(person: any, user: any) {
-  const qrCode = person.codigo_qr ?? buildUserQrCode(user);
-  const dynamicQr = readDynamicQrMetadata(person.datos_qr);
-  const generatedAt = readIsoDate(dynamicQr?.lastGeneratedAt);
-  const expiresAt = readIsoDate(dynamicQr?.lastExpiresAt);
-  const location = readLooseJsonRecord(dynamicQr?.lastLocation);
-  const latitud = readFiniteNumber(location?.latitud);
-  const longitud = readFiniteNumber(location?.longitud);
-  const accuracy = readFiniteNumber(location?.accuracy);
+  return buildStaticDynamicQrSession(person, user);
+}
 
-  if (
-    !generatedAt ||
-    !expiresAt ||
-    expiresAt.getTime() <= Date.now() ||
-    latitud == null ||
-    longitud == null
-  ) {
-    return null;
-  }
+function buildStaticDynamicQrSession(person: any, user: any) {
+  const qrCode = person.codigo_qr ?? buildUserQrCode(user);
+  const generatedAt =
+    person.created_at instanceof Date
+      ? person.created_at
+      : user.created_at instanceof Date
+        ? user.created_at
+        : new Date();
 
   return {
     qrCode,
-    qrPayload: buildDynamicQrPayload(qrCode, expiresAt),
+    qrPayload: buildDynamicQrPayload(qrCode, STATIC_DYNAMIC_QR_EXPIRES_AT),
     generatedAt: generatedAt.toISOString(),
-    expiresAt: expiresAt.toISOString(),
-    ttlSeconds: DYNAMIC_QR_TTL_SECONDS,
+    expiresAt: STATIC_DYNAMIC_QR_EXPIRES_AT.toISOString(),
+    ttlSeconds: 0,
     location: {
-      latitud,
-      longitud,
-      accuracy,
+      latitud: 0,
+      longitud: 0,
+      accuracy: null,
     },
   };
 }
@@ -5276,14 +5484,14 @@ function assertScannedQrIsDynamic(scannedValue: string) {
   if (dynamicQr == null) {
     throw new HttpError(
       400,
-      "Solo se puede registrar asistencia con el QR dinamico generado por el funcionario.",
+      "Solo se puede registrar asistencia con el QR generado por el funcionario.",
     );
   }
 
   if (isDynamicQrExpired(dynamicQr)) {
     throw new HttpError(
       410,
-      "No se puede realizar el escaneo porque el QR esta caduco. Genera o refresca un nuevo QR e intentalo otra vez.",
+      "No se puede realizar el escaneo porque el QR esta caduco. Vuelve a cargar tu QR e intentalo otra vez.",
     );
   }
 }
@@ -5345,6 +5553,13 @@ function normalizeOptionalText(value: unknown) {
 
   const normalizedValue = value.trim();
   return normalizedValue.length > 0 ? normalizedValue : null;
+}
+
+function normalizeTextForComparison(value: unknown) {
+  return (normalizeOptionalText(value) ?? "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
 }
 
 function buildLegacyUserQrCode(user: {
@@ -5412,15 +5627,16 @@ function buildUserQrPayloadObject(user: any, qrCode: string) {
     tipoVinculo: normalizeOptionalText(user.tipo_vinculo) ?? "",
     unidad: normalizeOptionalText(user.unidad) ?? "",
     cargo: normalizeOptionalText(user.cargo) ?? "",
+    lugar: normalizeOptionalText(user.lugar) ?? "",
     numeroItem: normalizeOptionalText(user.numero_item) ?? "",
     activo: user.activo === true,
   };
 }
 
 function buildUserQrPayload(_: any, qrCode: string) {
-  // El QR visible y exportable contiene solo el ID externo.
-  // La app consulta al backend con ese ID para obtener los datos completos.
-  return qrCode;
+  // El QR visible del perfil usa un token firmado y estable.
+  // No depende de ubicacion, no rota y queda valido para el escaner del evento.
+  return buildDynamicQrPayload(qrCode, STATIC_DYNAMIC_QR_EXPIRES_AT);
 }
 
 function buildStoredUserQrMetadata(
@@ -6250,7 +6466,7 @@ function resolveCommissionOfficeName(linkedUser: any) {
 function serializeAppUser(user: any, person?: any | null, authToken?: string) {
   // El frontend recibe dos piezas equivalentes:
   // 1. `qrCode` para mostrar el ID externo en texto.
-  // 2. `qrPayload` para renderizar ese mismo ID externo como imagen QR.
+  // 2. `qrPayload` para renderizar el QR firmado y permanente del perfil.
   const linkedPerson = person ?? user.persona ?? null;
   const qrCode = linkedPerson?.codigo_qr ?? buildUserQrCode(user);
   const officeName = resolveLinkedOfficeName(user);
@@ -6267,6 +6483,7 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     tercerApellido: user.tercer_apellido ?? "",
     nombreVisible: buildUserDisplayName(user),
     ci: user.ci ?? "",
+    celular: user.celular ?? "",
     tipoVinculo: user.tipo_vinculo ?? "ITEM",
     unidad: officeName ?? user.unidad ?? "",
     oficinaId: resolveLinkedOfficeId(user),
@@ -6279,6 +6496,7 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     tieneComision: commissionOfficeName != null || user.oficina_comision_id != null,
     cargoCodigo: user.cargo_codigo ?? null,
     cargo: user.cargo ?? "",
+    lugar: user.lugar ?? "",
     numeroItem: user.numero_item ?? "",
     activo: user.activo,
     fotoUrl: user.foto_url,
@@ -6286,6 +6504,30 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     qrPayload: buildUserQrPayload(user, qrCode),
     personaId: linkedPerson?.id ?? null,
     authToken,
+  };
+}
+
+function serializeExitPermit(salida: any) {
+  return {
+    id: salida.id,
+    usuarioId: salida.usuario_id,
+    motivo: salida.motivo,
+    estado: salida.estado ?? estado_salida.PENDIENTE,
+    lugarDestino: salida.lugar_destino,
+    descripcion: salida.descripcion ?? "",
+    fechaPermiso: toDateOnlyText(salida.fecha_permiso),
+    horaInicio: salida.hora_inicio,
+    horaFinal: salida.hora_final ?? "",
+    solicitanteNombreCompleto: salida.solicitante_nombre_completo,
+    solicitanteNumeroItem: salida.solicitante_numero_item ?? "",
+    solicitanteCargo: salida.solicitante_cargo ?? "",
+    solicitanteOficinaId: salida.solicitante_oficina_id ?? null,
+    solicitanteOficina: salida.solicitante_oficina ?? "",
+    aprobadoPorId: salida.aprobado_por_id ?? null,
+    aprobadoPorNombre: salida.aprobado_por_nombre ?? "",
+    aprobadoEn: salida.aprobado_en?.toISOString() ?? null,
+    createdAt: salida.created_at.toISOString(),
+    updatedAt: salida.updated_at.toISOString(),
   };
 }
 
@@ -6400,6 +6642,7 @@ function serializeQrPersonDetail(
   person: any,
   options?: {
     eventAttendance?: ReturnType<typeof serializeEventAttendanceLookup> | null;
+    eventPermission?: { permitido: boolean; mensaje: string | null } | null;
   },
 ) {
   const linkedUser = person.usuario ?? null;
@@ -6437,7 +6680,34 @@ function serializeQrPersonDetail(
       new Date()
     ).toISOString(),
     eventoRegistro: options?.eventAttendance ?? null,
+    eventoPermiso: options?.eventPermission ?? null,
   };
+}
+
+async function resolvePersonEventPermission(person: any, eventId: number) {
+  const event = await getEventAttendanceContext(eventId);
+
+  if (!event) {
+    throw new HttpError(404, "No se encontro el evento seleccionado.");
+  }
+
+  try {
+    await assertPersonCanAttendEvent(person, event);
+
+    return {
+      permitido: true,
+      mensaje: null,
+    };
+  } catch (error) {
+    if (error instanceof HttpError && error.statusCode === 403) {
+      return {
+        permitido: false,
+        mensaje: error.message,
+      };
+    }
+
+    throw error;
+  }
 }
 
 async function assertPersonCanAttendEvent(person: any, event: any) {
@@ -6522,18 +6792,9 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
     allowedCargoCodigos.size > 0 &&
     matchesCargoSelection(userCargoCodigo, userCargoName, allowedCargoCodigos, allowedCargoNames);
 
-  if (hasOfficeCargoRules) {
-    if (!matchesOffice || !matchesOfficeCargo) {
-      throw new HttpError(
-        403,
-        "Este usuario no esta permitido asistir a este evento.",
-      );
-    }
+  const matchesOfficeRule = matchesOffice && matchesOfficeCargo;
 
-    return;
-  }
-
-  if (!matchesOffice && !matchesCargo) {
+  if (!matchesOfficeRule && !matchesCargo) {
     throw new HttpError(
       403,
       "Este usuario no esta permitido asistir a este evento.",

@@ -1,5 +1,6 @@
 import 'features/auth/infrastructure/services/auth_api_service.dart';
 import 'features/events/infrastructure/services/events_api_service.dart';
+import 'features/permissions/infrastructure/services/exit_permits_api_service.dart';
 import 'features/reports/infrastructure/services/reports_api_service.dart';
 import 'features/qr_scanner/domain/repositories/qr_details_repository.dart';
 import 'features/qr_scanner/domain/usecases/get_qr_details_by_scan.dart';
@@ -15,6 +16,7 @@ Future<void> initDependencies() async {
   final qrDetailsDataSource = ApiQrDetailsDataSource(backendApiClient);
   final qrDetailsRepository = QrDetailsRepositoryImpl(qrDetailsDataSource);
   final eventsApiService = EventsApiService(backendApiClient);
+  final exitPermitsApiService = ExitPermitsApiService(backendApiClient);
   final authApiService = AuthApiService(backendApiClient);
   final reportsApiService = ReportsApiService(backendApiClient);
 
@@ -22,6 +24,7 @@ Future<void> initDependencies() async {
     authApiService: authApiService,
     backendApiClient: backendApiClient,
     eventsApiService: eventsApiService,
+    exitPermitsApiService: exitPermitsApiService,
     reportsApiService: reportsApiService,
     qrDetailsDataSource: qrDetailsDataSource,
     qrDetailsRepository: qrDetailsRepository,
@@ -34,6 +37,7 @@ class AppDependencies {
     required this.authApiService,
     required this.backendApiClient,
     required this.eventsApiService,
+    required this.exitPermitsApiService,
     required this.reportsApiService,
     required this.qrDetailsDataSource,
     required this.qrDetailsRepository,
@@ -43,6 +47,7 @@ class AppDependencies {
   final AuthApiService authApiService;
   final BackendApiClient backendApiClient;
   final EventsApiService eventsApiService;
+  final ExitPermitsApiService exitPermitsApiService;
   final ReportsApiService reportsApiService;
   final QrDetailsDataSource qrDetailsDataSource;
   final QrDetailsRepository qrDetailsRepository;

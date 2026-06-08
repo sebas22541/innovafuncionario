@@ -1487,12 +1487,33 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
     _officeJobTitleCodes.removeWhere(
       (officeId, _) => !expandedOfficeIds.contains(officeId),
     );
+  }
 
-    if (_officeJobTitleCodes.isEmpty && _selectedJobTitleCodes.isNotEmpty) {
-      for (final officeId in expandedOfficeIds) {
-        _officeJobTitleCodes[officeId] = {..._selectedJobTitleCodes};
-      }
+  Future<void> _pickGlobalJobTitles() async {
+    final selectionResult =
+        await showModalBottomSheet<_EventJobTitleSelectionResult>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (context) => _EventJobTitleSelectionSheet(
+            jobTitles: widget.jobTitles,
+            selectedJobTitleCodes: _selectedJobTitleCodes,
+            title: 'Cargos globales del evento',
+            allowAllJobTitles: false,
+            helperText:
+                'Selecciona los cargos que asistiran sin importar la unidad.',
+          ),
+        );
+
+    if (!mounted || selectionResult == null) {
+      return;
     }
+
+    setState(() {
+      _selectedJobTitleCodes
+        ..clear()
+        ..addAll(selectionResult.selectedJobTitleCodes);
+    });
   }
 
   Future<void> _pickOfficeJobTitles(EventOffice office) async {
@@ -1517,9 +1538,6 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
       _officeJobTitleCodes[office.id] = {
         ...selectionResult.selectedJobTitleCodes,
       };
-      _selectedJobTitleCodes
-        ..clear()
-        ..addAll(_officeJobTitleCodes.values.expand((codes) => codes));
     });
   }
 
@@ -1584,10 +1602,12 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
       _selectedStartTime.hour,
       _selectedStartTime.minute,
     );
+    final hasAudienceSelection =
+        _selectedOfficeIds.isNotEmpty || _selectedJobTitleCodes.isNotEmpty;
 
     if (trimmedName.isEmpty ||
         trimmedAddress.isEmpty ||
-        _selectedOfficeIds.isEmpty ||
+        !hasAudienceSelection ||
         controls.any((control) => control.name.isEmpty) ||
         _selectedLocation == null) {
       setState(() {
@@ -1741,6 +1761,9 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
     final expandedOffices = widget.offices
         .where((office) => expandedOfficeIds.contains(office.id))
         .toList(growable: false);
+    final globalSelectedJobTitles = widget.jobTitles
+        .where((jobTitle) => _selectedJobTitleCodes.contains(jobTitle.code))
+        .toList(growable: false);
     return Dialog(
       backgroundColor: Colors.white,
       surfaceTintColor: Colors.white,
@@ -1813,7 +1836,10 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(18),
                           border: Border.all(
-                            color: _showValidation && _selectedOfficeIds.isEmpty
+                            color:
+                                _showValidation &&
+                                    _selectedOfficeIds.isEmpty &&
+                                    _selectedJobTitleCodes.isEmpty
                                 ? const Color(0xFFD94841)
                                 : AppPalette.line,
                           ),
@@ -2073,10 +2099,11 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                               ),
                             ],
                             if (_showValidation &&
-                                _selectedOfficeIds.isEmpty) ...[
+                                _selectedOfficeIds.isEmpty &&
+                                _selectedJobTitleCodes.isEmpty) ...[
                               const SizedBox(height: 10),
                               const Text(
-                                'Selecciona al menos una oficina base.',
+                                'Selecciona al menos una oficina base o un cargo global.',
                                 style: TextStyle(
                                   color: Color(0xFFD94841),
                                   fontSize: 12,
@@ -2187,6 +2214,117 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                                   },
                                 ),
                               ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        'Cargos globales del evento',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Selecciona cargos globales. Todas las personas con esos cargos podran asistir, sin importar su oficina o unidad.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color:
+                                _showValidation &&
+                                    _selectedOfficeIds.isEmpty &&
+                                    _selectedJobTitleCodes.isEmpty
+                                ? const Color(0xFFD94841)
+                                : AppPalette.line,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        globalSelectedJobTitles.length == 1
+                                            ? '1 cargo seleccionado'
+                                            : '${globalSelectedJobTitles.length} cargos seleccionados',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.titleSmall,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        globalSelectedJobTitles.isEmpty
+                                            ? 'Todavia no seleccionaste cargos.'
+                                            : 'Aplicara sin importar la oficina.',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                ElevatedButton.icon(
+                                  onPressed: _pickGlobalJobTitles,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppPalette.orange,
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                  ),
+                                  icon: const Icon(Icons.badge_rounded),
+                                  label: Text(
+                                    globalSelectedJobTitles.isEmpty
+                                        ? 'Seleccionar'
+                                        : 'Cambiar',
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (globalSelectedJobTitles.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  for (final jobTitle
+                                      in globalSelectedJobTitles)
+                                    Chip(
+                                      label: Text(jobTitle.name),
+                                      avatar: const Icon(
+                                        Icons.badge_rounded,
+                                        size: 18,
+                                        color: AppPalette.orange,
+                                      ),
+                                      backgroundColor: AppPalette.orangeSoft,
+                                      side: const BorderSide(
+                                        color: AppPalette.line,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ],
+                            if (_showValidation &&
+                                _selectedOfficeIds.isEmpty &&
+                                _selectedJobTitleCodes.isEmpty) ...[
+                              const SizedBox(height: 10),
+                              const Text(
+                                'Selecciona al menos una oficina o un cargo global.',
+                                style: TextStyle(
+                                  color: Color(0xFFD94841),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),
@@ -3004,11 +3142,15 @@ class _EventJobTitleSelectionSheet extends StatefulWidget {
     required this.jobTitles,
     required this.selectedJobTitleCodes,
     this.title = 'Selecciona cargos',
+    this.allowAllJobTitles = true,
+    this.helperText,
   });
 
   final List<EventJobTitle> jobTitles;
   final Set<String> selectedJobTitleCodes;
   final String title;
+  final bool allowAllJobTitles;
+  final String? helperText;
 
   @override
   State<_EventJobTitleSelectionSheet> createState() =>
@@ -3084,7 +3226,8 @@ class _EventJobTitleSelectionSheetState
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
     final filteredJobTitles = _filteredJobTitles;
-    final allSelected = _draftSelectedJobTitleCodes.isEmpty;
+    final allSelected =
+        widget.allowAllJobTitles && _draftSelectedJobTitleCodes.isEmpty;
 
     return SafeArea(
       child: Padding(
@@ -3112,7 +3255,10 @@ class _EventJobTitleSelectionSheetState
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              'Puedes buscar por nombre o codigo. Usa Todos cuando no quieras filtrar por cargo.',
+                              widget.helperText ??
+                                  (widget.allowAllJobTitles
+                                      ? 'Puedes buscar por nombre o codigo. Usa Todos cuando no quieras filtrar por cargo.'
+                                      : 'Selecciona uno o mas cargos.'),
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
                           ],
@@ -3139,44 +3285,46 @@ class _EventJobTitleSelectionSheetState
                     ),
                   ),
                   const SizedBox(height: 12),
-                  InkWell(
-                    borderRadius: BorderRadius.circular(18),
-                    onTap: _selectAll,
-                    child: Ink(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: allSelected
-                            ? AppPalette.orangeSoft
-                            : Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(
+                  if (widget.allowAllJobTitles) ...[
+                    InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: _selectAll,
+                      child: Ink(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
                           color: allSelected
-                              ? AppPalette.orange
-                              : AppPalette.line,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            allSelected
-                                ? Icons.check_circle_rounded
-                                : Icons.radio_button_unchecked_rounded,
+                              ? AppPalette.orangeSoft
+                              : Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
                             color: allSelected
                                 ? AppPalette.orange
-                                : AppPalette.muted,
+                                : AppPalette.line,
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              'Todos los cargos',
-                              style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              allSelected
+                                  ? Icons.check_circle_rounded
+                                  : Icons.radio_button_unchecked_rounded,
+                              color: allSelected
+                                  ? AppPalette.orange
+                                  : AppPalette.muted,
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Todos los cargos',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
+                    const SizedBox(height: 12),
+                  ],
                   Text(
                     filteredJobTitles.length == 1
                         ? '1 resultado'
