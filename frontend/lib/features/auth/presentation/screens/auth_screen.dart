@@ -516,7 +516,7 @@ class _AuthScreenState extends State<AuthScreen> {
                       child: Center(
                         child: ConstrainedBox(
                           constraints: BoxConstraints(
-                            maxWidth: _stage == _AuthStage.register ? 620 : 390,
+                            maxWidth: _stage == _AuthStage.register ? 620 : 490,
                             minHeight: _stage == _AuthStage.register
                                 ? 0
                                 : resolvedStageMinHeight,
@@ -728,6 +728,7 @@ class _AuthFormCard extends StatelessWidget {
             enableSuggestions: false,
             autocorrect: false,
             enableIMEPersonalizedLearning: false,
+            isLoginStyle: true,
             onFieldSubmitted: (_) => passwordFocusNode.requestFocus(),
             validator: (value) {
               final login = value?.trim() ?? '';
@@ -751,6 +752,7 @@ class _AuthFormCard extends StatelessWidget {
             enableSuggestions: false,
             autocorrect: false,
             enableIMEPersonalizedLearning: false,
+            isLoginStyle: true,
             suffixIcon: IconButton(
               onPressed: onTogglePasswordVisibility,
               icon: Icon(
@@ -775,6 +777,7 @@ class _AuthFormCard extends StatelessWidget {
             color: const Color(0xFFE95182),
             onTap: isSubmitting ? null : onSubmit,
             isLoading: isSubmitting,
+            isLoginStyle: true,
           ),
         ],
       ),
@@ -1121,6 +1124,7 @@ class _AuthField extends StatelessWidget {
     this.enableSuggestions = true,
     this.autocorrect = true,
     this.enableIMEPersonalizedLearning = true,
+    this.isLoginStyle = false,
   });
 
   final TextEditingController controller;
@@ -1138,9 +1142,22 @@ class _AuthField extends StatelessWidget {
   final bool enableSuggestions;
   final bool autocorrect;
   final bool enableIMEPersonalizedLearning;
+  final bool isLoginStyle;
 
   @override
   Widget build(BuildContext context) {
+    final fillColor = isLoginStyle
+        ? const Color(0xFFF0EDF7)
+        : Colors.white;
+    final textColor = isLoginStyle
+        ? const Color(0xFF7A679B)
+        : const Color(0xFF585364);
+    final borderRadius = BorderRadius.circular(isLoginStyle ? 20 : 18);
+    final contentPadding = EdgeInsets.symmetric(
+      horizontal: isLoginStyle ? 28 : 18,
+      vertical: isLoginStyle ? 19 : 15,
+    );
+
     return TextFormField(
       controller: controller,
       focusNode: focusNode,
@@ -1153,37 +1170,56 @@ class _AuthField extends StatelessWidget {
       enableIMEPersonalizedLearning: enableIMEPersonalizedLearning,
       validator: validator,
       onFieldSubmitted: onFieldSubmitted,
+      cursorColor: AppPalette.night,
+      style: TextStyle(
+        color: isLoginStyle ? const Color(0xFF4F4267) : AppPalette.ink,
+        fontSize: isLoginStyle ? 16 : 14,
+        fontWeight: FontWeight.w500,
+      ),
       decoration: InputDecoration(
         filled: true,
-        fillColor: Colors.white,
+        fillColor: fillColor,
         floatingLabelBehavior: FloatingLabelBehavior.never,
-        label: _RequiredFieldLabel(label: label, isRequired: isRequired),
+        label: _RequiredFieldLabel(
+          label: label,
+          isRequired: isRequired,
+          style: TextStyle(
+            color: textColor,
+            fontSize: isLoginStyle ? 16 : 14,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
         hintText: hint,
         suffixIcon: suffixIcon,
-        hintStyle: const TextStyle(color: Color(0xFF585364), fontSize: 14),
-        labelStyle: const TextStyle(color: Color(0xFF585364), fontSize: 14),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 18,
-          vertical: 15,
+        hintStyle: TextStyle(
+          color: textColor,
+          fontSize: isLoginStyle ? 16 : 14,
+          fontWeight: FontWeight.w500,
         ),
+        labelStyle: TextStyle(
+          color: textColor,
+          fontSize: isLoginStyle ? 16 : 14,
+          fontWeight: FontWeight.w500,
+        ),
+        contentPadding: contentPadding,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: borderRadius,
           borderSide: BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: borderRadius,
           borderSide: BorderSide.none,
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: borderRadius,
           borderSide: const BorderSide(color: AppPalette.night, width: 1.2),
         ),
         errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: borderRadius,
           borderSide: const BorderSide(color: Color(0xFFD94841), width: 1.2),
         ),
         focusedErrorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: borderRadius,
           borderSide: const BorderSide(color: Color(0xFFD94841), width: 1.2),
         ),
       ),
@@ -1442,6 +1478,7 @@ class _AuthPrimaryButton extends StatelessWidget {
     required this.onTap,
     this.isLoading = false,
     this.icon,
+    this.isLoginStyle = false,
   });
 
   final String label;
@@ -1449,19 +1486,26 @@ class _AuthPrimaryButton extends StatelessWidget {
   final VoidCallback? onTap;
   final bool isLoading;
   final IconData? icon;
+  final bool isLoginStyle;
 
   @override
   Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(isLoginStyle ? 20 : 20);
+    final padding = EdgeInsets.symmetric(
+      horizontal: 18,
+      vertical: isLoginStyle ? 21 : 16,
+    );
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: radius,
         child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          padding: padding,
           decoration: BoxDecoration(
             color: onTap == null ? color.withValues(alpha: 0.55) : color,
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: radius,
             boxShadow: const [
               BoxShadow(
                 color: Color(0x1E000000),
@@ -1489,9 +1533,9 @@ class _AuthPrimaryButton extends StatelessWidget {
                       ],
                       Text(
                         label,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: Colors.white,
-                          fontSize: 15,
+                          fontSize: isLoginStyle ? 18 : 15,
                           fontWeight: FontWeight.w700,
                         ),
                       ),

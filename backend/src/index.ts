@@ -5847,6 +5847,19 @@ async function findPersonByScannedValue(
     }
   }
 
+  const credentialUserId = readCredentialUserIdFromScannedValue(scannedValue);
+
+  if (credentialUserId != null) {
+    const linkedUser = await prisma.usuarios.findUnique({
+      where: { id: credentialUserId },
+      include: userWithOfficeInclude,
+    });
+
+    if (linkedUser) {
+      return ensurePersonIdentityForUser(prisma, linkedUser);
+    }
+  }
+
   const dynamicQr = tryParseDynamicQrPayload(scannedValue);
 
   if (dynamicQr != null && !isDynamicQrExpired(dynamicQr)) {
@@ -5970,8 +5983,6 @@ function buildAttendanceRegistrationLocation(input: RegisterAttendanceInput) {
 
 async function registerLunchScan(qrValue: string, scannerUserId: number) {
   const scannedValue = qrValue.trim();
-  assertScannedQrIsDynamic(scannedValue);
-
   const lookupCode = extractLookupCode(scannedValue);
 
   if (!lookupCode) {
@@ -6138,8 +6149,9 @@ function formatTimeInAppTimeZone(date: Date) {
 function buildQrLookupCandidates(scannedValue: string, providedLookupCode?: string) {
   // Orden de candidatos:
   // 1. lookupCode extraido del payload/URL/texto.
-  // 2. valor exacto leido, por compatibilidad con QRs antiguos.
-  // 3. AUTOQR:{sha256(raw)}, para placeholders creados desde escaneos previos.
+  // 2. token de URL de credencial antigua.
+  // 3. valor exacto leido, por compatibilidad con QRs antiguos.
+  // 4. AUTOQR:{sha256(raw)}, para placeholders creados desde escaneos previos.
   const trimmedValue = scannedValue.trim();
 
   if (!trimmedValue) {
@@ -6149,8 +6161,56 @@ function buildQrLookupCandidates(scannedValue: string, providedLookupCode?: stri
   const lookupCode = providedLookupCode ?? extractLookupCode(trimmedValue);
   const exactValue = trimmedValue.length <= 255 ? trimmedValue : null;
   const placeholderCode = buildPlaceholderQrCode(trimmedValue);
+  const credentialTokenCandidates = extractCredentialQrLookupCandidates(trimmedValue);
 
-  return [...new Set([lookupCode, exactValue, placeholderCode].filter(isValidQrCode))];
+  return [
+    ...new Set([
+      lookupCode,
+      ...credentialTokenCandidates,
+      exactValue,
+      placeholderCode,
+    ].filter(isValidQrCode)),
+  ];
+}
+
+function extractCredentialQrLookupCandidates(scannedValue: string) {
+  const uri = UriTryParse(scannedValue);
+
+  if (uri == null) {
+    return [];
+  }
+
+  const decodedPath = safeDecodeUriComponent(uri.pathname);
+  const match = decodedPath.match(/credencial-frente-pdf-([^/.]+)/i);
+  const token = match?.[1]?.trim();
+
+  if (!token) {
+    return [];
+  }
+
+  return [token, token.toUpperCase()];
+}
+
+function readCredentialUserIdFromScannedValue(scannedValue: string) {
+  const uri = UriTryParse(scannedValue);
+
+  if (uri == null) {
+    return null;
+  }
+
+  const decodedPath = safeDecodeUriComponent(uri.pathname);
+  const match = decodedPath.match(/credencial-frente-pdf-id-(\d+)/i);
+  const userId = Number.parseInt(match?.[1] ?? "", 10);
+
+  return Number.isInteger(userId) && userId > 0 ? userId : null;
+}
+
+function safeDecodeUriComponent(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function buildPlaceholderQrCode(scannedValue: string) {

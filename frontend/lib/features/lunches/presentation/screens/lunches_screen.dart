@@ -301,7 +301,10 @@ class _LunchesAdminScreenState extends State<LunchesAdminScreen> {
                     spacing: 10,
                     runSpacing: 10,
                     children: [
-                      _SummaryChip(label: 'Registros', value: '${_records.length}'),
+                      _SummaryChip(
+                        label: 'Registros',
+                        value: '${_records.length}',
+                      ),
                       _SummaryChip(label: 'En almuerzo', value: '$openCount'),
                       _SummaryChip(label: 'Retornados', value: '$closedCount'),
                     ],
@@ -322,10 +325,10 @@ class _LunchesAdminScreenState extends State<LunchesAdminScreen> {
                       ),
                     )
                   : _errorMessage != null
-                      ? Text(_errorMessage!)
-                      : _records.isEmpty
-                          ? const Text('No hay registros de almuerzo para esta fecha.')
-                          : _LunchRecordsTable(records: _records),
+                  ? Text(_errorMessage!)
+                  : _records.isEmpty
+                  ? const Text('No hay registros de almuerzo para esta fecha.')
+                  : _LunchRecordsTable(records: _records),
             ),
           ),
         ],
@@ -379,7 +382,9 @@ class _LunchScannerViewport extends StatelessWidget {
                       right: 16,
                       top: 16,
                       child: _ScannerBadge(
-                        text: isScannerActive ? 'Camara frontal' : 'Registrando',
+                        text: isScannerActive
+                            ? 'Camara frontal'
+                            : 'Registrando',
                       ),
                     ),
                     const Positioned(
@@ -449,7 +454,9 @@ class _LunchScanResultCard extends StatelessWidget {
               _ResultRow(label: 'Salida', value: record.departureTime),
               _ResultRow(
                 label: 'Retorno',
-                value: record.returnTime.isEmpty ? 'Pendiente' : record.returnTime,
+                value: record.returnTime.isEmpty
+                    ? 'Pendiente'
+                    : record.returnTime,
               ),
             ] else
               _ResultBanner(
@@ -476,34 +483,75 @@ class _LunchRecordsTable extends StatelessWidget {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: DataTable(
+        showCheckboxColumn: false,
         columns: const [
           DataColumn(label: Text('Funcionario')),
-          DataColumn(label: Text('CI')),
-          DataColumn(label: Text('Oficina')),
           DataColumn(label: Text('Salida')),
-          DataColumn(label: Text('Retorno')),
-          DataColumn(label: Text('Estado')),
-          DataColumn(label: Text('Punto salida')),
-          DataColumn(label: Text('Punto retorno')),
+          DataColumn(label: Text('Llegada')),
         ],
         rows: [
           for (final record in records)
             DataRow(
+              onSelectChanged: (_) => _showLunchRecordDetails(context, record),
               cells: [
                 DataCell(Text(record.employeeFullName)),
-                DataCell(Text(record.employeeCi)),
-                DataCell(Text(record.employeeOffice)),
                 DataCell(Text(record.departureTime)),
-                DataCell(Text(record.returnTime.isEmpty ? '-' : record.returnTime)),
-                DataCell(_StatusPill(status: record.status)),
-                DataCell(Text(record.departureScannerName)),
-                DataCell(Text(record.returnScannerName.isEmpty ? '-' : record.returnScannerName)),
+                DataCell(
+                  Text(record.returnTime.isEmpty ? '-' : record.returnTime),
+                ),
               ],
             ),
         ],
       ),
     );
   }
+}
+
+void _showLunchRecordDetails(BuildContext context, LunchRecord record) {
+  showDialog<void>(
+    context: context,
+    builder: (context) {
+      return AlertDialog(
+        title: Text(record.employeeFullName),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _ResultRow(label: 'CI', value: record.employeeCi),
+              _ResultRow(label: 'Item', value: record.employeeItemNumber),
+              _ResultRow(label: 'Cargo', value: record.employeeJobTitle),
+              _ResultRow(label: 'Oficina', value: record.employeeOffice),
+              _ResultRow(label: 'Salida', value: record.departureTime),
+              _ResultRow(
+                label: 'Llegada',
+                value: record.returnTime.isEmpty
+                    ? 'Pendiente'
+                    : record.returnTime,
+              ),
+              _ResultRow(label: 'Estado', value: record.status.label),
+              _ResultRow(
+                label: 'Punto salida',
+                value: record.departureScannerName,
+              ),
+              _ResultRow(
+                label: 'Punto llegada',
+                value: record.returnScannerName.isEmpty
+                    ? '-'
+                    : record.returnScannerName,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cerrar'),
+          ),
+        ],
+      );
+    },
+  );
 }
 
 class _StatusFilter extends StatelessWidget {
@@ -518,10 +566,7 @@ class _StatusFilter extends StatelessWidget {
       value: value,
       hint: const Text('Todos'),
       items: const [
-        DropdownMenuItem<LunchRecordStatus?>(
-          value: null,
-          child: Text('Todos'),
-        ),
+        DropdownMenuItem<LunchRecordStatus?>(value: null, child: Text('Todos')),
         DropdownMenuItem<LunchRecordStatus?>(
           value: LunchRecordStatus.open,
           child: Text('En almuerzo'),
@@ -532,30 +577,6 @@ class _StatusFilter extends StatelessWidget {
         ),
       ],
       onChanged: onChanged,
-    );
-  }
-}
-
-class _StatusPill extends StatelessWidget {
-  const _StatusPill({required this.status});
-
-  final LunchRecordStatus status;
-
-  @override
-  Widget build(BuildContext context) {
-    final isOpen = status == LunchRecordStatus.open;
-    final color = isOpen ? AppPalette.orange : Colors.green.shade700;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        status.label,
-        style: TextStyle(color: color, fontWeight: FontWeight.w700),
-      ),
     );
   }
 }
@@ -729,7 +750,10 @@ class _ScannerErrorState extends StatelessWidget {
         child: Text(
           message,
           textAlign: TextAlign.center,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
     );
