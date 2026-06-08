@@ -14,7 +14,11 @@ COPY frontend/web ./web
 ARG BACKEND_BASE_URL=
 ARG PAYLOAD_ENCRYPTION_KEY=
 ARG APP_VERSION=
-RUN if [ -n "$BACKEND_BASE_URL" ] || [ -n "$PAYLOAD_ENCRYPTION_KEY" ]; then \
+RUN flutter clean && \
+    flutter pub get && \
+    flutter analyze --no-pub
+RUN set -eux; \
+    if [ -n "$BACKEND_BASE_URL" ] || [ -n "$PAYLOAD_ENCRYPTION_KEY" ]; then \
       flutter build web --release --no-wasm-dry-run \
         --no-web-resources-cdn \
         --dart-define=BACKEND_BASE_URL="$BACKEND_BASE_URL" \
