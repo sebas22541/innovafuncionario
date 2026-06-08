@@ -1,4 +1,4 @@
-enum AppUserRole { admin, control, credentials, external }
+enum AppUserRole { admin, control, credentials, lunch, external }
 
 extension AppUserRoleX on AppUserRole {
   String get apiValue {
@@ -9,6 +9,8 @@ extension AppUserRoleX on AppUserRole {
         return 'CONTROL';
       case AppUserRole.credentials:
         return 'CREDENCIALES';
+      case AppUserRole.lunch:
+        return 'ALMUERZO';
       case AppUserRole.external:
         return 'OPERADOR';
     }
@@ -22,6 +24,8 @@ extension AppUserRoleX on AppUserRole {
         return 'Control';
       case AppUserRole.credentials:
         return 'Credenciales';
+      case AppUserRole.lunch:
+        return 'Almuerzo';
       case AppUserRole.external:
         return 'Funcionario';
     }
@@ -242,6 +246,8 @@ class AppUser {
 
   bool get isCredentials => role == AppUserRole.credentials;
 
+  bool get isLunchControl => role == AppUserRole.lunch;
+
   bool get isExternalUser => role == AppUserRole.external;
 
   bool get canManageEvents => isAdmin;
@@ -285,6 +291,10 @@ AppUserRole _readRole(dynamic value) {
 
   if (value == 'CREDENCIALES') {
     return AppUserRole.credentials;
+  }
+
+  if (value == 'ALMUERZO') {
+    return AppUserRole.lunch;
   }
 
   return AppUserRole.external;

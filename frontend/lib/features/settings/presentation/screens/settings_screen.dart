@@ -1528,7 +1528,7 @@ class _QrStatusBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final backgroundColor = isExpired
-        ? const Color(0xFFFDECEC)
+        ? Colors.white
         : isStatic
         ? const Color(0xFFEAF7EF)
         : isGenerating

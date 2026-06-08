@@ -1279,12 +1279,14 @@ class _RoleChip extends StatelessWidget {
       AppUserRole.admin => AppPalette.orange,
       AppUserRole.control => AppPalette.night,
       AppUserRole.credentials => AppPalette.orange,
+      AppUserRole.lunch => Colors.green.shade700,
       AppUserRole.external => AppPalette.muted,
     };
     final backgroundColor = switch (role) {
       AppUserRole.admin => AppPalette.orangeSoft,
       AppUserRole.control => AppPalette.blueSoftStrong,
       AppUserRole.credentials => AppPalette.orangeSoft,
+      AppUserRole.lunch => Colors.green.shade50,
       AppUserRole.external => AppPalette.surfaceSoft,
     };
 
@@ -1955,6 +1957,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                           DropdownMenuItem(
                             value: AppUserRole.credentials,
                             child: Text('Credenciales'),
+                          ),
+                          DropdownMenuItem(
+                            value: AppUserRole.lunch,
+                            child: Text('Almuerzo'),
                           ),
                           DropdownMenuItem(
                             value: AppUserRole.external,
@@ -2999,8 +3005,10 @@ int _userRoleOrder(AppUserRole role) {
       return 1;
     case AppUserRole.credentials:
       return 2;
-    case AppUserRole.external:
+    case AppUserRole.lunch:
       return 3;
+    case AppUserRole.external:
+      return 4;
   }
 }
 

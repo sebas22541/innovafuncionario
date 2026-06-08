@@ -58,10 +58,26 @@ class ExitPermitsApiService {
     return ExitPermitRecord.fromJson(_readMap(payload['data'], 'salida'));
   }
 
-  Future<List<ExitPermitRecord>> fetchExitPermitsByDate(DateTime date) async {
-    final payload = await _apiClient.getJson(
-      '/api/salidas?fecha=${Uri.encodeQueryComponent(_dateOnly(date))}',
-    );
+  Future<List<ExitPermitRecord>> fetchExitPermitsByDate(
+    DateTime date, {
+    String? ci,
+    String? query,
+    bool includeDate = true,
+    bool onlyMine = false,
+  }) async {
+    final queryParams = {
+      if (includeDate) 'fecha': _dateOnly(date),
+      if (ci != null && ci.trim().isNotEmpty) 'ci': ci.trim(),
+      if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
+      if (onlyMine) 'propias': 'true',
+    };
+    final queryText = queryParams.entries
+        .map(
+          (entry) =>
+              '${Uri.encodeQueryComponent(entry.key)}=${Uri.encodeQueryComponent(entry.value)}',
+        )
+        .join('&');
+    final payload = await _apiClient.getJson('/api/salidas?$queryText');
     final rows = _readList(payload['data'], 'salidas');
 
     return rows.map(ExitPermitRecord.fromJson).toList(growable: false);
@@ -84,6 +100,17 @@ class ExitPermitsApiService {
 
     return ExitPermitRecord.fromJson(_readMap(payload['data'], 'salida'));
   }
+
+  Future<ExitPermitRecord> registerArrivalTime({
+    required int id,
+    required String arrivalTime,
+  }) async {
+    final payload = await _apiClient.putJson('/api/salidas/$id/llegada', {
+      'horaLlegada': arrivalTime,
+    });
+
+    return ExitPermitRecord.fromJson(_readMap(payload['data'], 'salida'));
+  }
 }
 
 class ExitPermitRecord {
@@ -97,7 +124,9 @@ class ExitPermitRecord {
     required this.permitDate,
     required this.startTime,
     required this.endTime,
+    required this.arrivalTime,
     required this.applicantFullName,
+    required this.applicantCi,
     required this.applicantItemNumber,
     required this.applicantJobTitle,
     required this.applicantOfficeId,
@@ -118,7 +147,9 @@ class ExitPermitRecord {
   final DateTime permitDate;
   final String startTime;
   final String endTime;
+  final String arrivalTime;
   final String applicantFullName;
+  final String applicantCi;
   final String applicantItemNumber;
   final String applicantJobTitle;
   final int? applicantOfficeId;
@@ -146,10 +177,12 @@ class ExitPermitRecord {
       ),
       startTime: _readString(source['horaInicio'], 'horaInicio'),
       endTime: _readString(source['horaFinal'], 'horaFinal'),
+      arrivalTime: _readString(source['horaLlegada'], 'horaLlegada'),
       applicantFullName: _readString(
         source['solicitanteNombreCompleto'],
         'solicitanteNombreCompleto',
       ),
+      applicantCi: _readString(source['solicitanteCi'], 'solicitanteCi'),
       applicantItemNumber: _readString(
         source['solicitanteNumeroItem'],
         'solicitanteNumeroItem',

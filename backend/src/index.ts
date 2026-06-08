@@ -68,6 +68,7 @@ const DYNAMIC_QR_HISTORY_LIMIT = clampInt(
 const DYNAMIC_QR_VERSION = "DQR1";
 const DYNAMIC_QR_SIGNATURE_LENGTH = 16;
 const STATIC_DYNAMIC_QR_EXPIRES_AT = new Date("2099-12-31T23:59:59.000Z");
+const APP_TIME_ZONE = process.env.APP_TIME_ZONE ?? "America/La_Paz";
 const JWT_TTL_SECONDS = clampInt(
   process.env.JWT_TTL_SECONDS ?? null,
   31_536_000,
@@ -130,6 +131,20 @@ type AuthenticatedUser = {
 const userWithOfficeInclude = {
   oficinas: true,
   oficina_comision: true,
+} as const;
+
+const exitPermitApplicantInclude = {
+  usuarios: {
+    include: userWithOfficeInclude,
+  },
+} as const;
+
+const lunchRecordInclude = {
+  funcionario: {
+    include: userWithOfficeInclude,
+  },
+  registrador_salida: true,
+  registrador_retorno: true,
 } as const;
 
 const personIdentityInclude = {
@@ -666,6 +681,37 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/almuerzos") {
+      assertLunchReportRequester(authenticatedUser);
+      const query = parseLunchReportQuery(url);
+      const records = await prisma.almuerzos.findMany({
+        where: buildLunchReportWhere(query),
+        include: lunchRecordInclude,
+        orderBy: [
+          { fecha: "desc" },
+          { salida_en: "desc" },
+          { id: "desc" },
+        ],
+        take: 500,
+      });
+
+      sendJson(response, 200, {
+        data: records.map(serializeLunchRecord),
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/almuerzos/scan") {
+      assertLunchScannerRequester(authenticatedUser);
+      const input = parseLunchScanInput(await readJsonBody(request));
+      const result = await registerLunchScan(input.qrValue, authenticatedUser.id);
+
+      sendJson(response, 201, {
+        data: result,
+      });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/salidas") {
       const input = parseCreateExitPermitInput(await readJsonBody(request));
       const user = await prisma.usuarios.findUnique({
@@ -681,6 +727,13 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(
           403,
           "Solo un funcionario puede registrar formularios de salida.",
+        );
+      }
+
+      if (isDirectorJobTitle(user.cargo)) {
+        throw new HttpError(
+          403,
+          "Los directores solo pueden revisar solicitudes de salida.",
         );
       }
 
@@ -718,13 +771,12 @@ const server = http.createServer(async (request, response) => {
       }
 
       assertExitPermitApprover(approver);
-      const approverOfficeId = resolveLinkedOfficeId(approver);
+      const reviewWhere = buildExitPermitReviewWhere(approver, {
+        onlyPending: true,
+      });
       const salidas = await prisma.salidas.findMany({
-        where: {
-          estado: estado_salida.PENDIENTE,
-          solicitante_oficina_id: approverOfficeId,
-          usuario_id: { not: approver.id },
-        },
+        where: reviewWhere,
+        include: exitPermitApplicantInclude,
         orderBy: [
           { fecha_permiso: "asc" },
           { hora_inicio: "asc" },
@@ -741,16 +793,38 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/salidas") {
       assertAuthenticatedRequester(authenticatedUser);
-      const fechaPermiso = readExitPermitQueryDate(url);
-      const where = isAdminUser(authenticatedUser)
-        ? { fecha_permiso: fechaPermiso }
-        : {
-            fecha_permiso: fechaPermiso,
-            usuario_id: authenticatedUser.id,
-          };
+      const searchText = readExitPermitQuerySearch(url);
+      const onlyOwnExitPermits = readExitPermitOnlyMineQuery(url);
+      const requester = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+        include: userWithOfficeInclude,
+      });
+      const fechaPermiso =
+        !onlyOwnExitPermits &&
+        ((isAdminUser(authenticatedUser) && searchText != null) ||
+          (requester != null &&
+            isExitPermitApproverUser(requester) &&
+            !url.searchParams.has("fecha")))
+          ? null
+          : readExitPermitQueryDate(url);
+      const where = buildExitPermitListWhere(
+        authenticatedUser,
+        requester,
+        fechaPermiso,
+        searchText,
+        onlyOwnExitPermits,
+      );
       const salidas = await prisma.salidas.findMany({
         where,
+        include: {
+          usuarios: {
+            select: {
+              ci: true,
+            },
+          },
+        },
         orderBy: [
+          { fecha_permiso: "desc" },
           { hora_inicio: "asc" },
           { created_at: "asc" },
           { id: "asc" },
@@ -759,6 +833,45 @@ const server = http.createServer(async (request, response) => {
 
       sendJson(response, 200, {
         data: salidas.map(serializeExitPermit),
+      });
+      return;
+    }
+
+    const salidaLlegadaMatch = /^\/api\/salidas\/(\d+)\/llegada$/.exec(
+      url.pathname,
+    );
+
+    if (request.method === "PUT" && salidaLlegadaMatch != null) {
+      const salidaId = Number.parseInt(salidaLlegadaMatch[1] ?? "", 10);
+      const input = parseUpdateExitPermitArrivalInput(await readJsonBody(request));
+
+      const salida = await prisma.salidas.findUnique({
+        where: { id: salidaId },
+        include: exitPermitApplicantInclude,
+      });
+
+      if (!salida) {
+        throw new HttpError(404, "No se encontro la salida seleccionada.");
+      }
+
+      if (salida.usuario_id !== authenticatedUser.id) {
+        throw new HttpError(403, "Solo el solicitante puede registrar su llegada.");
+      }
+
+      if (salida.estado !== estado_salida.APROBADO) {
+        throw new HttpError(409, "Solo puedes registrar llegada de una salida aprobada.");
+      }
+
+      const updatedSalida = await prisma.salidas.update({
+        where: { id: salida.id },
+        data: {
+          hora_llegada: input.horaLlegada,
+          updated_at: new Date(),
+        },
+      });
+
+      sendJson(response, 200, {
+        data: serializeExitPermit(updatedSalida),
       });
       return;
     }
@@ -783,6 +896,7 @@ const server = http.createServer(async (request, response) => {
 
       const salida = await prisma.salidas.findUnique({
         where: { id: salidaId },
+        include: exitPermitApplicantInclude,
       });
 
       if (!salida) {
@@ -2150,6 +2264,22 @@ type UpdateExitPermitStatusInput = {
   estado: typeof estado_salida.APROBADO | typeof estado_salida.RECHAZADO;
 };
 
+type UpdateExitPermitArrivalInput = {
+  horaLlegada: string;
+};
+
+type LunchScanInput = {
+  qrValue: string;
+};
+
+type LunchReportQuery = {
+  fecha: Date;
+  search: string | null;
+  status: "ABIERTOS" | "CERRADOS" | null;
+  scannerId: number | null;
+  officeId: number | null;
+};
+
 type RegisterUserInput = {
   email: string;
   password: string;
@@ -2764,6 +2894,10 @@ async function ensureRuntimeSchema() {
   `);
 
   await pool.query(`
+    ALTER TYPE "rol_usuario" ADD VALUE IF NOT EXISTS 'ALMUERZO'
+  `);
+
+  await pool.query(`
     DO $$
     BEGIN
       IF NOT EXISTS (
@@ -2784,6 +2918,89 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_usuarios_oficina_comision_id"
       ON "usuarios" ("oficina_comision_id")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "almuerzos" (
+      "id" SERIAL PRIMARY KEY,
+      "usuario_id" INTEGER NOT NULL,
+      "fecha" DATE NOT NULL,
+      "hora_salida" VARCHAR(5) NOT NULL,
+      "salida_en" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "hora_retorno" VARCHAR(5),
+      "retorno_en" TIMESTAMPTZ(6),
+      "registrado_salida_por_id" INTEGER,
+      "registrado_retorno_por_id" INTEGER,
+      "qr_leido" TEXT,
+      "datos_qr_snapshot" JSONB,
+      "funcionario_nombre_completo" VARCHAR(220) NOT NULL,
+      "funcionario_ci" VARCHAR(30),
+      "funcionario_numero_item" VARCHAR(50),
+      "funcionario_cargo" VARCHAR(120),
+      "funcionario_oficina_id" INTEGER,
+      "funcionario_oficina" VARCHAR(150),
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "almuerzos_usuario_id_fkey"
+        FOREIGN KEY ("usuario_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'almuerzos_registrado_salida_por_id_fkey'
+      ) THEN
+        ALTER TABLE "almuerzos"
+          ADD CONSTRAINT "almuerzos_registrado_salida_por_id_fkey"
+          FOREIGN KEY ("registrado_salida_por_id")
+          REFERENCES "usuarios" ("id")
+          ON UPDATE NO ACTION;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'almuerzos_registrado_retorno_por_id_fkey'
+      ) THEN
+        ALTER TABLE "almuerzos"
+          ADD CONSTRAINT "almuerzos_registrado_retorno_por_id_fkey"
+          FOREIGN KEY ("registrado_retorno_por_id")
+          REFERENCES "usuarios" ("id")
+          ON UPDATE NO ACTION;
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_almuerzos_fecha"
+      ON "almuerzos" ("fecha")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_almuerzos_usuario_id"
+      ON "almuerzos" ("usuario_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_almuerzos_funcionario_ci"
+      ON "almuerzos" ("funcionario_ci")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_almuerzos_funcionario_oficina_id"
+      ON "almuerzos" ("funcionario_oficina_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_almuerzos_registrado_salida_por_id"
+      ON "almuerzos" ("registrado_salida_por_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_almuerzos_registrado_retorno_por_id"
+      ON "almuerzos" ("registrado_retorno_por_id")
   `);
 
   await pool.query(`
@@ -2866,6 +3083,7 @@ async function ensureRuntimeSchema() {
       "fecha_permiso" DATE NOT NULL,
       "hora_inicio" VARCHAR(5) NOT NULL,
       "hora_final" VARCHAR(5),
+      "hora_llegada" VARCHAR(5),
       "solicitante_nombre_completo" VARCHAR(220) NOT NULL,
       "solicitante_numero_item" VARCHAR(50),
       "solicitante_cargo" VARCHAR(120),
@@ -2886,6 +3104,7 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     ALTER TABLE "salidas"
       ADD COLUMN IF NOT EXISTS "estado" "estado_salida" NOT NULL DEFAULT 'PENDIENTE',
+      ADD COLUMN IF NOT EXISTS "hora_llegada" VARCHAR(5),
       ADD COLUMN IF NOT EXISTS "solicitante_oficina_id" INTEGER,
       ADD COLUMN IF NOT EXISTS "aprobado_por_id" INTEGER,
       ADD COLUMN IF NOT EXISTS "aprobado_por_nombre" VARCHAR(220),
@@ -3946,6 +4165,70 @@ function parseUpdateExitPermitStatusInput(
   };
 }
 
+function parseUpdateExitPermitArrivalInput(
+  payload: unknown,
+): UpdateExitPermitArrivalInput {
+  const body = expectRecord(payload);
+
+  return {
+    horaLlegada: readRequiredTimeText(body, "horaLlegada"),
+  };
+}
+
+function parseLunchScanInput(payload: unknown): LunchScanInput {
+  const body = expectRecord(payload);
+
+  return {
+    qrValue: readRequiredString(body, "qrValue", 5, 2000),
+  };
+}
+
+function parseLunchReportQuery(url: URL): LunchReportQuery {
+  const rawStatus = url.searchParams.get("estado")?.trim().toUpperCase() ?? null;
+  let status: LunchReportQuery["status"] = null;
+
+  if (rawStatus != null && rawStatus.length > 0) {
+    if (rawStatus !== "ABIERTOS" && rawStatus !== "CERRADOS") {
+      throw new HttpError(400, "El estado de almuerzo no es valido.");
+    }
+
+    status = rawStatus;
+  }
+
+  return {
+    fecha: readLunchQueryDate(url),
+    search: readLunchQuerySearch(url),
+    status,
+    scannerId: readOptionalQueryInt(url, "scannerId"),
+    officeId: readOptionalQueryInt(url, "oficinaId"),
+  };
+}
+
+function readLunchQueryDate(url: URL) {
+  const rawValue = url.searchParams.get("fecha")?.trim();
+
+  if (rawValue == null || rawValue.length === 0) {
+    return readDateOnlyString(formatDateInAppTimeZone(new Date()), "fecha");
+  }
+
+  return readDateOnlyString(rawValue, "fecha");
+}
+
+function readLunchQuerySearch(url: URL) {
+  const rawValue =
+    url.searchParams.get("q")?.trim() ?? url.searchParams.get("ci")?.trim();
+
+  if (rawValue == null || rawValue.length === 0) {
+    return null;
+  }
+
+  if (rawValue.length > 80) {
+    throw new HttpError(400, "La busqueda no puede superar 80 caracteres.");
+  }
+
+  return rawValue;
+}
+
 function readExitPermitQueryDate(url: URL) {
   const rawValue = url.searchParams.get("fecha")?.trim();
 
@@ -3954,6 +4237,29 @@ function readExitPermitQueryDate(url: URL) {
   }
 
   return readDateOnlyString(rawValue, "fecha");
+}
+
+function readExitPermitQuerySearch(url: URL) {
+  const rawValue =
+    url.searchParams.get("q")?.trim() ?? url.searchParams.get("ci")?.trim();
+
+  if (rawValue == null || rawValue.length === 0) {
+    return null;
+  }
+
+  if (rawValue.length > 80) {
+    throw new HttpError(400, "La busqueda no puede superar 80 caracteres.");
+  }
+
+  return rawValue;
+}
+
+function readExitPermitOnlyMineQuery(url: URL) {
+  const rawValue =
+    url.searchParams.get("propias")?.trim().toLowerCase() ??
+    url.searchParams.get("mine")?.trim().toLowerCase();
+
+  return rawValue === "true" || rawValue === "1";
 }
 
 function parseRegisterUserInput(payload: unknown): RegisterUserInput {
@@ -4018,6 +4324,7 @@ function parseManagedUserInput(payload: unknown): ManagedUserInput {
     rol_usuario.ADMIN,
     rol_usuario.CONTROL,
     rol_usuario.CREDENCIALES,
+    rol_usuario.ALMUERZO,
     rol_usuario.OPERADOR,
   ]) as (typeof rol_usuario)[keyof typeof rol_usuario];
   const requesterEmail = readRequiredLoginIdentifier(body, "requesterEmail");
@@ -4055,6 +4362,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     rol_usuario.ADMIN,
     rol_usuario.CONTROL,
     rol_usuario.CREDENCIALES,
+    rol_usuario.ALMUERZO,
     rol_usuario.OPERADOR,
   ]) as (typeof rol_usuario)[keyof typeof rol_usuario];
   const ci = readRequiredString(body, "ci", 3, 30);
@@ -4699,6 +5007,18 @@ function canScanQrData(user: AuthenticatedUser) {
   return user.rol === rol_usuario.ADMIN || user.rol === rol_usuario.CONTROL;
 }
 
+function assertLunchScannerRequester(user: AuthenticatedUser) {
+  if (user.id <= 0 || user.activo !== true || user.rol !== rol_usuario.ALMUERZO) {
+    throw new HttpError(403, "Solo una cuenta de almuerzo puede registrar almuerzos.");
+  }
+}
+
+function assertLunchReportRequester(user: AuthenticatedUser) {
+  if (user.id <= 0 || user.activo !== true || user.rol !== rol_usuario.ADMIN) {
+    throw new HttpError(403, "Solo un administrador puede consultar almuerzos.");
+  }
+}
+
 function assertAuthenticatedRequester(user: AuthenticatedUser) {
   if (user.id <= 0 || user.activo !== true) {
     throw new HttpError(401, "Debes iniciar sesion para continuar.");
@@ -4707,11 +5027,14 @@ function assertAuthenticatedRequester(user: AuthenticatedUser) {
 
 function assertExitPermitApprover(user: any) {
   if (!user || user.activo !== true || user.rol !== rol_usuario.OPERADOR) {
-    throw new HttpError(403, "Solo un jefe puede revisar salidas.");
+    throw new HttpError(403, "Solo un jefe o director puede revisar salidas.");
   }
 
-  if (!isBossJobTitle(user.cargo)) {
-    throw new HttpError(403, "Solo usuarios con cargo de jefe pueden revisar salidas.");
+  if (!isExitPermitApproverUser(user)) {
+    throw new HttpError(
+      403,
+      "Solo usuarios con cargo de jefe o director pueden revisar salidas.",
+    );
   }
 
   if (resolveLinkedOfficeId(user) == null) {
@@ -4721,11 +5044,31 @@ function assertExitPermitApprover(user: any) {
 
 function assertCanReviewExitPermit(approver: any, salida: any) {
   const approverOfficeId = resolveLinkedOfficeId(approver);
+  const applicant = salida.usuarios;
+  const applicantIsChief = isChiefExitPermitApplicant(applicant);
+  const applicantIsDirector = isDirectorJobTitle(applicant?.cargo);
+
+  if (isDirectorExitPermitApprover(approver)) {
+    if (!applicantIsChief || !isApplicantInDirectorScope(approver, applicant)) {
+      throw new HttpError(
+        403,
+        "Solo puedes revisar salidas de jefes bajo tu direccion.",
+      );
+    }
+
+    if (salida.usuario_id === approver.id) {
+      throw new HttpError(403, "No puedes revisar tu propia salida.");
+    }
+
+    return;
+  }
 
   if (
     approverOfficeId == null ||
     salida.solicitante_oficina_id == null ||
-    approverOfficeId !== salida.solicitante_oficina_id
+    approverOfficeId !== salida.solicitante_oficina_id ||
+    applicantIsChief ||
+    applicantIsDirector
   ) {
     throw new HttpError(
       403,
@@ -4738,8 +5081,322 @@ function assertCanReviewExitPermit(approver: any, salida: any) {
   }
 }
 
-function isBossJobTitle(value: string | null | undefined) {
-  return normalizeTextForComparison(value).includes("jefe");
+function buildExitPermitReviewWhere(
+  approver: any,
+  options: { onlyPending?: boolean } = {},
+): Prisma.salidasWhereInput {
+  const baseWhere = {
+    ...(options.onlyPending == true ? { estado: estado_salida.PENDIENTE } : {}),
+    usuario_id: { not: approver.id },
+  };
+
+  if (isDirectorExitPermitApprover(approver)) {
+    const directionCode = resolveDirectorOfficeCode(approver);
+
+    return {
+      ...baseWhere,
+      usuarios: {
+        cargo_codigo: {
+          in: Array.from(EXIT_PERMIT_CHIEF_CARGO_CODES),
+        },
+        OR: buildDirectorOfficeScopeUserFilters(directionCode),
+      },
+    };
+  }
+
+  return {
+    ...baseWhere,
+    solicitante_oficina_id: resolveLinkedOfficeId(approver),
+    usuarios: {
+      AND: [
+        {
+          NOT: {
+            cargo_codigo: {
+              in: Array.from(EXIT_PERMIT_CHIEF_CARGO_CODES),
+            },
+          },
+        },
+        {
+          NOT: {
+            cargo: {
+              contains: "director",
+              mode: "insensitive" as const,
+            },
+          },
+        },
+        {
+          NOT: {
+            cargo: {
+              contains: "direcctor",
+              mode: "insensitive" as const,
+            },
+          },
+        },
+      ],
+    },
+  };
+}
+
+function buildExitPermitListWhere(
+  authenticatedUser: AuthenticatedUser,
+  requester: any,
+  fechaPermiso: Date | null,
+  searchText: string | null,
+  onlyOwnExitPermits = false,
+) {
+  if (onlyOwnExitPermits) {
+    if (fechaPermiso == null) {
+      throw new HttpError(400, "La fecha es obligatoria para consultar salidas.");
+    }
+
+    return {
+      fecha_permiso: fechaPermiso,
+      usuario_id: authenticatedUser.id,
+    };
+  }
+
+  if (isAdminUser(authenticatedUser)) {
+    return {
+      ...(fechaPermiso == null ? {} : { fecha_permiso: fechaPermiso }),
+      ...(searchText == null
+        ? {}
+        : buildExitPermitSearchWhere(searchText)),
+    };
+  }
+
+  if (requester != null && isExitPermitApproverUser(requester)) {
+    return {
+      ...buildExitPermitReviewWhere(requester),
+      ...(fechaPermiso == null ? {} : { fecha_permiso: fechaPermiso }),
+    };
+  }
+
+  if (fechaPermiso == null) {
+    throw new HttpError(400, "La fecha es obligatoria para consultar salidas.");
+  }
+
+  return {
+    fecha_permiso: fechaPermiso,
+    usuario_id: authenticatedUser.id,
+  };
+}
+
+function buildExitPermitSearchWhere(searchText: string) {
+  const tokens = searchText
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
+
+  return {
+    OR: [
+      ...buildExitPermitSearchTokenFilters(searchText),
+      ...(tokens.length <= 1
+        ? []
+        : [
+            {
+              AND: tokens.map((token) => ({
+                OR: buildExitPermitSearchTokenFilters(token),
+              })),
+            },
+          ]),
+    ],
+  };
+}
+
+function buildExitPermitSearchTokenFilters(token: string) {
+  return [
+    {
+      solicitante_nombre_completo: {
+        contains: token,
+        mode: "insensitive" as const,
+      },
+    },
+    {
+      usuarios: {
+        ci: {
+          contains: token,
+          mode: "insensitive" as const,
+        },
+      },
+    },
+    {
+      usuarios: {
+        nombre_completo: {
+          contains: token,
+          mode: "insensitive" as const,
+        },
+      },
+    },
+    {
+      usuarios: {
+        nombres: {
+          contains: token,
+          mode: "insensitive" as const,
+        },
+      },
+    },
+    {
+      usuarios: {
+        primer_apellido: {
+          contains: token,
+          mode: "insensitive" as const,
+        },
+      },
+    },
+    {
+      usuarios: {
+        segundo_apellido: {
+          contains: token,
+          mode: "insensitive" as const,
+        },
+      },
+    },
+  ];
+}
+
+const EXIT_PERMIT_CHIEF_CARGO_CODES = new Set([
+  "CA018",
+  "CA015",
+  "CA014",
+  "CA013",
+  "CA012",
+  "CA011",
+]);
+
+const EXIT_PERMIT_APPROVER_CARGO_CODES = new Set([
+  ...EXIT_PERMIT_CHIEF_CARGO_CODES,
+  "CA010",
+]);
+
+const EXIT_PERMIT_DIRECTOR_OFFICE_CODES = new Set([
+  "0.1",
+  "0.2",
+  "0.5",
+  "1.1",
+  "1.3",
+  "2.1",
+  "2.2",
+  "3.3",
+  "3.4",
+  "4.1",
+  "4.2",
+  "5.1",
+  "5.2",
+  "5.3",
+  "5.5",
+  "6.1",
+  "6.2",
+  "6.3",
+  "6.4",
+  "7.2",
+  "7.3",
+  "8.1",
+  "8.2",
+  "8.3",
+  "9.1",
+  "9.2",
+  "10.1",
+  "10.2",
+  "10.3",
+  "10.4",
+  "11.1",
+  "11.2",
+  "11.4",
+  "12.1",
+  "12.2",
+]);
+
+function isExitPermitApproverUser(user: any) {
+  return (
+    user != null &&
+    user.activo === true &&
+    user.rol === rol_usuario.OPERADOR &&
+    (isBossJobTitle(user.cargo, user.cargo_codigo) ||
+      isDirectorExitPermitApprover(user)) &&
+    resolveLinkedOfficeId(user) != null
+  );
+}
+
+function isChiefExitPermitApplicant(user: any) {
+  const normalizedCode = normalizeOptionalText(user?.cargo_codigo)?.toUpperCase();
+
+  return (
+    (normalizedCode != null &&
+      EXIT_PERMIT_CHIEF_CARGO_CODES.has(normalizedCode)) ||
+    normalizeTextForComparison(user?.cargo).includes("jefe")
+  );
+}
+
+function isDirectorExitPermitApprover(user: any) {
+  return (
+    isDirectorJobTitle(user?.cargo) &&
+    resolveDirectorOfficeCode(user) != null
+  );
+}
+
+function isDirectorJobTitle(value: string | null | undefined) {
+  const normalized = normalizeTextForComparison(value);
+
+  return normalized.includes("director") || normalized.includes("direcctor");
+}
+
+function resolveDirectorOfficeCode(user: any) {
+  const officeCode = normalizeOptionalText(resolveLinkedOfficeCode(user));
+
+  if (officeCode == null || !EXIT_PERMIT_DIRECTOR_OFFICE_CODES.has(officeCode)) {
+    return null;
+  }
+
+  return officeCode;
+}
+
+function buildDirectorOfficeScopeUserFilters(directionCode: string | null) {
+  if (directionCode == null) {
+    return [];
+  }
+
+  return [
+    {
+      oficinas: {
+        cod: {
+          startsWith: `${directionCode}.`,
+        },
+      },
+    },
+    {
+      oficina_comision: {
+        cod: {
+          startsWith: `${directionCode}.`,
+        },
+      },
+    },
+  ];
+}
+
+function isApplicantInDirectorScope(director: any, applicant: any) {
+  const directionCode = resolveDirectorOfficeCode(director);
+  const applicantOfficeCode = normalizeOptionalText(
+    resolveLinkedOfficeCode(applicant),
+  );
+
+  if (directionCode == null || applicantOfficeCode == null) {
+    return false;
+  }
+
+  return applicantOfficeCode.startsWith(`${directionCode}.`);
+}
+
+function isBossJobTitle(
+  value: string | null | undefined,
+  cargoCodigo?: string | null,
+) {
+  const normalizedCode = normalizeOptionalText(cargoCodigo)?.toUpperCase();
+
+  return (
+    (normalizedCode != null &&
+      EXIT_PERMIT_APPROVER_CARGO_CODES.has(normalizedCode)) ||
+    normalizeTextForComparison(value).includes("jefe")
+  );
 }
 
 function assertPersonLookupRequester(user: AuthenticatedUser) {
@@ -5309,6 +5966,173 @@ function buildAttendanceRegistrationLocation(input: RegisterAttendanceInput) {
     longitud: input.longitud,
     accuracy: input.accuracy,
   };
+}
+
+async function registerLunchScan(qrValue: string, scannerUserId: number) {
+  const scannedValue = qrValue.trim();
+  assertScannedQrIsDynamic(scannedValue);
+
+  const lookupCode = extractLookupCode(scannedValue);
+
+  if (!lookupCode) {
+    throw new HttpError(400, "Debes enviar un codigo QR valido.");
+  }
+
+  const person = await findPersonByScannedValue(scannedValue, lookupCode);
+  const funcionario = person?.usuario ?? null;
+
+  if (!person || !funcionario) {
+    throw new HttpError(404, "No se encontro un funcionario con ese codigo QR.");
+  }
+
+  if (funcionario.activo !== true || funcionario.rol !== rol_usuario.OPERADOR) {
+    throw new HttpError(
+      400,
+      "El QR escaneado no pertenece a un funcionario activo.",
+    );
+  }
+
+  const scannedAt = new Date();
+  const lunchDateText = formatDateInAppTimeZone(scannedAt);
+  const lunchDate = readDateOnlyString(lunchDateText, "fecha");
+  const lunchTime = formatTimeInAppTimeZone(scannedAt);
+  const qrSnapshot = {
+    rawValue: scannedValue,
+    lookupCode,
+    scannedAt: scannedAt.toISOString(),
+    personaId: person.id,
+    usuarioId: funcionario.id,
+  };
+
+  const record = await prisma.$transaction(async (tx) => {
+    const openLunch = await tx.almuerzos.findFirst({
+      where: {
+        usuario_id: funcionario.id,
+        fecha: lunchDate,
+        hora_retorno: null,
+      },
+      orderBy: [{ salida_en: "desc" }, { id: "desc" }],
+    });
+
+    if (openLunch) {
+      return tx.almuerzos.update({
+        where: { id: openLunch.id },
+        data: {
+          hora_retorno: lunchTime,
+          retorno_en: scannedAt,
+          registrado_retorno_por_id: scannerUserId,
+          qr_leido: scannedValue,
+          datos_qr_snapshot: qrSnapshot,
+          updated_at: scannedAt,
+        },
+        include: lunchRecordInclude,
+      });
+    }
+
+    const closedLunch = await tx.almuerzos.findFirst({
+      where: {
+        usuario_id: funcionario.id,
+        fecha: lunchDate,
+        hora_retorno: {
+          not: null,
+        },
+      },
+      orderBy: [{ retorno_en: "desc" }, { id: "desc" }],
+    });
+
+    if (closedLunch) {
+      throw new HttpError(
+        409,
+        "Este funcionario ya registro salida y retorno de almuerzo hoy. Podra registrar nuevamente al dia siguiente.",
+      );
+    }
+
+    return tx.almuerzos.create({
+      data: {
+        usuario_id: funcionario.id,
+        fecha: lunchDate,
+        hora_salida: lunchTime,
+        salida_en: scannedAt,
+        registrado_salida_por_id: scannerUserId,
+        qr_leido: scannedValue,
+        datos_qr_snapshot: qrSnapshot,
+        funcionario_nombre_completo: buildUserDisplayName(funcionario),
+        funcionario_ci: normalizeOptionalText(funcionario.ci),
+        funcionario_numero_item: normalizeOptionalText(funcionario.numero_item),
+        funcionario_cargo: normalizeOptionalText(funcionario.cargo),
+        funcionario_oficina_id: resolveLinkedOfficeId(funcionario),
+        funcionario_oficina: resolveLinkedOfficeName(funcionario),
+      },
+      include: lunchRecordInclude,
+    });
+  });
+
+  const action = record.hora_retorno == null ? "SALIDA" : "RETORNO";
+  const actionLabel = action === "SALIDA" ? "Salida" : "Retorno";
+
+  return {
+    accion: action,
+    mensaje: `${actionLabel} de almuerzo registrada para ${record.funcionario_nombre_completo}.`,
+    registro: serializeLunchRecord(record),
+  };
+}
+
+function buildLunchReportWhere(query: LunchReportQuery): Prisma.almuerzosWhereInput {
+  const search = query.search;
+  const insensitive = "insensitive" as const;
+  const conditions: Prisma.almuerzosWhereInput[] = [
+    { fecha: query.fecha },
+    ...(query.status === "ABIERTOS" ? [{ hora_retorno: null }] : []),
+    ...(query.status === "CERRADOS" ? [{ hora_retorno: { not: null } }] : []),
+    ...(query.officeId == null
+      ? []
+      : [{ funcionario_oficina_id: query.officeId }]),
+    ...(query.scannerId == null
+      ? []
+      : [
+          {
+            OR: [
+              { registrado_salida_por_id: query.scannerId },
+              { registrado_retorno_por_id: query.scannerId },
+            ],
+          },
+        ]),
+    ...(search == null
+      ? []
+      : [
+          {
+            OR: [
+              { funcionario_nombre_completo: { contains: search, mode: insensitive } },
+              { funcionario_ci: { contains: search, mode: insensitive } },
+              { funcionario_numero_item: { contains: search, mode: insensitive } },
+              { funcionario_cargo: { contains: search, mode: insensitive } },
+              { funcionario_oficina: { contains: search, mode: insensitive } },
+            ],
+          },
+        ]),
+  ];
+
+  return {
+    AND: conditions,
+  };
+}
+
+function formatDateInAppTimeZone(date: Date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function formatTimeInAppTimeZone(date: Date) {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: APP_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
 }
 
 function buildQrLookupCandidates(scannedValue: string, providedLookupCode?: string) {
@@ -6518,7 +7342,9 @@ function serializeExitPermit(salida: any) {
     fechaPermiso: toDateOnlyText(salida.fecha_permiso),
     horaInicio: salida.hora_inicio,
     horaFinal: salida.hora_final ?? "",
+    horaLlegada: salida.hora_llegada ?? "",
     solicitanteNombreCompleto: salida.solicitante_nombre_completo,
+    solicitanteCi: salida.usuarios?.ci ?? "",
     solicitanteNumeroItem: salida.solicitante_numero_item ?? "",
     solicitanteCargo: salida.solicitante_cargo ?? "",
     solicitanteOficinaId: salida.solicitante_oficina_id ?? null,
@@ -6528,6 +7354,36 @@ function serializeExitPermit(salida: any) {
     aprobadoEn: salida.aprobado_en?.toISOString() ?? null,
     createdAt: salida.created_at.toISOString(),
     updatedAt: salida.updated_at.toISOString(),
+  };
+}
+
+function serializeLunchRecord(record: any) {
+  const salidaRegistrador = record.registrador_salida ?? null;
+  const retornoRegistrador = record.registrador_retorno ?? null;
+
+  return {
+    id: record.id,
+    usuarioId: record.usuario_id,
+    fecha: toDateOnlyText(record.fecha),
+    horaSalida: record.hora_salida,
+    salidaEn: record.salida_en.toISOString(),
+    horaRetorno: record.hora_retorno ?? "",
+    retornoEn: record.retorno_en?.toISOString() ?? null,
+    estado: record.hora_retorno == null ? "ABIERTO" : "CERRADO",
+    funcionarioNombreCompleto: record.funcionario_nombre_completo,
+    funcionarioCi: record.funcionario_ci ?? "",
+    funcionarioNumeroItem: record.funcionario_numero_item ?? "",
+    funcionarioCargo: record.funcionario_cargo ?? "",
+    funcionarioOficinaId: record.funcionario_oficina_id ?? null,
+    funcionarioOficina: record.funcionario_oficina ?? "",
+    registradoSalidaPorId: record.registrado_salida_por_id ?? null,
+    registradoSalidaPorNombre:
+      salidaRegistrador == null ? "" : buildUserDisplayName(salidaRegistrador),
+    registradoRetornoPorId: record.registrado_retorno_por_id ?? null,
+    registradoRetornoPorNombre:
+      retornoRegistrador == null ? "" : buildUserDisplayName(retornoRegistrador),
+    createdAt: record.created_at.toISOString(),
+    updatedAt: record.updated_at.toISOString(),
   };
 }
 

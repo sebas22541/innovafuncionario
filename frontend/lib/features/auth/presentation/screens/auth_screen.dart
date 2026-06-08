@@ -1155,7 +1155,7 @@ class _AuthField extends StatelessWidget {
       onFieldSubmitted: onFieldSubmitted,
       decoration: InputDecoration(
         filled: true,
-        fillColor: const Color(0xFFF0EEF6),
+        fillColor: Colors.white,
         floatingLabelBehavior: FloatingLabelBehavior.never,
         label: _RequiredFieldLabel(label: label, isRequired: isRequired),
         hintText: hint,
@@ -1252,7 +1252,7 @@ class _SelectionField extends StatelessWidget {
                       vertical: 15,
                     ),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF0EEF6),
+                    color: Colors.white,
                       borderRadius: BorderRadius.circular(18),
                       border: Border.all(
                         color: borderColor,
@@ -1335,7 +1335,7 @@ class _DropdownField<T> extends StatelessWidget {
       icon: const Icon(Icons.expand_more_rounded, color: Color(0xFF585364)),
       decoration: InputDecoration(
         filled: true,
-        fillColor: const Color(0xFFF0EEF6),
+        fillColor: Colors.white,
         label: _RequiredFieldLabel(label: label, isRequired: isRequired),
         floatingLabelBehavior: FloatingLabelBehavior.never,
         labelStyle: const TextStyle(color: Color(0xFF585364), fontSize: 14),

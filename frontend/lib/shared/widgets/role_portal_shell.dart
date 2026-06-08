@@ -186,10 +186,7 @@ class RolePortalHomeContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final actions = entries
         .where(
-          (entry) =>
-              entry.section != AppSection.home &&
-              // Oculto temporalmente solo el boton de Salidas del inicio.
-              entry.section != AppSection.permissionExits,
+          (entry) => entry.section != AppSection.home,
         )
         .toList(growable: false);
 

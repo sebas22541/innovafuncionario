@@ -4,15 +4,49 @@ import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
 import '../../../../shared/models/app_user.dart';
+import '../../../../shared/widgets/app_alert.dart';
 import '../../infrastructure/services/exit_permits_api_service.dart';
 
 class ExitPermitsScreen extends StatefulWidget {
-  const ExitPermitsScreen({super.key, required this.currentUser});
+  const ExitPermitsScreen({
+    super.key,
+    required this.currentUser,
+    this.onPermitSent,
+  });
+
+  final AppUser currentUser;
+  final VoidCallback? onPermitSent;
+
+  @override
+  State<ExitPermitsScreen> createState() => _ExitPermitsScreenState();
+}
+
+class ExitPermitRequestsScreen extends StatelessWidget {
+  const ExitPermitRequestsScreen({super.key, required this.currentUser});
 
   final AppUser currentUser;
 
   @override
-  State<ExitPermitsScreen> createState() => _ExitPermitsScreenState();
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+      child: _ExitPermitApprovalsList(currentUser: currentUser),
+    );
+  }
+}
+
+class MyExitPermitsScreen extends StatelessWidget {
+  const MyExitPermitsScreen({super.key, required this.currentUser});
+
+  final AppUser currentUser;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+      child: _FuncionarioExitPermitsList(currentUser: currentUser),
+    );
+  }
 }
 
 class _ExitPermitsScreenState extends State<ExitPermitsScreen> {
@@ -23,7 +57,10 @@ class _ExitPermitsScreenState extends State<ExitPermitsScreen> {
     }
 
     if (widget.currentUser.isExternalUser) {
-      return _FuncionarioExitPermitsView(currentUser: widget.currentUser);
+      return _FuncionarioExitPermitsView(
+        currentUser: widget.currentUser,
+        onPermitSent: widget.onPermitSent,
+      );
     }
 
     return const Center(
@@ -33,24 +70,30 @@ class _ExitPermitsScreenState extends State<ExitPermitsScreen> {
 }
 
 class _FuncionarioExitPermitsView extends StatelessWidget {
-  const _FuncionarioExitPermitsView({required this.currentUser});
+  const _FuncionarioExitPermitsView({
+    required this.currentUser,
+    required this.onPermitSent,
+  });
 
   final AppUser currentUser;
+  final VoidCallback? onPermitSent;
 
   @override
   Widget build(BuildContext context) {
-    final isBoss = _isBossUser(currentUser);
+    final isDirector = _isDirectorUser(currentUser);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _ExitPermitForm(currentUser: currentUser),
-          if (isBoss) ...[
-            const SizedBox(height: 18),
-            _ExitPermitApprovalsList(currentUser: currentUser),
+          if (!isDirector) ...[
+            _ExitPermitForm(
+              currentUser: currentUser,
+              onPermitSent: onPermitSent,
+            ),
           ],
+          if (isDirector) _ExitPermitApprovalsList(currentUser: currentUser),
         ],
       ),
     );
@@ -58,9 +101,13 @@ class _FuncionarioExitPermitsView extends StatelessWidget {
 }
 
 class _ExitPermitForm extends StatefulWidget {
-  const _ExitPermitForm({required this.currentUser});
+  const _ExitPermitForm({
+    required this.currentUser,
+    required this.onPermitSent,
+  });
 
   final AppUser currentUser;
+  final VoidCallback? onPermitSent;
 
   @override
   State<_ExitPermitForm> createState() => _ExitPermitFormState();
@@ -158,7 +205,12 @@ class _ExitPermitFormState extends State<_ExitPermitForm> {
         _startTime = TimeOfDay.now();
         _endTime = null;
       });
-      _showMessage('Formulario de salida guardado.');
+      AppAlert.showSuccess(
+        context,
+        'Se envio el permiso correctamente.',
+        title: 'Permiso enviado',
+      );
+      widget.onPermitSent?.call();
     } on BackendApiException catch (error) {
       if (mounted) {
         _showMessage(error.message, isError: true);
@@ -313,7 +365,7 @@ class _ExitPermitFormState extends State<_ExitPermitForm> {
                             )
                           : const Icon(Icons.save_outlined),
                       label: Text(
-                        _isSaving ? 'Guardando...' : 'Guardar salida',
+                        _isSaving ? 'Guardando...' : 'Mandar permiso',
                       ),
                     ),
                   ),
@@ -327,26 +379,45 @@ class _ExitPermitFormState extends State<_ExitPermitForm> {
   }
 }
 
-class _ExitPermitApprovalsList extends StatefulWidget {
-  const _ExitPermitApprovalsList({required this.currentUser});
+class _FuncionarioExitPermitsList extends StatefulWidget {
+  const _FuncionarioExitPermitsList({required this.currentUser});
 
   final AppUser currentUser;
 
   @override
-  State<_ExitPermitApprovalsList> createState() =>
-      _ExitPermitApprovalsListState();
+  State<_FuncionarioExitPermitsList> createState() =>
+      _FuncionarioExitPermitsListState();
 }
 
-class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
+class _FuncionarioExitPermitsListState
+    extends State<_FuncionarioExitPermitsList> {
+  DateTime _selectedDate = DateTime.now();
   List<ExitPermitRecord> _records = const [];
   bool _isLoading = true;
-  int? _reviewingId;
+  int? _savingArrivalId;
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 1),
+    );
+
+    if (picked != null) {
+      setState(() {
+        _selectedDate = picked;
+      });
+      await _load();
+    }
   }
 
   Future<void> _load() async {
@@ -357,7 +428,7 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
 
     try {
       final records = await dependencies.exitPermitsApiService
-          .fetchPendingExitPermits();
+          .fetchExitPermitsByDate(_selectedDate, onlyMine: true);
 
       if (!mounted) {
         return;
@@ -377,7 +448,7 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
       if (mounted) {
         setState(() {
           _records = const [];
-          _errorMessage = 'No fue posible cargar las salidas pendientes.';
+          _errorMessage = 'No fue posible cargar tus salidas.';
         });
       }
     } finally {
@@ -389,20 +460,26 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
     }
   }
 
-  Future<void> _review(ExitPermitRecord record, ExitPermitStatus status) async {
-    if (_reviewingId != null) {
+  Future<void> _registerArrival(ExitPermitRecord record) async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+    );
+
+    if (picked == null) {
       return;
     }
 
     setState(() {
-      _reviewingId = record.id;
+      _savingArrivalId = record.id;
     });
 
     try {
-      await dependencies.exitPermitsApiService.reviewExitPermit(
-        id: record.id,
-        status: status,
-      );
+      final updated = await dependencies.exitPermitsApiService
+          .registerArrivalTime(
+            id: record.id,
+            arrivalTime: _formatTimeOfDay(picked),
+          );
 
       if (!mounted) {
         return;
@@ -410,13 +487,13 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
 
       setState(() {
         _records = _records
-            .where((currentRecord) => currentRecord.id != record.id)
+            .map((current) => current.id == updated.id ? updated : current)
             .toList(growable: false);
       });
-      _showMessage(
-        status == ExitPermitStatus.approved
-            ? 'Salida aprobada.'
-            : 'Salida rechazada.',
+      AppAlert.showSuccess(
+        context,
+        'Hora de llegada registrada.',
+        title: 'Llegada registrada',
       );
     } on BackendApiException catch (error) {
       if (mounted) {
@@ -424,12 +501,12 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
       }
     } catch (_) {
       if (mounted) {
-        _showMessage('No fue posible revisar la salida.', isError: true);
+        _showMessage('No fue posible registrar la llegada.', isError: true);
       }
     } finally {
       if (mounted) {
         setState(() {
-          _reviewingId = null;
+          _savingArrivalId = null;
         });
       }
     }
@@ -446,24 +523,33 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
 
   @override
   Widget build(BuildContext context) {
+    final isDirector = _isDirectorUser(widget.currentUser);
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Expanded(
-                  child: Text(
-                    'Salidas por aprobar',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
+                Text(
+                  'Mis solicitudes',
+                  style: Theme.of(context).textTheme.titleLarge,
                 ),
-                IconButton(
+                if (!isDirector)
+                  _PickerButton(
+                    icon: Icons.calendar_month_rounded,
+                    label: _formatDate(_selectedDate),
+                    onTap: _pickDate,
+                  ),
+                OutlinedButton.icon(
                   onPressed: _isLoading ? null : _load,
                   icon: const Icon(Icons.refresh_rounded),
-                  tooltip: 'Actualizar',
+                  label: const Text('Actualizar'),
                 ),
               ],
             ),
@@ -478,18 +564,16 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
             else if (_errorMessage != null)
               Text(_errorMessage!)
             else if (_records.isEmpty)
-              const Text('No hay salidas pendientes de tu oficina.')
+              const Text('No tienes salidas registradas en esta fecha.')
             else
               Column(
                 children: [
                   for (final record in _records) ...[
-                    _ExitPermitReviewCard(
+                    _MyExitPermitCard(
                       record: record,
-                      isReviewing: _reviewingId == record.id,
-                      onApprove: () =>
-                          _review(record, ExitPermitStatus.approved),
-                      onReject: () =>
-                          _review(record, ExitPermitStatus.rejected),
+                      currentUser: widget.currentUser,
+                      isSavingArrival: _savingArrivalId == record.id,
+                      onRegisterArrival: () => _registerArrival(record),
                     ),
                     const SizedBox(height: 12),
                   ],
@@ -502,19 +586,21 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
   }
 }
 
-class _ExitPermitsAdminList extends StatefulWidget {
-  const _ExitPermitsAdminList({required this.currentUser});
+class _ExitPermitApprovalsList extends StatefulWidget {
+  const _ExitPermitApprovalsList({required this.currentUser});
 
   final AppUser currentUser;
 
   @override
-  State<_ExitPermitsAdminList> createState() => _ExitPermitsAdminListState();
+  State<_ExitPermitApprovalsList> createState() =>
+      _ExitPermitApprovalsListState();
 }
 
-class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
+class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
   DateTime _selectedDate = DateTime.now();
   List<ExitPermitRecord> _records = const [];
   bool _isLoading = true;
+  int? _reviewingId;
   String? _errorMessage;
 
   @override
@@ -568,6 +654,243 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
       if (mounted) {
         setState(() {
           _records = const [];
+          _errorMessage = 'No fue posible cargar las salidas de tu oficina.';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _review(ExitPermitRecord record, ExitPermitStatus status) async {
+    if (_reviewingId != null) {
+      return;
+    }
+
+    setState(() {
+      _reviewingId = record.id;
+    });
+
+    try {
+      await dependencies.exitPermitsApiService.reviewExitPermit(
+        id: record.id,
+        status: status,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      await _load();
+      if (!mounted) {
+        return;
+      }
+
+      if (status == ExitPermitStatus.approved) {
+        AppAlert.showSuccess(
+          context,
+          'Se acepto la solicitud.',
+          title: 'Solicitud aceptada',
+        );
+      } else {
+        AppAlert.showWarning(
+          context,
+          'Se rechazo la solicitud.',
+          title: 'Solicitud rechazada',
+        );
+      }
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        _showMessage(error.message, isError: true);
+      }
+    } catch (_) {
+      if (mounted) {
+        _showMessage('No fue posible revisar la salida.', isError: true);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _reviewingId = null;
+        });
+      }
+    }
+  }
+
+  void _showMessage(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red.shade700 : AppPalette.night,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDirector = _isDirectorUser(widget.currentUser);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  'Solicitudes recibidas',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                if (!isDirector)
+                  _PickerButton(
+                    icon: Icons.calendar_month_rounded,
+                    label: _formatDate(_selectedDate),
+                    onTap: _pickDate,
+                  ),
+                OutlinedButton.icon(
+                  onPressed: _isLoading ? null : _load,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('Actualizar'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_isLoading)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(18),
+                  child: CircularProgressIndicator(),
+                ),
+              )
+            else if (_errorMessage != null)
+              Text(_errorMessage!)
+            else if (_records.isEmpty)
+              Text(
+                isDirector
+                    ? 'No tienes solicitudes recibidas.'
+                    : 'No hay solicitudes recibidas en esta fecha.',
+              )
+            else
+              _ExitPermitOfficeTable(
+                records: _records,
+                reviewingId: _reviewingId,
+                onOpen: (record) => _openReviewDialog(record),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openReviewDialog(ExitPermitRecord record) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _ExitPermitDetailDialog(
+        record: record,
+        isReviewing: _reviewingId == record.id,
+        onApprove: record.status == ExitPermitStatus.pending
+            ? () {
+                Navigator.of(context).pop();
+                _review(record, ExitPermitStatus.approved);
+              }
+            : null,
+        onReject: record.status == ExitPermitStatus.pending
+            ? () {
+                Navigator.of(context).pop();
+                _review(record, ExitPermitStatus.rejected);
+              }
+            : null,
+      ),
+    );
+  }
+}
+
+class _ExitPermitsAdminList extends StatefulWidget {
+  const _ExitPermitsAdminList({required this.currentUser});
+
+  final AppUser currentUser;
+
+  @override
+  State<_ExitPermitsAdminList> createState() => _ExitPermitsAdminListState();
+}
+
+class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
+  DateTime _selectedDate = DateTime.now();
+  final _searchController = TextEditingController();
+  List<ExitPermitRecord> _records = const [];
+  bool _isLoading = true;
+  String? _errorMessage;
+
+  bool get _hasSearch => _searchController.text.trim().isNotEmpty;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 1),
+    );
+
+    if (picked != null) {
+      setState(() {
+        _selectedDate = picked;
+      });
+      await _load();
+    }
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final records = await dependencies.exitPermitsApiService
+          .fetchExitPermitsByDate(
+            _selectedDate,
+            query: _searchController.text,
+            includeDate: !_hasSearch,
+          );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _records = records;
+      });
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        setState(() {
+          _records = const [];
+          _errorMessage = error.message;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _records = const [];
           _errorMessage = 'No fue posible cargar las salidas.';
         });
       }
@@ -596,18 +919,44 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Text(
-                    'Salidas del dia',
+                    _hasSearch
+                        ? 'Historial de salidas del usuario'
+                        : 'Solicitudes de salida del dia',
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
-                  _PickerButton(
-                    icon: Icons.calendar_month_rounded,
-                    label: _formatDate(_selectedDate),
-                    onTap: _pickDate,
-                  ),
+                  if (!_hasSearch)
+                    _PickerButton(
+                      icon: Icons.calendar_month_rounded,
+                      label: _formatDate(_selectedDate),
+                      onTap: _pickDate,
+                    ),
                   OutlinedButton.icon(
                     onPressed: _isLoading ? null : _load,
                     icon: const Icon(Icons.refresh_rounded),
                     label: const Text('Actualizar'),
+                  ),
+                  SizedBox(
+                    width: 190,
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: const InputDecoration(
+                        labelText: 'CI o nombre',
+                        prefixIcon: Icon(Icons.search_rounded),
+                      ),
+                      keyboardType: TextInputType.text,
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: (_) => _load(),
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _isLoading
+                        ? null
+                        : () {
+                            _searchController.clear();
+                            _load();
+                          },
+                    icon: const Icon(Icons.filter_alt_off_outlined),
+                    label: const Text('Limpiar filtro'),
                   ),
                 ],
               ),
@@ -630,78 +979,148 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
     }
 
     if (_records.isEmpty) {
-      return const Center(
-        child: Text('No hay salidas registradas en esta fecha.'),
+      return Center(
+        child: Text(
+          _hasSearch
+              ? 'No se encontraron salidas para ese CI o nombre.'
+              : 'No hay salidas registradas en esta fecha.',
+        ),
       );
     }
 
-    return Scrollbar(
-      thumbVisibility: true,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: DataTable(
-            headingRowColor: WidgetStatePropertyAll(AppPalette.orangeSoft),
-            columns: const [
-              DataColumn(label: Text('Estado')),
-              DataColumn(label: Text('Hora')),
-              DataColumn(label: Text('Motivo')),
-              DataColumn(label: Text('Solicitante')),
-              DataColumn(label: Text('Item')),
-              DataColumn(label: Text('Cargo')),
-              DataColumn(label: Text('Oficina')),
-              DataColumn(label: Text('Destino')),
-              DataColumn(label: Text('Descripcion')),
-              DataColumn(label: Text('Revisado por')),
-            ],
-            rows: [
-              for (final record in _records)
-                DataRow(
-                  cells: [
-                    DataCell(_StatusBadge(status: record.status)),
-                    DataCell(Text(_formatTimeRange(record))),
-                    DataCell(Text(record.reason.label)),
-                    DataCell(
-                      _ConstrainedCell(record.applicantFullName, width: 180),
-                    ),
-                    DataCell(Text(record.applicantItemNumber)),
-                    DataCell(
-                      _ConstrainedCell(record.applicantJobTitle, width: 160),
-                    ),
-                    DataCell(
-                      _ConstrainedCell(record.applicantOffice, width: 190),
-                    ),
-                    DataCell(_ConstrainedCell(record.destination, width: 190)),
-                    DataCell(_ConstrainedCell(record.description, width: 240)),
-                    DataCell(
-                      _ConstrainedCell(record.approvedByName, width: 180),
-                    ),
-                  ],
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: _records.length + 1,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppPalette.surface,
+              border: Border.all(color: AppPalette.line),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    'Nombre completo',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
-            ],
+                SizedBox(width: 12),
+                SizedBox(
+                  width: 92,
+                  child: Text(
+                    'CI',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                SizedBox(width: 12),
+                SizedBox(
+                  width: 104,
+                  child: Text(
+                    'Fecha',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                SizedBox(width: 12),
+                Text('Estado', style: TextStyle(fontWeight: FontWeight.w700)),
+              ],
+            ),
+          );
+        }
+
+        final record = _records[index - 1];
+
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => _openReadOnlyDialog(record),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppPalette.surface,
+                border: Border.all(color: AppPalette.line),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: Text(
+                      record.applicantFullName,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 92,
+                    child: Text(
+                      record.applicantCi,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 104,
+                    child: Text(
+                      _formatDate(record.permitDate),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  _StatusBadge(status: record.status),
+                ],
+              ),
+            ),
           ),
-        ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openReadOnlyDialog(ExitPermitRecord record) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _ExitPermitDetailDialog(
+        record: record,
+        isReviewing: false,
+        onApprove: null,
+        onReject: null,
       ),
     );
   }
 }
 
-class _ExitPermitReviewCard extends StatelessWidget {
-  const _ExitPermitReviewCard({
+class _MyExitPermitCard extends StatelessWidget {
+  const _MyExitPermitCard({
     required this.record,
-    required this.isReviewing,
-    required this.onApprove,
-    required this.onReject,
+    required this.currentUser,
+    required this.isSavingArrival,
+    required this.onRegisterArrival,
   });
 
   final ExitPermitRecord record;
-  final bool isReviewing;
-  final VoidCallback onApprove;
-  final VoidCallback onReject;
+  final AppUser currentUser;
+  final bool isSavingArrival;
+  final VoidCallback onRegisterArrival;
 
   @override
   Widget build(BuildContext context) {
+    final canRegisterArrival =
+        record.status == ExitPermitStatus.approved &&
+        record.arrivalTime.trim().isEmpty &&
+        record.userId == currentUser.id;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
@@ -717,7 +1136,7 @@ class _ExitPermitReviewCard extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  record.applicantFullName,
+                  '${record.reason.label} - ${record.destination}',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
@@ -725,40 +1144,204 @@ class _ExitPermitReviewCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          _SummaryRow(label: 'Item', value: record.applicantItemNumber),
-          _SummaryRow(label: 'Cargo', value: record.applicantJobTitle),
-          _SummaryRow(label: 'Oficina', value: record.applicantOffice),
-          const Divider(height: 22),
-          _SummaryRow(label: 'Motivo', value: record.reason.label),
-          _SummaryRow(label: 'Destino', value: record.destination),
-          _SummaryRow(label: 'Descripcion', value: record.description),
           _SummaryRow(label: 'Fecha', value: _formatDate(record.permitDate)),
-          _SummaryRow(label: 'Tiempo', value: _formatTimeRange(record)),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              FilledButton.icon(
-                onPressed: isReviewing ? null : onApprove,
-                icon: isReviewing
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.check_rounded),
-                label: const Text('Aprobar'),
+          _SummaryRow(label: 'Salida', value: _formatTimeRange(record)),
+          _SummaryRow(label: 'Llegada', value: _formatArrivalTime(record)),
+          _SummaryRow(label: 'Descripcion', value: record.description),
+          if (record.status == ExitPermitStatus.approved) ...[
+            const SizedBox(height: 10),
+            Text(
+              record.arrivalTime.trim().isEmpty
+                  ? 'Tu salida fue aprobada. Al finalizar debes registrar tu hora de llegada.'
+                  : 'Hora de llegada registrada.',
+              style: TextStyle(
+                color: Colors.green.shade700,
+                fontWeight: FontWeight.w600,
               ),
-              OutlinedButton.icon(
-                onPressed: isReviewing ? null : onReject,
-                icon: const Icon(Icons.close_rounded),
-                label: const Text('Rechazar'),
+            ),
+          ],
+          if (canRegisterArrival) ...[
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: isSavingArrival ? null : onRegisterArrival,
+              icon: isSavingArrival
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.schedule_rounded),
+              label: Text(
+                isSavingArrival ? 'Registrando...' : 'Registrar llegada',
               ),
-            ],
-          ),
+            ),
+          ],
         ],
       ),
+    );
+  }
+}
+
+class _ExitPermitOfficeTable extends StatelessWidget {
+  const _ExitPermitOfficeTable({
+    required this.records,
+    required this.reviewingId,
+    required this.onOpen,
+  });
+
+  final List<ExitPermitRecord> records;
+  final int? reviewingId;
+  final ValueChanged<ExitPermitRecord> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppPalette.orangeSoft,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: const Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Nombre completo',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              SizedBox(width: 12),
+              SizedBox(
+                width: 96,
+                child: Text(
+                  'Fecha',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              SizedBox(width: 12),
+              Text('Estado', style: TextStyle(fontWeight: FontWeight.w700)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        for (final record in records) ...[
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: reviewingId == null ? () => onOpen(record) : null,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  border: Border.all(color: AppPalette.line),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        record.applicantFullName,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      width: 96,
+                      child: Text(
+                        _formatDate(record.permitDate),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    _StatusBadge(status: record.status),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _ExitPermitDetailDialog extends StatelessWidget {
+  const _ExitPermitDetailDialog({
+    required this.record,
+    required this.isReviewing,
+    required this.onApprove,
+    required this.onReject,
+  });
+
+  final ExitPermitRecord record;
+  final bool isReviewing;
+  final VoidCallback? onApprove;
+  final VoidCallback? onReject;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          const Expanded(child: Text('Solicitud de salida')),
+          _StatusBadge(status: record.status),
+        ],
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SummaryRow(label: 'Nombre', value: record.applicantFullName),
+            _SummaryRow(label: 'CI', value: record.applicantCi),
+            _SummaryRow(label: 'Item', value: record.applicantItemNumber),
+            _SummaryRow(label: 'Cargo', value: record.applicantJobTitle),
+            _SummaryRow(label: 'Oficina', value: record.applicantOffice),
+            const Divider(height: 22),
+            _SummaryRow(label: 'Motivo', value: record.reason.label),
+            _SummaryRow(label: 'Destino', value: record.destination),
+            _SummaryRow(label: 'Descripcion', value: record.description),
+            _SummaryRow(label: 'Fecha', value: _formatDate(record.permitDate)),
+            _SummaryRow(label: 'Salida', value: _formatTimeRange(record)),
+            _SummaryRow(label: 'Llegada', value: _formatArrivalTime(record)),
+            _SummaryRow(label: 'Revisado por', value: record.approvedByName),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cerrar'),
+        ),
+        if (onReject != null)
+          OutlinedButton.icon(
+            onPressed: isReviewing ? null : onReject,
+            icon: const Icon(Icons.close_rounded),
+            label: const Text('Rechazar'),
+          ),
+        if (onApprove != null)
+          FilledButton.icon(
+            onPressed: isReviewing ? null : onApprove,
+            icon: isReviewing
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.check_rounded),
+            label: const Text('Aprobar'),
+          ),
+      ],
     );
   }
 }
@@ -904,25 +1487,6 @@ class _PickerButton extends StatelessWidget {
   }
 }
 
-class _ConstrainedCell extends StatelessWidget {
-  const _ConstrainedCell(this.text, {required this.width});
-
-  final String text;
-  final double width;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: width,
-      child: Text(
-        text.trim().isEmpty ? '-' : text,
-        maxLines: 3,
-        overflow: TextOverflow.ellipsis,
-      ),
-    );
-  }
-}
-
 String _formatDate(DateTime date) {
   final local = date.toLocal();
   return '${local.day.toString().padLeft(2, '0')}/'
@@ -936,19 +1500,30 @@ String _formatTimeOfDay(TimeOfDay time) {
 }
 
 String _formatTimeRange(ExitPermitRecord record) {
-  final end = record.endTime.trim().isEmpty ? 'pendiente' : record.endTime;
+  final arrival = record.arrivalTime.trim();
+  final end = arrival.isNotEmpty
+      ? arrival
+      : record.endTime.trim().isEmpty
+      ? 'pendiente'
+      : record.endTime;
 
   return '${record.startTime} - $end';
 }
 
-bool _isBossUser(AppUser user) {
+String _formatArrivalTime(ExitPermitRecord record) {
+  final arrival = record.arrivalTime.trim();
+
+  return arrival.isEmpty ? 'pendiente' : arrival;
+}
+
+bool _isDirectorUser(AppUser user) {
   final cargo = user.cargo
       .toLowerCase()
-      .replaceAll('á', 'a')
-      .replaceAll('é', 'e')
-      .replaceAll('í', 'i')
-      .replaceAll('ó', 'o')
-      .replaceAll('ú', 'u');
+      .replaceAll('ÃƒÂ¡', 'a')
+      .replaceAll('ÃƒÂ©', 'e')
+      .replaceAll('ÃƒÂ­', 'i')
+      .replaceAll('ÃƒÂ³', 'o')
+      .replaceAll('ÃƒÂº', 'u');
 
-  return cargo.contains('jefe');
+  return cargo.contains('director') || cargo.contains('direcctor');
 }
