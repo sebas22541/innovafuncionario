@@ -1,11 +1,10 @@
-# syntax=docker/dockerfile:1.4
 FROM ghcr.io/cirruslabs/flutter:3.38.5 AS build
 
 USER root
 WORKDIR /app
 
 COPY frontend/pubspec.yaml frontend/pubspec.lock ./
-RUN --mount=type=cache,target=/root/.pub-cache flutter pub get
+RUN flutter pub get
 
 COPY frontend/lib ./lib
 COPY frontend/assets ./assets
