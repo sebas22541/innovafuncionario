@@ -4,16 +4,25 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/excel_exporter.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../../qr_scanner/infrastructure/models/qr_scan_result_model.dart';
 import '../../../qr_scanner/presentation/widgets/qr_scanner_overlay.dart';
+import '../../../permissions/infrastructure/services/exit_permits_api_service.dart';
 import '../../infrastructure/services/lunches_api_service.dart';
 
 class LunchScannerScreen extends StatefulWidget {
-  const LunchScannerScreen({super.key, required this.currentUser});
+  const LunchScannerScreen({
+    super.key,
+    required this.currentUser,
+    this.backToModeSelectionToken = 0,
+    this.onModeActiveChanged,
+  });
 
   final AppUser currentUser;
+  final int backToModeSelectionToken;
+  final ValueChanged<bool>? onModeActiveChanged;
 
   @override
   State<LunchScannerScreen> createState() => _LunchScannerScreenState();
@@ -28,7 +37,9 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
     formats: const [BarcodeFormat.qrCode],
   );
 
-  LunchScanResponse? _lastResponse;
+  _ScannerMode? _selectedMode;
+  LunchScanResponse? _lastLunchResponse;
+  ExitPermitScanResponse? _lastExitPermitResponse;
   String? _lastError;
   bool _isHandlingDetection = false;
 
@@ -36,6 +47,16 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant LunchScannerScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (widget.backToModeSelectionToken != oldWidget.backToModeSelectionToken &&
+        _selectedMode != null) {
+      _returnToModeSelection();
+    }
   }
 
   Future<void> _handleDetect(BarcodeCapture capture) async {
@@ -57,18 +78,39 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
     await _controller.stop();
 
     try {
-      final response = await dependencies.lunchesApiService.registerScan(
-        qrValue: scan.value,
-      );
+      final selectedMode = _selectedMode;
+
+      if (selectedMode == null) {
+        return;
+      }
+
+      final response = selectedMode == _ScannerMode.lunch
+          ? await dependencies.lunchesApiService.registerScan(
+              qrValue: scan.value,
+            )
+          : await dependencies.exitPermitsApiService.registerQrScan(
+              qrValue: scan.value,
+            );
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _lastResponse = response;
+        if (selectedMode == _ScannerMode.lunch) {
+          _lastLunchResponse = response as LunchScanResponse;
+          _lastExitPermitResponse = null;
+        } else {
+          _lastExitPermitResponse = response as ExitPermitScanResponse;
+          _lastLunchResponse = null;
+        }
       });
-      AppAlert.showSuccess(context, response.message);
+      AppAlert.showSuccess(
+        context,
+        selectedMode == _ScannerMode.lunch
+            ? (response as LunchScanResponse).message
+            : (response as ExitPermitScanResponse).message,
+      );
     } on BackendApiException catch (error) {
       if (mounted) {
         setState(() {
@@ -78,7 +120,9 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
       }
     } catch (_) {
       if (mounted) {
-        const message = 'No fue posible registrar el almuerzo.';
+        final message = _selectedMode == _ScannerMode.exitPermit
+            ? 'No fue posible registrar el permiso de salida.'
+            : 'No fue posible registrar el almuerzo.';
         setState(() {
           _lastError = message;
         });
@@ -97,6 +141,23 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_selectedMode == null) {
+      return _ScannerModeSelection(
+        onSelected: (mode) {
+          setState(() {
+            _selectedMode = mode;
+            _lastError = null;
+            _lastLunchResponse = null;
+            _lastExitPermitResponse = null;
+          });
+          widget.onModeActiveChanged?.call(true);
+          _controller.start();
+        },
+      );
+    }
+
+    final selectedMode = _selectedMode!;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth >= 900;
@@ -113,15 +174,19 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
                         controller: _controller,
                         isScannerActive: !_isHandlingDetection,
                         onDetect: _handleDetect,
+                        mode: selectedMode,
                       ),
                     ),
                     const SizedBox(width: 16),
                     Expanded(
                       flex: 5,
                       child: _LunchScanResultCard(
-                        response: _lastResponse,
+                        mode: selectedMode,
+                        lunchResponse: _lastLunchResponse,
+                        exitPermitResponse: _lastExitPermitResponse,
                         errorMessage: _lastError,
                         isScanning: !_isHandlingDetection,
+                        onChangeMode: _changeMode,
                       ),
                     ),
                   ],
@@ -132,12 +197,16 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
                       controller: _controller,
                       isScannerActive: !_isHandlingDetection,
                       onDetect: _handleDetect,
+                      mode: selectedMode,
                     ),
                     const SizedBox(height: 12),
                     _LunchScanResultCard(
-                      response: _lastResponse,
+                      mode: selectedMode,
+                      lunchResponse: _lastLunchResponse,
+                      exitPermitResponse: _lastExitPermitResponse,
                       errorMessage: _lastError,
                       isScanning: !_isHandlingDetection,
+                      onChangeMode: _changeMode,
                     ),
                   ],
                 ),
@@ -145,6 +214,45 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
       },
     );
   }
+
+  Future<void> _changeMode() async {
+    await _controller.stop();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _selectedMode = null;
+      _lastError = null;
+      _lastLunchResponse = null;
+      _lastExitPermitResponse = null;
+      _isHandlingDetection = false;
+    });
+    widget.onModeActiveChanged?.call(false);
+  }
+
+  void _returnToModeSelection() {
+    _controller.stop();
+
+    setState(() {
+      _selectedMode = null;
+      _lastError = null;
+      _lastLunchResponse = null;
+      _lastExitPermitResponse = null;
+      _isHandlingDetection = false;
+    });
+    widget.onModeActiveChanged?.call(false);
+  }
+}
+
+enum _ScannerMode {
+  lunch('Almuerzo', Icons.restaurant_menu_rounded),
+  exitPermit('Permiso de salida', Icons.assignment_turned_in_rounded);
+
+  const _ScannerMode(this.label, this.icon);
+
+  final String label;
+  final IconData icon;
 }
 
 class LunchesAdminScreen extends StatefulWidget {
@@ -154,12 +262,94 @@ class LunchesAdminScreen extends StatefulWidget {
   State<LunchesAdminScreen> createState() => _LunchesAdminScreenState();
 }
 
+class _ScannerModeSelection extends StatelessWidget {
+  const _ScannerModeSelection({required this.onSelected});
+
+  final ValueChanged<_ScannerMode> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Selecciona el tipo de registro',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 14),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isWide = constraints.maxWidth >= 720;
+              final buttons = [
+                _ScannerModeButton(
+                  mode: _ScannerMode.lunch,
+                  onTap: () => onSelected(_ScannerMode.lunch),
+                ),
+                _ScannerModeButton(
+                  mode: _ScannerMode.exitPermit,
+                  onTap: () => onSelected(_ScannerMode.exitPermit),
+                ),
+              ];
+
+              if (isWide) {
+                return Row(
+                  children: [
+                    Expanded(child: buttons.first),
+                    const SizedBox(width: 14),
+                    Expanded(child: buttons.last),
+                  ],
+                );
+              }
+
+              return Column(
+                children: [
+                  buttons.first,
+                  const SizedBox(height: 12),
+                  buttons.last,
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScannerModeButton extends StatelessWidget {
+  const _ScannerModeButton({required this.mode, required this.onTap});
+
+  final _ScannerMode mode;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 136,
+      child: FilledButton.icon(
+        onPressed: onTap,
+        icon: Icon(mode.icon, size: 30),
+        label: Text(
+          mode.label,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _LunchesAdminScreenState extends State<LunchesAdminScreen> {
   final TextEditingController _searchController = TextEditingController();
   DateTime _selectedDate = DateTime.now();
   LunchRecordStatus? _selectedStatus;
   List<LunchRecord> _records = const [];
   bool _isLoading = true;
+  bool _isExporting = false;
   String? _errorMessage;
 
   @override
@@ -234,6 +424,89 @@ class _LunchesAdminScreenState extends State<LunchesAdminScreen> {
     }
   }
 
+  Future<void> _exportExcel() async {
+    if (_isExporting) {
+      return;
+    }
+
+    final range = await _pickExportRange(context, _selectedDate);
+
+    if (range == null) {
+      return;
+    }
+
+    setState(() {
+      _isExporting = true;
+    });
+
+    try {
+      final records = <LunchRecord>[];
+
+      for (final date in _datesInRange(range)) {
+        records.addAll(
+          await dependencies.lunchesApiService.fetchLunches(
+            date: date,
+            query: _searchController.text,
+            status: _selectedStatus,
+          ),
+        );
+      }
+
+      await exportExcelWorkbook(
+        fileName:
+            'almuerzos_${_fileDate(range.start)}_${_fileDate(range.end)}.xlsx',
+        sheetName: 'Almuerzos',
+        headers: const [
+          'Fecha',
+          'Funcionario',
+          'CI',
+          'Item',
+          'Cargo',
+          'Oficina',
+          'Estado',
+          'Hora salida',
+          'Hora retorno',
+          'Registrado salida por',
+          'Registrado retorno por',
+          'Salida registrada en',
+          'Retorno registrado en',
+        ],
+        rows: [
+          for (final record in records)
+            [
+              _formatDate(record.date),
+              record.employeeFullName,
+              record.employeeCi,
+              record.employeeItemNumber,
+              record.employeeJobTitle,
+              record.employeeOffice,
+              record.status.label,
+              record.departureTime,
+              record.returnTime.isEmpty ? 'Pendiente' : record.returnTime,
+              record.departureScannerName,
+              record.returnScannerName,
+              _formatDateTime(record.departureAt),
+              record.returnAt == null ? '' : _formatDateTime(record.returnAt!),
+            ],
+        ],
+      );
+
+      if (mounted) {
+        AppAlert.showSuccess(context, 'Excel de almuerzos generado.');
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible exportar almuerzos.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExporting = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final openCount = _records.where((record) => record.isOpen).length;
@@ -277,6 +550,23 @@ class _LunchesAdminScreenState extends State<LunchesAdminScreen> {
                         onPressed: _isLoading ? null : _load,
                         icon: const Icon(Icons.refresh_rounded),
                         label: const Text('Actualizar'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _isLoading || _isExporting
+                            ? null
+                            : _exportExcel,
+                        icon: _isExporting
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.table_view_rounded),
+                        label: Text(
+                          _isExporting ? 'Exportando...' : 'Exportar Excel',
+                        ),
                       ),
                     ],
                   ),
@@ -342,11 +632,13 @@ class _LunchScannerViewport extends StatelessWidget {
     required this.controller,
     required this.isScannerActive,
     required this.onDetect,
+    required this.mode,
   });
 
   final MobileScannerController controller;
   final bool isScannerActive;
   final void Function(BarcodeCapture capture) onDetect;
+  final _ScannerMode mode;
 
   @override
   Widget build(BuildContext context) {
@@ -383,15 +675,15 @@ class _LunchScannerViewport extends StatelessWidget {
                       top: 16,
                       child: _ScannerBadge(
                         text: isScannerActive
-                            ? 'Camara frontal'
+                            ? mode.label
                             : 'Registrando',
                       ),
                     ),
-                    const Positioned(
+                    Positioned(
                       left: 16,
                       right: 16,
                       bottom: 16,
-                      child: _ScannerHelp(),
+                      child: _ScannerHelp(mode: mode),
                     ),
                   ],
                 ),
@@ -406,19 +698,30 @@ class _LunchScannerViewport extends StatelessWidget {
 
 class _LunchScanResultCard extends StatelessWidget {
   const _LunchScanResultCard({
-    required this.response,
+    required this.mode,
+    required this.lunchResponse,
+    required this.exitPermitResponse,
     required this.errorMessage,
     required this.isScanning,
+    required this.onChangeMode,
   });
 
-  final LunchScanResponse? response;
+  final _ScannerMode mode;
+  final LunchScanResponse? lunchResponse;
+  final ExitPermitScanResponse? exitPermitResponse;
   final String? errorMessage;
   final bool isScanning;
+  final VoidCallback onChangeMode;
 
   @override
   Widget build(BuildContext context) {
-    final record = response?.record;
-    final color = response?.action == LunchScanAction.returnToWork
+    final lunchRecord = lunchResponse?.record;
+    final exitPermitRecord = exitPermitResponse?.record;
+    final color = mode == _ScannerMode.lunch
+        ? lunchResponse?.action == LunchScanAction.returnToWork
+              ? Colors.green.shade700
+              : AppPalette.orange
+        : exitPermitResponse?.action == ExitPermitScanAction.arrival
         ? Colors.green.shade700
         : AppPalette.orange;
 
@@ -428,9 +731,22 @@ class _LunchScanResultCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Registro de almuerzo',
-              style: Theme.of(context).textTheme.titleLarge,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    mode == _ScannerMode.lunch
+                        ? 'Registro de almuerzo'
+                        : 'Registro de permiso de salida',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                IconButton(
+                  onPressed: onChangeMode,
+                  icon: const Icon(Icons.swap_horiz_rounded),
+                  tooltip: 'Cambiar registro',
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             if (errorMessage != null)
@@ -439,31 +755,59 @@ class _LunchScanResultCard extends StatelessWidget {
                 color: Colors.red.shade700,
                 text: errorMessage!,
               )
-            else if (record != null) ...[
+            else if (lunchRecord != null) ...[
               _ResultBanner(
-                icon: response!.action == LunchScanAction.returnToWork
+                icon: lunchResponse!.action == LunchScanAction.returnToWork
                     ? Icons.login_rounded
                     : Icons.logout_rounded,
                 color: color,
-                text: response!.message,
+                text: lunchResponse!.message,
               ),
               const SizedBox(height: 14),
-              _ResultRow(label: 'Funcionario', value: record.employeeFullName),
-              _ResultRow(label: 'CI', value: record.employeeCi),
-              _ResultRow(label: 'Oficina', value: record.employeeOffice),
-              _ResultRow(label: 'Salida', value: record.departureTime),
+              _ResultRow(
+                label: 'Funcionario',
+                value: lunchRecord.employeeFullName,
+              ),
+              _ResultRow(label: 'CI', value: lunchRecord.employeeCi),
+              _ResultRow(label: 'Oficina', value: lunchRecord.employeeOffice),
+              _ResultRow(label: 'Salida', value: lunchRecord.departureTime),
               _ResultRow(
                 label: 'Retorno',
-                value: record.returnTime.isEmpty
+                value: lunchRecord.returnTime.isEmpty
                     ? 'Pendiente'
-                    : record.returnTime,
+                    : lunchRecord.returnTime,
+              ),
+            ] else if (exitPermitRecord != null) ...[
+              _ResultBanner(
+                icon: exitPermitResponse!.action == ExitPermitScanAction.arrival
+                    ? Icons.login_rounded
+                    : Icons.logout_rounded,
+                color: color,
+                text: exitPermitResponse!.message,
+              ),
+              const SizedBox(height: 14),
+              _ResultRow(
+                label: 'Funcionario',
+                value: exitPermitRecord.applicantFullName,
+              ),
+              _ResultRow(label: 'CI', value: exitPermitRecord.applicantCi),
+              _ResultRow(
+                label: 'Destino',
+                value: exitPermitRecord.destination,
+              ),
+              _ResultRow(label: 'Salida', value: exitPermitRecord.startTime),
+              _ResultRow(
+                label: 'Llegada',
+                value: exitPermitRecord.arrivalTime.isEmpty
+                    ? 'Pendiente'
+                    : exitPermitRecord.arrivalTime,
               ),
             ] else
               _ResultBanner(
                 icon: Icons.qr_code_scanner_rounded,
                 color: AppPalette.night,
                 text: isScanning
-                    ? 'Esperando QR de credencial.'
+                    ? 'Esperando QR de credencial para ${mode.label.toLowerCase()}.'
                     : 'Procesando lectura.',
               ),
           ],
@@ -710,7 +1054,9 @@ class _ScannerBadge extends StatelessWidget {
 }
 
 class _ScannerHelp extends StatelessWidget {
-  const _ScannerHelp();
+  const _ScannerHelp({required this.mode});
+
+  final _ScannerMode mode;
 
   @override
   Widget build(BuildContext context) {
@@ -720,8 +1066,10 @@ class _ScannerHelp extends StatelessWidget {
         color: const Color(0xA154407E),
         borderRadius: BorderRadius.circular(20),
       ),
-      child: const Text(
-        'Alinea el QR de la credencial dentro del marco.',
+      child: Text(
+        mode == _ScannerMode.lunch
+            ? 'Alinea el QR de la credencial para registrar almuerzo.'
+            : 'Alinea el QR de la credencial para registrar salida o llegada.',
         style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
       ),
     );
@@ -765,4 +1113,53 @@ String _formatDate(DateTime date) {
   return '${local.day.toString().padLeft(2, '0')}/'
       '${local.month.toString().padLeft(2, '0')}/'
       '${local.year}';
+}
+
+String _formatDateTime(DateTime date) {
+  final local = date.toLocal();
+  return '${_formatDate(local)} '
+      '${local.hour.toString().padLeft(2, '0')}:'
+      '${local.minute.toString().padLeft(2, '0')}';
+}
+
+String _fileDate(DateTime date) {
+  final local = date.toLocal();
+  return '${local.year.toString().padLeft(4, '0')}'
+      '${local.month.toString().padLeft(2, '0')}'
+      '${local.day.toString().padLeft(2, '0')}';
+}
+
+List<DateTime> _datesInRange(DateTimeRange range) {
+  final start = DateTime(range.start.year, range.start.month, range.start.day);
+  final end = DateTime(range.end.year, range.end.month, range.end.day);
+  final dates = <DateTime>[];
+
+  for (
+    var date = start;
+    !date.isAfter(end);
+    date = date.add(const Duration(days: 1))
+  ) {
+    dates.add(date);
+  }
+
+  return dates;
+}
+
+Future<DateTimeRange?> _pickExportRange(
+  BuildContext context,
+  DateTime selectedDate,
+) {
+  final now = DateTime.now();
+  final initialDate = DateTime(
+    selectedDate.year,
+    selectedDate.month,
+    selectedDate.day,
+  );
+
+  return showDateRangePicker(
+    context: context,
+    firstDate: DateTime(now.year - 2),
+    lastDate: DateTime(now.year + 1),
+    initialDateRange: DateTimeRange(start: initialDate, end: initialDate),
+  );
 }

@@ -2049,12 +2049,14 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                       const SizedBox(height: 14),
                       _FormField(
                         controller: _segundoApellidoController,
-                        label: 'Segundo apellido',
-                        hint: 'Ingresa el segundo apellido',
-                        isRequired: true,
-                        validator: _requiredValidator(
-                          'Ingresa el segundo apellido.',
-                        ),
+                        label: 'Segundo apellido (opcional)',
+                        hint: 'Ingresa el segundo apellido si aplica',
+                        validator: (value) {
+                          if ((value ?? '').trim().length > 80) {
+                            return 'El segundo apellido es demasiado largo.';
+                          }
+                          return null;
+                        },
                       ),
                       const SizedBox(height: 14),
                       _FormField(

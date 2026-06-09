@@ -874,10 +874,14 @@ class _AuthFormCard extends StatelessWidget {
         _AuthField(
           controller: segundoApellidoController,
           label: 'Segundo Apellido',
-          hint: 'Segundo Apellido',
-          isRequired: true,
+          hint: 'Opcional',
           textInputAction: TextInputAction.next,
-          validator: _requiredValidator('Ingresa tu segundo apellido.'),
+          validator: (value) {
+            if ((value ?? '').trim().length > 80) {
+              return 'El segundo apellido es demasiado largo.';
+            }
+            return null;
+          },
         ),
         const SizedBox(height: 12),
         _AuthField(

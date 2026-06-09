@@ -33,6 +33,20 @@ enum ExitPermitStatus {
   }
 }
 
+enum ExitPermitScanAction {
+  departure('SALIDA', 'Salida'),
+  arrival('LLEGADA', 'Llegada');
+
+  const ExitPermitScanAction(this.apiValue, this.label);
+
+  final String apiValue;
+  final String label;
+
+  static ExitPermitScanAction fromApiValue(String value) {
+    return value == arrival.apiValue ? arrival : departure;
+  }
+}
+
 class ExitPermitsApiService {
   ExitPermitsApiService(this._apiClient);
 
@@ -43,19 +57,25 @@ class ExitPermitsApiService {
     required String destination,
     required String description,
     required DateTime permitDate,
-    required String startTime,
-    required String? endTime,
   }) async {
     final payload = await _apiClient.postJson('/api/salidas', {
       'motivo': reason.apiValue,
       'lugarDestino': destination,
       'descripcion': description,
       'fechaPermiso': _dateOnly(permitDate),
-      'horaInicio': startTime,
-      'horaFinal': endTime,
     });
 
     return ExitPermitRecord.fromJson(_readMap(payload['data'], 'salida'));
+  }
+
+  Future<ExitPermitScanResponse> registerQrScan({
+    required String qrValue,
+  }) async {
+    final payload = await _apiClient.postJson('/api/salidas/scan', {
+      'qrValue': qrValue,
+    });
+
+    return ExitPermitScanResponse.fromJson(_readMap(payload['data'], 'salida'));
   }
 
   Future<List<ExitPermitRecord>> fetchExitPermitsByDate(
@@ -125,6 +145,12 @@ class ExitPermitRecord {
     required this.startTime,
     required this.endTime,
     required this.arrivalTime,
+    required this.departureAt,
+    required this.arrivalAt,
+    required this.departureScannerId,
+    required this.departureScannerName,
+    required this.arrivalScannerId,
+    required this.arrivalScannerName,
     required this.applicantFullName,
     required this.applicantCi,
     required this.applicantItemNumber,
@@ -148,6 +174,12 @@ class ExitPermitRecord {
   final String startTime;
   final String endTime;
   final String arrivalTime;
+  final DateTime? departureAt;
+  final DateTime? arrivalAt;
+  final int? departureScannerId;
+  final String departureScannerName;
+  final int? arrivalScannerId;
+  final String arrivalScannerName;
   final String applicantFullName;
   final String applicantCi;
   final String applicantItemNumber;
@@ -178,6 +210,18 @@ class ExitPermitRecord {
       startTime: _readString(source['horaInicio'], 'horaInicio'),
       endTime: _readString(source['horaFinal'], 'horaFinal'),
       arrivalTime: _readString(source['horaLlegada'], 'horaLlegada'),
+      departureAt: _readOptionalDate(source['salidaEn']),
+      arrivalAt: _readOptionalDate(source['llegadaEn']),
+      departureScannerId: source['registradoSalidaPorId'] as int?,
+      departureScannerName: _readString(
+        source['registradoSalidaPorNombre'],
+        'registradoSalidaPorNombre',
+      ),
+      arrivalScannerId: source['registradoLlegadaPorId'] as int?,
+      arrivalScannerName: _readString(
+        source['registradoLlegadaPorNombre'],
+        'registradoLlegadaPorNombre',
+      ),
       applicantFullName: _readString(
         source['solicitanteNombreCompleto'],
         'solicitanteNombreCompleto',
@@ -208,6 +252,28 @@ class ExitPermitRecord {
       updatedAt: DateTime.parse(
         _readString(source['updatedAt'], 'updatedAt'),
       ).toLocal(),
+    );
+  }
+}
+
+class ExitPermitScanResponse {
+  const ExitPermitScanResponse({
+    required this.action,
+    required this.message,
+    required this.record,
+  });
+
+  final ExitPermitScanAction action;
+  final String message;
+  final ExitPermitRecord record;
+
+  factory ExitPermitScanResponse.fromJson(Map<String, dynamic> source) {
+    return ExitPermitScanResponse(
+      action: ExitPermitScanAction.fromApiValue(
+        _readString(source['accion'], 'accion'),
+      ),
+      message: _readString(source['mensaje'], 'mensaje'),
+      record: ExitPermitRecord.fromJson(_readMap(source['registro'], 'registro')),
     );
   }
 }

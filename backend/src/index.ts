@@ -139,6 +139,12 @@ const exitPermitApplicantInclude = {
   },
 } as const;
 
+const exitPermitRecordInclude = {
+  ...exitPermitApplicantInclude,
+  registrador_salida: true,
+  registrador_llegada: true,
+} as const;
+
 const lunchRecordInclude = {
   funcionario: {
     include: userWithOfficeInclude,
@@ -712,6 +718,17 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/salidas/scan") {
+      assertExitPermitScannerRequester(authenticatedUser);
+      const input = parseLunchScanInput(await readJsonBody(request));
+      const result = await registerExitPermitScan(input.qrValue, authenticatedUser.id);
+
+      sendJson(response, 201, {
+        data: result,
+      });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/salidas") {
       const input = parseCreateExitPermitInput(await readJsonBody(request));
       const user = await prisma.usuarios.findUnique({
@@ -744,8 +761,6 @@ const server = http.createServer(async (request, response) => {
           lugar_destino: input.lugarDestino,
           descripcion: input.descripcion,
           fecha_permiso: input.fechaPermiso,
-          hora_inicio: input.horaInicio,
-          hora_final: input.horaFinal,
           solicitante_nombre_completo: buildUserDisplayName(user),
           solicitante_numero_item: normalizeOptionalText(user.numero_item),
           solicitante_cargo: normalizeOptionalText(user.cargo),
@@ -817,11 +832,7 @@ const server = http.createServer(async (request, response) => {
       const salidas = await prisma.salidas.findMany({
         where,
         include: {
-          usuarios: {
-            select: {
-              ci: true,
-            },
-          },
+          ...exitPermitRecordInclude,
         },
         orderBy: [
           { fecha_permiso: "desc" },
@@ -847,7 +858,7 @@ const server = http.createServer(async (request, response) => {
 
       const salida = await prisma.salidas.findUnique({
         where: { id: salidaId },
-        include: exitPermitApplicantInclude,
+        include: exitPermitRecordInclude,
       });
 
       if (!salida) {
@@ -868,6 +879,7 @@ const server = http.createServer(async (request, response) => {
           hora_llegada: input.horaLlegada,
           updated_at: new Date(),
         },
+        include: exitPermitRecordInclude,
       });
 
       sendJson(response, 200, {
@@ -896,7 +908,7 @@ const server = http.createServer(async (request, response) => {
 
       const salida = await prisma.salidas.findUnique({
         where: { id: salidaId },
-        include: exitPermitApplicantInclude,
+        include: exitPermitRecordInclude,
       });
 
       if (!salida) {
@@ -918,6 +930,7 @@ const server = http.createServer(async (request, response) => {
           aprobado_en: new Date(),
           updated_at: new Date(),
         },
+        include: exitPermitRecordInclude,
       });
 
       sendJson(response, 200, {
@@ -2230,7 +2243,7 @@ type UpdateProfileInput = {
   email: string;
   nombreCompleto: string;
   primerApellido: string;
-  segundoApellido: string;
+  segundoApellido: string | null;
   tercerApellido: string | null;
   fotoData: string | null;
 };
@@ -2256,8 +2269,6 @@ type CreateExitPermitInput = {
   lugarDestino: string;
   descripcion: string | null;
   fechaPermiso: Date;
-  horaInicio: string;
-  horaFinal: string | null;
 };
 
 type UpdateExitPermitStatusInput = {
@@ -2285,7 +2296,7 @@ type RegisterUserInput = {
   password: string;
   nombreCompleto: string;
   primerApellido: string;
-  segundoApellido: string;
+  segundoApellido: string | null;
   tercerApellido: string | null;
   ci: string;
   celular: string;
@@ -3081,9 +3092,15 @@ async function ensureRuntimeSchema() {
       "lugar_destino" VARCHAR(255) NOT NULL,
       "descripcion" TEXT,
       "fecha_permiso" DATE NOT NULL,
-      "hora_inicio" VARCHAR(5) NOT NULL,
+      "hora_inicio" VARCHAR(5),
       "hora_final" VARCHAR(5),
       "hora_llegada" VARCHAR(5),
+      "salida_en" TIMESTAMPTZ(6),
+      "llegada_en" TIMESTAMPTZ(6),
+      "registrado_salida_por_id" INTEGER,
+      "registrado_llegada_por_id" INTEGER,
+      "qr_leido" TEXT,
+      "datos_qr_snapshot" JSONB,
       "solicitante_nombre_completo" VARCHAR(220) NOT NULL,
       "solicitante_numero_item" VARCHAR(50),
       "solicitante_cargo" VARCHAR(120),
@@ -3105,10 +3122,21 @@ async function ensureRuntimeSchema() {
     ALTER TABLE "salidas"
       ADD COLUMN IF NOT EXISTS "estado" "estado_salida" NOT NULL DEFAULT 'PENDIENTE',
       ADD COLUMN IF NOT EXISTS "hora_llegada" VARCHAR(5),
+      ADD COLUMN IF NOT EXISTS "salida_en" TIMESTAMPTZ(6),
+      ADD COLUMN IF NOT EXISTS "llegada_en" TIMESTAMPTZ(6),
+      ADD COLUMN IF NOT EXISTS "registrado_salida_por_id" INTEGER,
+      ADD COLUMN IF NOT EXISTS "registrado_llegada_por_id" INTEGER,
+      ADD COLUMN IF NOT EXISTS "qr_leido" TEXT,
+      ADD COLUMN IF NOT EXISTS "datos_qr_snapshot" JSONB,
       ADD COLUMN IF NOT EXISTS "solicitante_oficina_id" INTEGER,
       ADD COLUMN IF NOT EXISTS "aprobado_por_id" INTEGER,
       ADD COLUMN IF NOT EXISTS "aprobado_por_nombre" VARCHAR(220),
       ADD COLUMN IF NOT EXISTS "aprobado_en" TIMESTAMPTZ(6)
+  `);
+
+  await pool.query(`
+    ALTER TABLE "salidas"
+      ALTER COLUMN "hora_inicio" DROP NOT NULL
   `);
 
   await pool.query(`
@@ -3134,6 +3162,40 @@ async function ensureRuntimeSchema() {
   `);
 
   await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'salidas_registrado_salida_por_id_fkey'
+      ) THEN
+        ALTER TABLE "salidas"
+          ADD CONSTRAINT "salidas_registrado_salida_por_id_fkey"
+          FOREIGN KEY ("registrado_salida_por_id")
+          REFERENCES "usuarios" ("id")
+          ON UPDATE NO ACTION;
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'salidas_registrado_llegada_por_id_fkey'
+      ) THEN
+        ALTER TABLE "salidas"
+          ADD CONSTRAINT "salidas_registrado_llegada_por_id_fkey"
+          FOREIGN KEY ("registrado_llegada_por_id")
+          REFERENCES "usuarios" ("id")
+          ON UPDATE NO ACTION;
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_salidas_estado"
       ON "salidas" ("estado")
   `);
@@ -3151,6 +3213,16 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_salidas_aprobado_por_id"
       ON "salidas" ("aprobado_por_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_registrado_salida_por_id"
+      ON "salidas" ("registrado_salida_por_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_registrado_llegada_por_id"
+      ON "salidas" ("registrado_llegada_por_id")
   `);
 
   await pool.query(`
@@ -4096,7 +4168,7 @@ function parseUpdateProfileInput(payload: unknown): UpdateProfileInput {
     email: readRequiredLoginIdentifier(body, "email"),
     nombreCompleto: readRequiredString(body, "nombreCompleto", 2, 150),
     primerApellido: readRequiredString(body, "primerApellido", 2, 80),
-    segundoApellido: readRequiredString(body, "segundoApellido", 2, 80),
+    segundoApellido: readOptionalString(body, "segundoApellido", 0, 80),
     tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
     fotoData: readOptionalPhotoData(body),
   };
@@ -4146,8 +4218,6 @@ function parseCreateExitPermitInput(payload: unknown): CreateExitPermitInput {
     lugarDestino: readRequiredString(body, "lugarDestino", 2, 255),
     descripcion: readOptionalString(body, "descripcion", 0, 1000),
     fechaPermiso: readRequiredDateOnly(body, "fechaPermiso"),
-    horaInicio: readRequiredTimeText(body, "horaInicio"),
-    horaFinal: readOptionalTimeText(body, "horaFinal"),
   };
 }
 
@@ -4297,7 +4367,7 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
       }),
     nombreCompleto: readRequiredString(body, "nombreCompleto", 2, 150),
     primerApellido,
-    segundoApellido: readRequiredString(body, "segundoApellido", 2, 80),
+    segundoApellido: readOptionalString(body, "segundoApellido", 0, 80),
     tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
     ci: readRequiredString(body, "ci", 3, 30),
     celular: readRequiredString(body, "celular", 5, 30),
@@ -4383,7 +4453,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     password: readOptionalString(body, "password", 6, 200),
     nombreCompleto: readRequiredString(body, "nombreCompleto", 2, 150),
     primerApellido: readRequiredString(body, "primerApellido", 2, 80),
-    segundoApellido: readRequiredString(body, "segundoApellido", 2, 80),
+    segundoApellido: readOptionalString(body, "segundoApellido", 0, 80),
     tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
     ci,
     celular: readRequiredString(body, "celular", 5, 30),
@@ -5010,6 +5080,15 @@ function canScanQrData(user: AuthenticatedUser) {
 function assertLunchScannerRequester(user: AuthenticatedUser) {
   if (user.id <= 0 || user.activo !== true || user.rol !== rol_usuario.ALMUERZO) {
     throw new HttpError(403, "Solo una cuenta de almuerzo puede registrar almuerzos.");
+  }
+}
+
+function assertExitPermitScannerRequester(user: AuthenticatedUser) {
+  if (user.id <= 0 || user.activo !== true || user.rol !== rol_usuario.ALMUERZO) {
+    throw new HttpError(
+      403,
+      "Solo una cuenta de almuerzo puede registrar salidas por QR.",
+    );
   }
 }
 
@@ -6085,6 +6164,140 @@ async function registerLunchScan(qrValue: string, scannerUserId: number) {
     accion: action,
     mensaje: `${actionLabel} de almuerzo registrada para ${record.funcionario_nombre_completo}.`,
     registro: serializeLunchRecord(record),
+  };
+}
+
+async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
+  const scannedValue = qrValue.trim();
+  const lookupCode = extractLookupCode(scannedValue);
+
+  if (!lookupCode) {
+    throw new HttpError(400, "Debes enviar un codigo QR valido.");
+  }
+
+  const person = await findPersonByScannedValue(scannedValue, lookupCode);
+  const funcionario = person?.usuario ?? null;
+
+  if (!person || !funcionario) {
+    throw new HttpError(404, "No se encontro un funcionario con ese codigo QR.");
+  }
+
+  if (funcionario.activo !== true || funcionario.rol !== rol_usuario.OPERADOR) {
+    throw new HttpError(
+      400,
+      "El QR escaneado no pertenece a un funcionario activo.",
+    );
+  }
+
+  const scannedAt = new Date();
+  const permitDateText = formatDateInAppTimeZone(scannedAt);
+  const permitDate = readDateOnlyString(permitDateText, "fecha");
+  const scanTime = formatTimeInAppTimeZone(scannedAt);
+  const qrSnapshot = {
+    rawValue: scannedValue,
+    lookupCode,
+    scannedAt: scannedAt.toISOString(),
+    personaId: person.id,
+    usuarioId: funcionario.id,
+  };
+
+  const record = await prisma.$transaction(async (tx) => {
+    const openExitPermit = await tx.salidas.findFirst({
+      where: {
+        usuario_id: funcionario.id,
+        fecha_permiso: permitDate,
+        estado: estado_salida.APROBADO,
+        hora_inicio: {
+          not: null,
+        },
+        hora_llegada: null,
+      },
+      orderBy: [
+        { salida_en: "desc" },
+        { aprobado_en: "desc" },
+        { id: "desc" },
+      ],
+    });
+
+    if (openExitPermit) {
+      return tx.salidas.update({
+        where: { id: openExitPermit.id },
+        data: {
+          hora_llegada: scanTime,
+          llegada_en: scannedAt,
+          registrado_llegada_por_id: scannerUserId,
+          qr_leido: scannedValue,
+          datos_qr_snapshot: qrSnapshot,
+          updated_at: scannedAt,
+        },
+        include: exitPermitRecordInclude,
+      });
+    }
+
+    const pendingDeparturePermit = await tx.salidas.findFirst({
+      where: {
+        usuario_id: funcionario.id,
+        fecha_permiso: permitDate,
+        estado: estado_salida.APROBADO,
+        hora_inicio: null,
+      },
+      orderBy: [
+        { aprobado_en: "asc" },
+        { created_at: "asc" },
+        { id: "asc" },
+      ],
+    });
+
+    if (pendingDeparturePermit) {
+      return tx.salidas.update({
+        where: { id: pendingDeparturePermit.id },
+        data: {
+          hora_inicio: scanTime,
+          salida_en: scannedAt,
+          registrado_salida_por_id: scannerUserId,
+          qr_leido: scannedValue,
+          datos_qr_snapshot: qrSnapshot,
+          updated_at: scannedAt,
+        },
+        include: exitPermitRecordInclude,
+      });
+    }
+
+    const completedPermit = await tx.salidas.findFirst({
+      where: {
+        usuario_id: funcionario.id,
+        fecha_permiso: permitDate,
+        estado: estado_salida.APROBADO,
+        hora_inicio: {
+          not: null,
+        },
+        hora_llegada: {
+          not: null,
+        },
+      },
+      orderBy: [{ llegada_en: "desc" }, { updated_at: "desc" }, { id: "desc" }],
+    });
+
+    if (completedPermit) {
+      throw new HttpError(
+        409,
+        "Este funcionario ya registro salida y llegada de su permiso aprobado de hoy.",
+      );
+    }
+
+    throw new HttpError(
+      404,
+      "Este funcionario no tiene un permiso de salida aprobado para hoy.",
+    );
+  });
+
+  const action = record.hora_llegada == null ? "SALIDA" : "LLEGADA";
+  const actionLabel = action === "SALIDA" ? "Salida" : "Llegada";
+
+  return {
+    accion: action,
+    mensaje: `${actionLabel} de permiso registrada para ${record.solicitante_nombre_completo}.`,
+    registro: serializeExitPermit(record),
   };
 }
 
@@ -7392,6 +7605,9 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
 }
 
 function serializeExitPermit(salida: any) {
+  const salidaRegistrador = salida.registrador_salida ?? null;
+  const llegadaRegistrador = salida.registrador_llegada ?? null;
+
   return {
     id: salida.id,
     usuarioId: salida.usuario_id,
@@ -7400,9 +7616,17 @@ function serializeExitPermit(salida: any) {
     lugarDestino: salida.lugar_destino,
     descripcion: salida.descripcion ?? "",
     fechaPermiso: toDateOnlyText(salida.fecha_permiso),
-    horaInicio: salida.hora_inicio,
+    horaInicio: salida.hora_inicio ?? "",
     horaFinal: salida.hora_final ?? "",
     horaLlegada: salida.hora_llegada ?? "",
+    salidaEn: salida.salida_en?.toISOString() ?? null,
+    llegadaEn: salida.llegada_en?.toISOString() ?? null,
+    registradoSalidaPorId: salida.registrado_salida_por_id ?? null,
+    registradoSalidaPorNombre:
+      salidaRegistrador == null ? "" : buildUserDisplayName(salidaRegistrador),
+    registradoLlegadaPorId: salida.registrado_llegada_por_id ?? null,
+    registradoLlegadaPorNombre:
+      llegadaRegistrador == null ? "" : buildUserDisplayName(llegadaRegistrador),
     solicitanteNombreCompleto: salida.solicitante_nombre_completo,
     solicitanteCi: salida.usuarios?.ci ?? "",
     solicitanteNumeroItem: salida.solicitante_numero_item ?? "",
@@ -7721,7 +7945,7 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
 function buildUserDisplayNameFromParts(user: {
   nombreCompleto: string;
   primerApellido: string;
-  segundoApellido: string;
+  segundoApellido: string | null;
   tercerApellido: string | null;
 }) {
   return [

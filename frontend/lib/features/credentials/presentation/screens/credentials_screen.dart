@@ -23,7 +23,6 @@ class CredentialsScreen extends StatefulWidget {
 }
 
 class _CredentialsScreenState extends State<CredentialsScreen> {
-  static final bool _maintenanceMode = true;
   static const int _credentialsPerPage = 10;
 
   final ImagePicker _imagePicker = ImagePicker();
@@ -55,10 +54,6 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
   @override
   void initState() {
     super.initState();
-    if (_maintenanceMode) {
-      _isLoading = false;
-      return;
-    }
     _loadData();
   }
 
@@ -117,8 +112,8 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
     final ciQuery = _ciController.text.trim().toLowerCase();
     final selectedOffice = _selectedOffice();
 
-    if (selectedOffice == null) {
-      AppAlert.showError(context, 'Selecciona una oficina para buscar.');
+    if (ciQuery.isEmpty && selectedOffice == null) {
+      AppAlert.showError(context, 'Ingresa un CI o selecciona una oficina.');
       setState(() {
         _hasSearched = false;
         _results = const [];
@@ -134,7 +129,8 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
           .where((user) {
             final matchesCi =
                 ciQuery.isEmpty || user.ci.toLowerCase().contains(ciQuery);
-            final matchesOffice = _matchesOffice(user, selectedOffice);
+            final matchesOffice =
+                selectedOffice == null || _matchesOffice(user, selectedOffice);
 
             return matchesCi && matchesOffice;
           })
@@ -283,10 +279,6 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_maintenanceMode) {
-      return const _CredentialsMaintenanceMessage();
-    }
-
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
       child: Column(
@@ -406,7 +398,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
         key: ValueKey('empty-search'),
         icon: Icons.manage_search_rounded,
         title: 'Realiza una busqueda',
-        message: 'Selecciona una oficina. Opcionalmente filtra por CI.',
+        message: 'Ingresa un CI o selecciona una oficina para buscar.',
       );
     }
 
@@ -732,53 +724,6 @@ class _CredentialDownloadButton extends StatelessWidget {
             )
           : const Icon(Icons.download_rounded),
       label: Text(isDownloading ? 'Descargando...' : 'Descargar'),
-    );
-  }
-}
-
-class _CredentialsMaintenanceMessage extends StatelessWidget {
-  const _CredentialsMaintenanceMessage();
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 560),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.construction_rounded,
-                    color: AppPalette.orange,
-                    size: 52,
-                  ),
-                  const SizedBox(height: 18),
-                  Text(
-                    'Credenciales en mantenimiento',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Este modulo esta temporalmente deshabilitado mientras se realizan mejoras.',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodyLarge?.copyWith(color: AppPalette.muted),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

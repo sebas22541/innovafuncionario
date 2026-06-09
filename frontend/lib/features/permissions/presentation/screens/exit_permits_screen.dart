@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/excel_exporter.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../infrastructure/services/exit_permits_api_service.dart';
@@ -119,8 +120,6 @@ class _ExitPermitFormState extends State<_ExitPermitForm> {
   final _descriptionController = TextEditingController();
   ExitPermitReason _reason = ExitPermitReason.work;
   DateTime _permitDate = DateTime.now();
-  TimeOfDay _startTime = TimeOfDay.now();
-  TimeOfDay? _endTime;
   bool _isSaving = false;
 
   @override
@@ -146,32 +145,6 @@ class _ExitPermitFormState extends State<_ExitPermitForm> {
     }
   }
 
-  Future<void> _pickStartTime() async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: _startTime,
-    );
-
-    if (picked != null) {
-      setState(() {
-        _startTime = picked;
-      });
-    }
-  }
-
-  Future<void> _pickEndTime() async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: _endTime ?? TimeOfDay.now(),
-    );
-
-    if (picked != null) {
-      setState(() {
-        _endTime = picked;
-      });
-    }
-  }
-
   Future<void> _save() async {
     FocusManager.instance.primaryFocus?.unfocus();
 
@@ -189,8 +162,6 @@ class _ExitPermitFormState extends State<_ExitPermitForm> {
         destination: _destinationController.text.trim(),
         description: _descriptionController.text.trim(),
         permitDate: _permitDate,
-        startTime: _formatTimeOfDay(_startTime),
-        endTime: _endTime == null ? null : _formatTimeOfDay(_endTime!),
       );
 
       if (!mounted) {
@@ -202,8 +173,6 @@ class _ExitPermitFormState extends State<_ExitPermitForm> {
       setState(() {
         _reason = ExitPermitReason.work;
         _permitDate = DateTime.now();
-        _startTime = TimeOfDay.now();
-        _endTime = null;
       });
       AppAlert.showSuccess(
         context,
@@ -311,38 +280,6 @@ class _ExitPermitFormState extends State<_ExitPermitForm> {
                   ),
                   const SizedBox(height: 18),
                   Text(
-                    'Tiempo: de horas',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: [
-                      _PickerButton(
-                        icon: Icons.schedule_rounded,
-                        label: 'Inicio ${_formatTimeOfDay(_startTime)}',
-                        onTap: _pickStartTime,
-                      ),
-                      _PickerButton(
-                        icon: Icons.timer_outlined,
-                        label: _endTime == null
-                            ? 'Final pendiente'
-                            : 'Final ${_formatTimeOfDay(_endTime!)}',
-                        onTap: _pickEndTime,
-                      ),
-                      if (_endTime != null)
-                        _PickerButton(
-                          icon: Icons.close_rounded,
-                          label: 'Quitar final',
-                          onTap: () => setState(() {
-                            _endTime = null;
-                          }),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  Text(
                     'Fecha del permiso',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
@@ -394,7 +331,6 @@ class _FuncionarioExitPermitsListState
   DateTime _selectedDate = DateTime.now();
   List<ExitPermitRecord> _records = const [];
   bool _isLoading = true;
-  int? _savingArrivalId;
   String? _errorMessage;
 
   @override
@@ -460,67 +396,6 @@ class _FuncionarioExitPermitsListState
     }
   }
 
-  Future<void> _registerArrival(ExitPermitRecord record) async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-    );
-
-    if (picked == null) {
-      return;
-    }
-
-    setState(() {
-      _savingArrivalId = record.id;
-    });
-
-    try {
-      final updated = await dependencies.exitPermitsApiService
-          .registerArrivalTime(
-            id: record.id,
-            arrivalTime: _formatTimeOfDay(picked),
-          );
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _records = _records
-            .map((current) => current.id == updated.id ? updated : current)
-            .toList(growable: false);
-      });
-      AppAlert.showSuccess(
-        context,
-        'Hora de llegada registrada.',
-        title: 'Llegada registrada',
-      );
-    } on BackendApiException catch (error) {
-      if (mounted) {
-        _showMessage(error.message, isError: true);
-      }
-    } catch (_) {
-      if (mounted) {
-        _showMessage('No fue posible registrar la llegada.', isError: true);
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _savingArrivalId = null;
-        });
-      }
-    }
-  }
-
-  void _showMessage(String message, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? Colors.red.shade700 : AppPalette.night,
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final isDirector = _isDirectorUser(widget.currentUser);
@@ -571,9 +446,6 @@ class _FuncionarioExitPermitsListState
                   for (final record in _records) ...[
                     _MyExitPermitCard(
                       record: record,
-                      currentUser: widget.currentUser,
-                      isSavingArrival: _savingArrivalId == record.id,
-                      onRegisterArrival: () => _registerArrival(record),
                     ),
                     const SizedBox(height: 12),
                   ],
@@ -826,6 +698,7 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
   final _searchController = TextEditingController();
   List<ExitPermitRecord> _records = const [];
   bool _isLoading = true;
+  bool _isExporting = false;
   String? _errorMessage;
 
   bool get _hasSearch => _searchController.text.trim().isNotEmpty;
@@ -903,6 +776,100 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
     }
   }
 
+  Future<void> _exportExcel() async {
+    if (_isExporting) {
+      return;
+    }
+
+    final range = await _pickExportRange(context, _selectedDate);
+
+    if (range == null) {
+      return;
+    }
+
+    setState(() {
+      _isExporting = true;
+    });
+
+    try {
+      final records = <ExitPermitRecord>[];
+
+      for (final date in _datesInRange(range)) {
+        records.addAll(
+          await dependencies.exitPermitsApiService.fetchExitPermitsByDate(
+            date,
+            query: _searchController.text,
+          ),
+        );
+      }
+
+      await exportExcelWorkbook(
+        fileName:
+            'salidas_${_fileDate(range.start)}_${_fileDate(range.end)}.xlsx',
+        sheetName: 'Salidas',
+        headers: const [
+          'Fecha permiso',
+          'Funcionario',
+          'CI',
+          'Item',
+          'Cargo',
+          'Oficina',
+          'Motivo',
+          'Estado',
+          'Destino',
+          'Descripcion',
+          'Hora salida',
+          'Hora llegada',
+          'Escaneo salida por',
+          'Escaneo llegada por',
+          'Aprobado/Revisado por',
+          'Fecha aprobacion',
+          'Fecha solicitud',
+          'Ultima actualizacion',
+        ],
+        rows: [
+          for (final record in records)
+            [
+              _formatDate(record.permitDate),
+              record.applicantFullName,
+              record.applicantCi,
+              record.applicantItemNumber,
+              record.applicantJobTitle,
+              record.applicantOffice,
+              record.reason.label,
+              record.status.label,
+              record.destination,
+              record.description,
+              record.startTime.isEmpty ? 'Pendiente' : record.startTime,
+              record.arrivalTime.isEmpty ? 'Pendiente' : record.arrivalTime,
+              record.departureScannerName,
+              record.arrivalScannerName,
+              record.approvedByName,
+              record.approvedAt == null
+                  ? ''
+                  : _formatDateTime(record.approvedAt!),
+              _formatDateTime(record.createdAt),
+              _formatDateTime(record.updatedAt),
+            ],
+        ],
+      );
+
+      if (mounted) {
+        AppAlert.showSuccess(context, 'Excel de salidas generado.');
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible exportar salidas.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExporting = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -934,6 +901,19 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
                     onPressed: _isLoading ? null : _load,
                     icon: const Icon(Icons.refresh_rounded),
                     label: const Text('Actualizar'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _isLoading || _isExporting ? null : _exportExcel,
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.table_view_rounded),
+                    label: Text(
+                      _isExporting ? 'Exportando...' : 'Exportar Excel',
+                    ),
                   ),
                   SizedBox(
                     width: 190,
@@ -1104,23 +1084,12 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
 class _MyExitPermitCard extends StatelessWidget {
   const _MyExitPermitCard({
     required this.record,
-    required this.currentUser,
-    required this.isSavingArrival,
-    required this.onRegisterArrival,
   });
 
   final ExitPermitRecord record;
-  final AppUser currentUser;
-  final bool isSavingArrival;
-  final VoidCallback onRegisterArrival;
 
   @override
   Widget build(BuildContext context) {
-    final canRegisterArrival =
-        record.status == ExitPermitStatus.approved &&
-        record.arrivalTime.trim().isEmpty &&
-        record.userId == currentUser.id;
-
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
@@ -1145,34 +1114,16 @@ class _MyExitPermitCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           _SummaryRow(label: 'Fecha', value: _formatDate(record.permitDate)),
-          _SummaryRow(label: 'Salida', value: _formatTimeRange(record)),
+          _SummaryRow(label: 'Salida', value: _formatDepartureTime(record)),
           _SummaryRow(label: 'Llegada', value: _formatArrivalTime(record)),
           _SummaryRow(label: 'Descripcion', value: record.description),
           if (record.status == ExitPermitStatus.approved) ...[
             const SizedBox(height: 10),
             Text(
-              record.arrivalTime.trim().isEmpty
-                  ? 'Tu salida fue aprobada. Al finalizar debes registrar tu hora de llegada.'
-                  : 'Hora de llegada registrada.',
+              _approvedPermitHint(record),
               style: TextStyle(
                 color: Colors.green.shade700,
                 fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-          if (canRegisterArrival) ...[
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: isSavingArrival ? null : onRegisterArrival,
-              icon: isSavingArrival
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.schedule_rounded),
-              label: Text(
-                isSavingArrival ? 'Registrando...' : 'Registrar llegada',
               ),
             ),
           ],
@@ -1312,8 +1263,16 @@ class _ExitPermitDetailDialog extends StatelessWidget {
             _SummaryRow(label: 'Destino', value: record.destination),
             _SummaryRow(label: 'Descripcion', value: record.description),
             _SummaryRow(label: 'Fecha', value: _formatDate(record.permitDate)),
-            _SummaryRow(label: 'Salida', value: _formatTimeRange(record)),
+            _SummaryRow(label: 'Salida', value: _formatDepartureTime(record)),
             _SummaryRow(label: 'Llegada', value: _formatArrivalTime(record)),
+            _SummaryRow(
+              label: 'Escaneo salida',
+              value: record.departureScannerName,
+            ),
+            _SummaryRow(
+              label: 'Escaneo llegada',
+              value: record.arrivalScannerName,
+            ),
             _SummaryRow(label: 'Revisado por', value: record.approvedByName),
           ],
         ),
@@ -1494,26 +1453,77 @@ String _formatDate(DateTime date) {
       '${local.year.toString().padLeft(4, '0')}';
 }
 
-String _formatTimeOfDay(TimeOfDay time) {
-  return '${time.hour.toString().padLeft(2, '0')}:'
-      '${time.minute.toString().padLeft(2, '0')}';
-}
+String _formatDepartureTime(ExitPermitRecord record) {
+  final departure = record.startTime.trim();
 
-String _formatTimeRange(ExitPermitRecord record) {
-  final arrival = record.arrivalTime.trim();
-  final end = arrival.isNotEmpty
-      ? arrival
-      : record.endTime.trim().isEmpty
-      ? 'pendiente'
-      : record.endTime;
-
-  return '${record.startTime} - $end';
+  return departure.isEmpty ? 'pendiente' : departure;
 }
 
 String _formatArrivalTime(ExitPermitRecord record) {
   final arrival = record.arrivalTime.trim();
 
   return arrival.isEmpty ? 'pendiente' : arrival;
+}
+
+String _formatDateTime(DateTime date) {
+  final local = date.toLocal();
+  return '${_formatDate(local)} '
+      '${local.hour.toString().padLeft(2, '0')}:'
+      '${local.minute.toString().padLeft(2, '0')}';
+}
+
+String _fileDate(DateTime date) {
+  final local = date.toLocal();
+  return '${local.year.toString().padLeft(4, '0')}'
+      '${local.month.toString().padLeft(2, '0')}'
+      '${local.day.toString().padLeft(2, '0')}';
+}
+
+List<DateTime> _datesInRange(DateTimeRange range) {
+  final start = DateTime(range.start.year, range.start.month, range.start.day);
+  final end = DateTime(range.end.year, range.end.month, range.end.day);
+  final dates = <DateTime>[];
+
+  for (
+    var date = start;
+    !date.isAfter(end);
+    date = date.add(const Duration(days: 1))
+  ) {
+    dates.add(date);
+  }
+
+  return dates;
+}
+
+Future<DateTimeRange?> _pickExportRange(
+  BuildContext context,
+  DateTime selectedDate,
+) {
+  final now = DateTime.now();
+  final initialDate = DateTime(
+    selectedDate.year,
+    selectedDate.month,
+    selectedDate.day,
+  );
+
+  return showDateRangePicker(
+    context: context,
+    firstDate: DateTime(now.year - 2),
+    lastDate: DateTime(now.year + 1),
+    initialDateRange: DateTimeRange(start: initialDate, end: initialDate),
+  );
+}
+
+String _approvedPermitHint(ExitPermitRecord record) {
+  if (record.startTime.trim().isEmpty) {
+    return 'Permiso aprobado. Registra la salida con el QR de tu credencial.';
+  }
+
+  if (record.arrivalTime.trim().isEmpty) {
+    return 'Salida registrada. Registra la llegada con el QR de tu credencial.';
+  }
+
+  return 'Salida y llegada registradas por QR.';
 }
 
 bool _isDirectorUser(AppUser user) {

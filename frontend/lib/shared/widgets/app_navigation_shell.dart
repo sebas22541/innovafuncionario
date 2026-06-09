@@ -45,6 +45,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
   late AppSection _selectedSection;
   EventRecord? _scannerEvent;
   late AppUser _currentUser;
+  bool _lunchScannerModeActive = false;
+  int _lunchScannerBackToken = 0;
 
   @override
   void initState() {
@@ -78,6 +80,9 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
 
     setState(() {
       _selectedSection = section;
+      if (section != AppSection.lunchScanner) {
+        _lunchScannerModeActive = false;
+      }
     });
     widget.onSectionChanged?.call(section);
   }
@@ -151,6 +156,14 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
     FocusManager.instance.primaryFocus?.unfocus();
     final defaultSection = _defaultSectionForUser(_currentUser);
 
+    if (_selectedSection == AppSection.lunchScanner && _lunchScannerModeActive) {
+      setState(() {
+        _lunchScannerBackToken++;
+        _lunchScannerModeActive = false;
+      });
+      return;
+    }
+
     if (_selectedSection != defaultSection) {
       _selectSection(defaultSection);
     }
@@ -220,7 +233,19 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       case AppSection.lunches:
         return const LunchesAdminScreen();
       case AppSection.lunchScanner:
-        return LunchScannerScreen(currentUser: _currentUser);
+        return LunchScannerScreen(
+          currentUser: _currentUser,
+          backToModeSelectionToken: _lunchScannerBackToken,
+          onModeActiveChanged: (isActive) {
+            if (_lunchScannerModeActive == isActive) {
+              return;
+            }
+
+            setState(() {
+              _lunchScannerModeActive = isActive;
+            });
+          },
+        );
       case AppSection.qrScanner:
         return _currentUser.canUseEventScanner
             ? QrScannerScreen(
@@ -287,6 +312,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 selectedSection: _selectedSection,
                 entries: _portalEntriesForUser(_currentUser),
                 onSelected: _handleSectionSelection,
+                onBack: _handleSystemBack,
                 onLogout: widget.onLogout,
                 child: animatedContent,
               )
