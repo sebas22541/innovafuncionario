@@ -26,7 +26,9 @@ services:
       - ./backend/.env.dev
     environment:
       TZ: America/La_Paz
-      PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:?Defina PAYLOAD_ENCRYPTION_KEY en el entorno o archivo .env antes de desplegar}
+      PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:-${QR_DYNAMIC_SECRET:?Defina PAYLOAD_ENCRYPTION_KEY o QR_DYNAMIC_SECRET en el entorno o archivo .env antes de desplegar}}
+      PAYLOAD_RESPONSE_ENCRYPTION: ${PAYLOAD_RESPONSE_ENCRYPTION:-true}
+      QR_DYNAMIC_TTL_SECONDS: ${QR_DYNAMIC_TTL_SECONDS:-1800}
     ports:
       - "4015:4000"
     volumes:
@@ -38,7 +40,8 @@ services:
       dockerfile: ./.infra/frontend/prod/Dockerfile
       args:
         BACKEND_BASE_URL: ${FRONTEND_BACKEND_BASE_URL:-https://innovafuncionarioapidev.cochabamba.bo}
-        PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:?Defina PAYLOAD_ENCRYPTION_KEY en el entorno o archivo .env antes de desplegar}
+        PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:-${QR_DYNAMIC_SECRET:?Defina PAYLOAD_ENCRYPTION_KEY o QR_DYNAMIC_SECRET en el entorno o archivo .env antes de desplegar}}
+        APP_VERSION: ${APP_VERSION:-dev}
     restart: unless-stopped
     
     ports:

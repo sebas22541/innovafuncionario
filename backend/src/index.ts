@@ -1379,7 +1379,7 @@ const server = http.createServer(async (request, response) => {
       }
 
       sendJson(response, 200, {
-        data: serializeEvent(evento),
+        data: await serializeEventWithAbsentees(evento),
       });
       return;
     }
@@ -7508,6 +7508,81 @@ function serializeEvent(event: any) {
     observaronCount: observed.length,
     personasListadasCount: attended.length + observed.length,
     detalleCompleto: true,
+  };
+}
+
+async function serializeEventWithAbsentees(event: any) {
+  const serializedEvent = serializeEvent(event);
+  const absentees = await loadEventAbsentees(event);
+
+  return {
+    ...serializedEvent,
+    faltaron: absentees,
+    faltaronCount: absentees.length,
+    personasListadasCount:
+      serializedEvent.asistieronCount +
+      serializedEvent.observaronCount +
+      absentees.length,
+  };
+}
+
+async function loadEventAbsentees(event: any) {
+  const registeredPersonIds = new Set<number>(
+    (event.asistencias ?? [])
+      .map((attendance: any) => attendance.persona_id)
+      .filter((personId: unknown): personId is number => typeof personId === "number"),
+  );
+  const candidates = await prisma.personas.findMany({
+    where: {
+      activo: true,
+      usuario_id: {
+        not: null,
+      },
+      id: {
+        notIn: [...registeredPersonIds],
+      },
+      usuario: {
+        is: {
+          activo: true,
+        },
+      },
+    },
+    include: personIdentityInclude,
+    orderBy: [{ nombre_completo: "asc" }, { id: "asc" }],
+  });
+  const absentees = [];
+
+  for (const person of candidates) {
+    try {
+      await assertPersonCanAttendEvent(person, event);
+      absentees.push(serializeEventAbsenteeRecord(person));
+    } catch (error) {
+      if (error instanceof HttpError && error.statusCode === 403) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  return absentees;
+}
+
+function serializeEventAbsenteeRecord(person: any) {
+  const linkedUser = person.usuario ?? null;
+  const officeName = resolveLinkedOfficeName(linkedUser);
+
+  return {
+    personaId: person.id,
+    nombreCompleto: buildResolvedPersonDisplayName(person),
+    oficina: officeName,
+    oficinaId: resolveLinkedOfficeId(linkedUser),
+    oficinaCodigo: resolveLinkedOfficeCode(linkedUser),
+    ci: linkedUser?.ci ?? person.ci ?? null,
+    tipoVinculo: linkedUser?.tipo_vinculo ?? null,
+    unidad: officeName,
+    cargo: linkedUser?.cargo ?? null,
+    email: linkedUser?.email ?? null,
   };
 }
 

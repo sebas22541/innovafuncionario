@@ -394,6 +394,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
       final observedRows = _buildEventPdfRows(
         _sortEventRosterEntries(event.observed),
       );
+      final absenteeRows = _buildEventAbsenteePdfRows(
+        _sortEventAbsenteeEntries(event.absentees),
+      );
 
       document.addPage(
         pw.MultiPage(
@@ -486,6 +489,41 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 cellStyle: const pw.TextStyle(fontSize: _reportPdfFontSize),
                 headerDecoration: const pw.BoxDecoration(
                   color: PdfColor.fromInt(0xFFF1ECF9),
+                ),
+              ),
+            pw.SizedBox(height: 18),
+            pw.Text(
+              'Faltaron (${event.absentees.length})',
+              style: pw.TextStyle(
+                fontSize: _reportPdfFontSize,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 8),
+            if (absenteeRows.isEmpty)
+              pw.Text(
+                'No hay funcionarios elegidos pendientes de asistencia.',
+                style: const pw.TextStyle(fontSize: _reportPdfFontSize),
+              )
+            else
+              pw.TableHelper.fromTextArray(
+                headers: const [
+                  'Nro',
+                  'CI',
+                  'Nombre',
+                  'Tipo',
+                  'Oficina',
+                  'Estado',
+                ],
+                columnWidths: _eventReportPdfColumnWidths,
+                data: absenteeRows,
+                headerStyle: pw.TextStyle(
+                  fontSize: _reportPdfFontSize,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+                cellStyle: const pw.TextStyle(fontSize: _reportPdfFontSize),
+                headerDecoration: const pw.BoxDecoration(
+                  color: PdfColor.fromInt(0xFFFFF3E0),
                 ),
               ),
           ],
@@ -636,7 +674,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Selecciona un evento y veras tablas separadas con las personas asistidas y observadas.',
+                      'Selecciona un evento y veras tablas separadas con las personas asistidas, observadas y faltantes.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                     const SizedBox(height: 18),
@@ -964,7 +1002,7 @@ class _EventReportsHintState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Cuando elijas un evento veras tablas separadas para asistidos y observados.',
+              'Cuando elijas un evento veras tablas separadas para asistidos, observados y faltantes.',
               style: Theme.of(context).textTheme.bodyMedium,
               textAlign: TextAlign.center,
             ),
@@ -1057,6 +1095,10 @@ class _EventReportCard extends StatelessWidget {
                   icon: Icons.visibility_outlined,
                   label: '${event.observed.length} observados',
                 ),
+                _ReportChip(
+                  icon: Icons.person_off_outlined,
+                  label: '${event.absentees.length} faltaron',
+                ),
               ],
             ),
             const SizedBox(height: 18),
@@ -1073,6 +1115,14 @@ class _EventReportCard extends StatelessWidget {
               emptyMessage:
                   'Todavia no hay personas registradas como observadas.',
               accentBackground: AppPalette.surfaceSoft,
+            ),
+            const SizedBox(height: 18),
+            _EventAbsenteeTableSection(
+              title: 'Faltantes',
+              entries: _sortEventAbsenteeEntries(event.absentees),
+              emptyMessage:
+                  'No hay funcionarios elegidos pendientes de asistencia.',
+              accentBackground: const Color(0xFFFFF3E0),
             ),
           ],
         ),
@@ -1149,6 +1199,87 @@ class _EventRosterTableSection extends StatelessWidget {
                         value: entry.officeName ?? 'Sin oficina',
                       ),
                       _EventTableDateTimeCell(dateTime: entry.registeredAt),
+                      _EventTableValueCell(
+                        value: _eventRosterTipoLabel(entry.tipoVinculo),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _EventAbsenteeTableSection extends StatelessWidget {
+  const _EventAbsenteeTableSection({
+    required this.title,
+    required this.entries,
+    required this.emptyMessage,
+    this.accentBackground = AppPalette.orangeSoft,
+  });
+
+  final String title;
+  final List<EventAbsenteeEntry> entries;
+  final String emptyMessage;
+  final Color accentBackground;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 10),
+        if (entries.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppPalette.surfaceSoft,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: AppPalette.line),
+            ),
+            child: Text(emptyMessage),
+          )
+        else
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Table(
+              defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+              columnWidths: const {
+                0: FixedColumnWidth(110),
+                1: FixedColumnWidth(240),
+                2: FixedColumnWidth(220),
+                3: FixedColumnWidth(150),
+                4: FixedColumnWidth(110),
+              },
+              border: TableBorder.all(color: AppPalette.line),
+              children: [
+                TableRow(
+                  decoration: BoxDecoration(color: accentBackground),
+                  children: const [
+                    _EventTableHeaderCell(label: 'CI'),
+                    _EventTableHeaderCell(label: 'Nombre'),
+                    _EventTableHeaderCell(label: 'Oficina'),
+                    _EventTableHeaderCell(label: 'Estado'),
+                    _EventTableHeaderCell(label: 'Tipo'),
+                  ],
+                ),
+                for (final entry in entries)
+                  TableRow(
+                    children: [
+                      _EventTableValueCell(
+                        value: entry.ci?.trim().isNotEmpty == true
+                            ? entry.ci!.trim()
+                            : 'Sin CI',
+                      ),
+                      _EventTableValueCell(value: entry.fullName),
+                      _EventTableValueCell(
+                        value: entry.officeName ?? 'Sin oficina',
+                      ),
+                      const _EventTableValueCell(value: 'No asistio'),
                       _EventTableValueCell(
                         value: _eventRosterTipoLabel(entry.tipoVinculo),
                       ),
@@ -1666,6 +1797,27 @@ List<List<String>> _buildEventPdfRows(List<EventRosterEntry> entries) {
       .toList(growable: false);
 }
 
+List<List<String>> _buildEventAbsenteePdfRows(
+  List<EventAbsenteeEntry> entries,
+) {
+  return entries
+      .asMap()
+      .entries
+      .map(
+        (entry) => [
+          '${entry.key + 1}',
+          entry.value.ci?.trim().isNotEmpty == true
+              ? entry.value.ci!.trim()
+              : 'Sin CI',
+          entry.value.fullName,
+          _eventRosterTipoLabel(entry.value.tipoVinculo),
+          entry.value.officeName ?? 'Sin oficina',
+          'No asistio',
+        ],
+      )
+      .toList(growable: false);
+}
+
 List<EventRosterEntry> _sortEventRosterEntries(List<EventRosterEntry> entries) {
   final sortedEntries = [...entries];
 
@@ -1687,6 +1839,26 @@ List<EventRosterEntry> _sortEventRosterEntries(List<EventRosterEntry> entries) {
     }
 
     return left.registeredAt.compareTo(right.registeredAt);
+  });
+
+  return sortedEntries;
+}
+
+List<EventAbsenteeEntry> _sortEventAbsenteeEntries(
+  List<EventAbsenteeEntry> entries,
+) {
+  final sortedEntries = [...entries];
+
+  sortedEntries.sort((left, right) {
+    final typeOrderComparison = _eventRosterTypeOrder(
+      left.tipoVinculo,
+    ).compareTo(_eventRosterTypeOrder(right.tipoVinculo));
+
+    if (typeOrderComparison != 0) {
+      return typeOrderComparison;
+    }
+
+    return left.fullName.toLowerCase().compareTo(right.fullName.toLowerCase());
   });
 
   return sortedEntries;
