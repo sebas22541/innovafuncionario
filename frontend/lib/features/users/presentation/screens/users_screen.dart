@@ -1279,12 +1279,14 @@ class _RoleChip extends StatelessWidget {
       AppUserRole.admin => AppPalette.orange,
       AppUserRole.control => AppPalette.night,
       AppUserRole.credentials => AppPalette.orange,
+      AppUserRole.lunch => Colors.green.shade700,
       AppUserRole.external => AppPalette.muted,
     };
     final backgroundColor = switch (role) {
       AppUserRole.admin => AppPalette.orangeSoft,
       AppUserRole.control => AppPalette.blueSoftStrong,
       AppUserRole.credentials => AppPalette.orangeSoft,
+      AppUserRole.lunch => Colors.green.shade50,
       AppUserRole.external => AppPalette.surfaceSoft,
     };
 
@@ -1957,6 +1959,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                             child: Text('Credenciales'),
                           ),
                           DropdownMenuItem(
+                            value: AppUserRole.lunch,
+                            child: Text('Almuerzo'),
+                          ),
+                          DropdownMenuItem(
                             value: AppUserRole.external,
                             child: Text('Funcionario'),
                           ),
@@ -2043,12 +2049,14 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                       const SizedBox(height: 14),
                       _FormField(
                         controller: _segundoApellidoController,
-                        label: 'Segundo apellido',
-                        hint: 'Ingresa el segundo apellido',
-                        isRequired: true,
-                        validator: _requiredValidator(
-                          'Ingresa el segundo apellido.',
-                        ),
+                        label: 'Segundo apellido (opcional)',
+                        hint: 'Ingresa el segundo apellido si aplica',
+                        validator: (value) {
+                          if ((value ?? '').trim().length > 80) {
+                            return 'El segundo apellido es demasiado largo.';
+                          }
+                          return null;
+                        },
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -2999,8 +3007,10 @@ int _userRoleOrder(AppUserRole role) {
       return 1;
     case AppUserRole.credentials:
       return 2;
-    case AppUserRole.external:
+    case AppUserRole.lunch:
       return 3;
+    case AppUserRole.external:
+      return 4;
   }
 }
 

@@ -112,8 +112,8 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
     final ciQuery = _ciController.text.trim().toLowerCase();
     final selectedOffice = _selectedOffice();
 
-    if (selectedOffice == null) {
-      AppAlert.showError(context, 'Selecciona una oficina para buscar.');
+    if (ciQuery.isEmpty && selectedOffice == null) {
+      AppAlert.showError(context, 'Ingresa un CI o selecciona una oficina.');
       setState(() {
         _hasSearched = false;
         _results = const [];
@@ -129,7 +129,8 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
           .where((user) {
             final matchesCi =
                 ciQuery.isEmpty || user.ci.toLowerCase().contains(ciQuery);
-            final matchesOffice = _matchesOffice(user, selectedOffice);
+            final matchesOffice =
+                selectedOffice == null || _matchesOffice(user, selectedOffice);
 
             return matchesCi && matchesOffice;
           })
@@ -397,7 +398,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
         key: ValueKey('empty-search'),
         icon: Icons.manage_search_rounded,
         title: 'Realiza una busqueda',
-        message: 'Selecciona una oficina. Opcionalmente filtra por CI.',
+        message: 'Ingresa un CI o selecciona una oficina para buscar.',
       );
     }
 

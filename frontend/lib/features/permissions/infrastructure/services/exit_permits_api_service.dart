@@ -33,6 +33,20 @@ enum ExitPermitStatus {
   }
 }
 
+enum ExitPermitScanAction {
+  departure('SALIDA', 'Salida'),
+  arrival('LLEGADA', 'Llegada');
+
+  const ExitPermitScanAction(this.apiValue, this.label);
+
+  final String apiValue;
+  final String label;
+
+  static ExitPermitScanAction fromApiValue(String value) {
+    return value == arrival.apiValue ? arrival : departure;
+  }
+}
+
 class ExitPermitsApiService {
   ExitPermitsApiService(this._apiClient);
 
@@ -43,25 +57,47 @@ class ExitPermitsApiService {
     required String destination,
     required String description,
     required DateTime permitDate,
-    required String startTime,
-    required String? endTime,
   }) async {
     final payload = await _apiClient.postJson('/api/salidas', {
       'motivo': reason.apiValue,
       'lugarDestino': destination,
       'descripcion': description,
       'fechaPermiso': _dateOnly(permitDate),
-      'horaInicio': startTime,
-      'horaFinal': endTime,
     });
 
     return ExitPermitRecord.fromJson(_readMap(payload['data'], 'salida'));
   }
 
-  Future<List<ExitPermitRecord>> fetchExitPermitsByDate(DateTime date) async {
-    final payload = await _apiClient.getJson(
-      '/api/salidas?fecha=${Uri.encodeQueryComponent(_dateOnly(date))}',
-    );
+  Future<ExitPermitScanResponse> registerQrScan({
+    required String qrValue,
+  }) async {
+    final payload = await _apiClient.postJson('/api/salidas/scan', {
+      'qrValue': qrValue,
+    });
+
+    return ExitPermitScanResponse.fromJson(_readMap(payload['data'], 'salida'));
+  }
+
+  Future<List<ExitPermitRecord>> fetchExitPermitsByDate(
+    DateTime date, {
+    String? ci,
+    String? query,
+    bool includeDate = true,
+    bool onlyMine = false,
+  }) async {
+    final queryParams = {
+      if (includeDate) 'fecha': _dateOnly(date),
+      if (ci != null && ci.trim().isNotEmpty) 'ci': ci.trim(),
+      if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
+      if (onlyMine) 'propias': 'true',
+    };
+    final queryText = queryParams.entries
+        .map(
+          (entry) =>
+              '${Uri.encodeQueryComponent(entry.key)}=${Uri.encodeQueryComponent(entry.value)}',
+        )
+        .join('&');
+    final payload = await _apiClient.getJson('/api/salidas?$queryText');
     final rows = _readList(payload['data'], 'salidas');
 
     return rows.map(ExitPermitRecord.fromJson).toList(growable: false);
@@ -84,6 +120,17 @@ class ExitPermitsApiService {
 
     return ExitPermitRecord.fromJson(_readMap(payload['data'], 'salida'));
   }
+
+  Future<ExitPermitRecord> registerArrivalTime({
+    required int id,
+    required String arrivalTime,
+  }) async {
+    final payload = await _apiClient.putJson('/api/salidas/$id/llegada', {
+      'horaLlegada': arrivalTime,
+    });
+
+    return ExitPermitRecord.fromJson(_readMap(payload['data'], 'salida'));
+  }
 }
 
 class ExitPermitRecord {
@@ -97,7 +144,15 @@ class ExitPermitRecord {
     required this.permitDate,
     required this.startTime,
     required this.endTime,
+    required this.arrivalTime,
+    required this.departureAt,
+    required this.arrivalAt,
+    required this.departureScannerId,
+    required this.departureScannerName,
+    required this.arrivalScannerId,
+    required this.arrivalScannerName,
     required this.applicantFullName,
+    required this.applicantCi,
     required this.applicantItemNumber,
     required this.applicantJobTitle,
     required this.applicantOfficeId,
@@ -118,7 +173,15 @@ class ExitPermitRecord {
   final DateTime permitDate;
   final String startTime;
   final String endTime;
+  final String arrivalTime;
+  final DateTime? departureAt;
+  final DateTime? arrivalAt;
+  final int? departureScannerId;
+  final String departureScannerName;
+  final int? arrivalScannerId;
+  final String arrivalScannerName;
   final String applicantFullName;
+  final String applicantCi;
   final String applicantItemNumber;
   final String applicantJobTitle;
   final int? applicantOfficeId;
@@ -146,10 +209,24 @@ class ExitPermitRecord {
       ),
       startTime: _readString(source['horaInicio'], 'horaInicio'),
       endTime: _readString(source['horaFinal'], 'horaFinal'),
+      arrivalTime: _readString(source['horaLlegada'], 'horaLlegada'),
+      departureAt: _readOptionalDate(source['salidaEn']),
+      arrivalAt: _readOptionalDate(source['llegadaEn']),
+      departureScannerId: source['registradoSalidaPorId'] as int?,
+      departureScannerName: _readString(
+        source['registradoSalidaPorNombre'],
+        'registradoSalidaPorNombre',
+      ),
+      arrivalScannerId: source['registradoLlegadaPorId'] as int?,
+      arrivalScannerName: _readString(
+        source['registradoLlegadaPorNombre'],
+        'registradoLlegadaPorNombre',
+      ),
       applicantFullName: _readString(
         source['solicitanteNombreCompleto'],
         'solicitanteNombreCompleto',
       ),
+      applicantCi: _readString(source['solicitanteCi'], 'solicitanteCi'),
       applicantItemNumber: _readString(
         source['solicitanteNumeroItem'],
         'solicitanteNumeroItem',
@@ -175,6 +252,28 @@ class ExitPermitRecord {
       updatedAt: DateTime.parse(
         _readString(source['updatedAt'], 'updatedAt'),
       ).toLocal(),
+    );
+  }
+}
+
+class ExitPermitScanResponse {
+  const ExitPermitScanResponse({
+    required this.action,
+    required this.message,
+    required this.record,
+  });
+
+  final ExitPermitScanAction action;
+  final String message;
+  final ExitPermitRecord record;
+
+  factory ExitPermitScanResponse.fromJson(Map<String, dynamic> source) {
+    return ExitPermitScanResponse(
+      action: ExitPermitScanAction.fromApiValue(
+        _readString(source['accion'], 'accion'),
+      ),
+      message: _readString(source['mensaje'], 'mensaje'),
+      record: ExitPermitRecord.fromJson(_readMap(source['registro'], 'registro')),
     );
   }
 }

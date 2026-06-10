@@ -8,6 +8,7 @@ import '../../features/events/presentation/screens/events_screen.dart';
 import '../../features/events/presentation/screens/user_events_screen.dart';
 import '../../features/credentials/presentation/screens/credentials_screen.dart';
 import '../../features/home/presentation/screens/home_screen.dart';
+import '../../features/lunches/presentation/screens/lunches_screen.dart';
 import '../../features/permissions/presentation/screens/exit_permits_screen.dart';
 import '../../features/qr_scanner/presentation/screens/qr_scanner_screen.dart';
 import '../../features/reports/presentation/screens/qr_generation_map_screen.dart';
@@ -44,6 +45,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
   late AppSection _selectedSection;
   EventRecord? _scannerEvent;
   late AppUser _currentUser;
+  bool _lunchScannerModeActive = false;
+  int _lunchScannerBackToken = 0;
 
   @override
   void initState() {
@@ -77,6 +80,9 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
 
     setState(() {
       _selectedSection = section;
+      if (section != AppSection.lunchScanner) {
+        _lunchScannerModeActive = false;
+      }
     });
     widget.onSectionChanged?.call(section);
   }
@@ -150,6 +156,14 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
     FocusManager.instance.primaryFocus?.unfocus();
     final defaultSection = _defaultSectionForUser(_currentUser);
 
+    if (_selectedSection == AppSection.lunchScanner && _lunchScannerModeActive) {
+      setState(() {
+        _lunchScannerBackToken++;
+        _lunchScannerModeActive = false;
+      });
+      return;
+    }
+
     if (_selectedSection != defaultSection) {
       _selectSection(defaultSection);
     }
@@ -212,6 +226,26 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
               );
       case AppSection.permissionExits:
         return ExitPermitsScreen(currentUser: _currentUser);
+      case AppSection.myExitPermits:
+        return MyExitPermitsScreen(currentUser: _currentUser);
+      case AppSection.exitPermitRequests:
+        return ExitPermitRequestsScreen(currentUser: _currentUser);
+      case AppSection.lunches:
+        return const LunchesAdminScreen();
+      case AppSection.lunchScanner:
+        return LunchScannerScreen(
+          currentUser: _currentUser,
+          backToModeSelectionToken: _lunchScannerBackToken,
+          onModeActiveChanged: (isActive) {
+            if (_lunchScannerModeActive == isActive) {
+              return;
+            }
+
+            setState(() {
+              _lunchScannerModeActive = isActive;
+            });
+          },
+        );
       case AppSection.qrScanner:
         return _currentUser.canUseEventScanner
             ? QrScannerScreen(
@@ -278,6 +312,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 selectedSection: _selectedSection,
                 entries: _portalEntriesForUser(_currentUser),
                 onSelected: _handleSectionSelection,
+                onBack: _handleSystemBack,
                 onLogout: widget.onLogout,
                 child: animatedContent,
               )
@@ -423,7 +458,7 @@ class _DesktopShell extends StatelessWidget {
   }
 }
 
-class _MobileAppFrame extends StatelessWidget {
+class _MobileAppFrame extends StatefulWidget {
   const _MobileAppFrame({
     required this.isFramed,
     required this.currentUser,
@@ -443,15 +478,59 @@ class _MobileAppFrame extends StatelessWidget {
   final Widget child;
 
   @override
+  State<_MobileAppFrame> createState() => _MobileAppFrameState();
+}
+
+class _MobileAppFrameState extends State<_MobileAppFrame> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  void _openMenu() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    _scaffoldKey.currentState?.openEndDrawer();
+  }
+
+  Future<void> _handleSelected(AppSection section) async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    final scaffoldState = _scaffoldKey.currentState;
+
+    if (scaffoldState?.isEndDrawerOpen == true) {
+      Navigator.of(context).pop();
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    widget.onSelected(section);
+  }
+
+  Future<void> _handleLogout() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    final scaffoldState = _scaffoldKey.currentState;
+
+    if (scaffoldState?.isEndDrawerOpen == true) {
+      Navigator.of(context).pop();
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    widget.onLogout();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final borderRadius = BorderRadius.circular(isFramed ? 38 : 0);
+    final borderRadius = BorderRadius.circular(widget.isFramed ? 38 : 0);
 
     return DecoratedBox(
       decoration: BoxDecoration(
         color: AppPalette.surface,
         borderRadius: borderRadius,
-        border: isFramed ? Border.all(color: AppPalette.line) : null,
-        boxShadow: isFramed
+        border: widget.isFramed ? Border.all(color: AppPalette.line) : null,
+        boxShadow: widget.isFramed
             ? const [
                 BoxShadow(
                   color: Color(0x1854407E),
@@ -463,22 +542,25 @@ class _MobileAppFrame extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: borderRadius,
-        child: ColoredBox(
-          color: AppPalette.cream,
-          child: Column(
+        child: Scaffold(
+          key: _scaffoldKey,
+          resizeToAvoidBottomInset: false,
+          backgroundColor: AppPalette.cream,
+          endDrawer: _MobileNavigationDrawer(
+            currentUser: widget.currentUser,
+            selectedSection: widget.selectedSection,
+            visibleSections: widget.visibleSections,
+            onSelected: _handleSelected,
+            onLogout: _handleLogout,
+          ),
+          body: Column(
             children: [
               _MobileTopBar(
-                currentUser: currentUser,
-                selectedSection: selectedSection,
-                onLogout: onLogout,
+                currentUser: widget.currentUser,
+                selectedSection: widget.selectedSection,
+                onMenu: _openMenu,
               ),
-              Expanded(child: child),
-              _MobileBottomBar(
-                currentUser: currentUser,
-                selectedSection: selectedSection,
-                visibleSections: visibleSections,
-                onSelected: onSelected,
-              ),
+              Expanded(child: widget.child),
             ],
           ),
         ),
@@ -491,12 +573,12 @@ class _MobileTopBar extends StatelessWidget {
   const _MobileTopBar({
     required this.currentUser,
     required this.selectedSection,
-    required this.onLogout,
+    required this.onMenu,
   });
 
   final AppUser currentUser;
   final AppSection selectedSection;
-  final VoidCallback onLogout;
+  final VoidCallback onMenu;
 
   @override
   Widget build(BuildContext context) {
@@ -521,21 +603,10 @@ class _MobileTopBar extends StatelessWidget {
                   child: _BrandLogo(height: 56),
                 ),
               ),
-              PopupMenuButton<String>(
-                tooltip: 'Opciones',
-                color: AppPalette.surface,
-                onSelected: (value) {
-                  if (value == 'logout') {
-                    onLogout();
-                  }
-                },
-                itemBuilder: (context) => const [
-                  PopupMenuItem<String>(
-                    value: 'logout',
-                    child: Text('Cerrar sesion'),
-                  ),
-                ],
-                icon: const Icon(Icons.more_horiz_rounded, color: Colors.white),
+              IconButton(
+                onPressed: onMenu,
+                tooltip: 'Menu',
+                icon: const Icon(Icons.menu_rounded, color: Colors.white),
               ),
             ],
           ),
@@ -545,171 +616,251 @@ class _MobileTopBar extends StatelessWidget {
   }
 }
 
-class _MobileBottomBar extends StatefulWidget {
-  const _MobileBottomBar({
+class _MobileNavigationDrawer extends StatefulWidget {
+  const _MobileNavigationDrawer({
     required this.currentUser,
     required this.selectedSection,
     required this.visibleSections,
     required this.onSelected,
+    required this.onLogout,
   });
 
   final AppUser currentUser;
   final AppSection selectedSection;
   final List<AppSection> visibleSections;
   final ValueChanged<AppSection> onSelected;
+  final VoidCallback onLogout;
 
   @override
-  State<_MobileBottomBar> createState() => _MobileBottomBarState();
+  State<_MobileNavigationDrawer> createState() =>
+      _MobileNavigationDrawerState();
 }
 
-class _MobileBottomBarState extends State<_MobileBottomBar> {
-  final ScrollController _scrollController = ScrollController();
-  bool _canScrollLeft = false;
-  bool _canScrollRight = false;
+class _MobileNavigationDrawerState extends State<_MobileNavigationDrawer> {
+  late bool _isAttendanceExpanded;
+  late bool _isPermissionsExpanded;
 
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_syncScrollIndicators);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _syncScrollIndicators();
-    });
+    _isAttendanceExpanded = _isAttendanceSection(widget.selectedSection);
+    _isPermissionsExpanded = _isPermissionSection(widget.selectedSection);
   }
 
   @override
-  void didUpdateWidget(covariant _MobileBottomBar oldWidget) {
+  void didUpdateWidget(covariant _MobileNavigationDrawer oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    if (oldWidget.visibleSections.length != widget.visibleSections.length) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _syncScrollIndicators();
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _scrollController
-      ..removeListener(_syncScrollIndicators)
-      ..dispose();
-    super.dispose();
-  }
-
-  void _syncScrollIndicators() {
-    if (!_scrollController.hasClients) {
-      return;
+    if (_isAttendanceSection(widget.selectedSection) &&
+        oldWidget.selectedSection != widget.selectedSection) {
+      _isAttendanceExpanded = true;
     }
 
-    final position = _scrollController.position;
-    final nextCanScrollLeft = position.pixels > position.minScrollExtent + 1;
-    final nextCanScrollRight = position.pixels < position.maxScrollExtent - 1;
-
-    if (_canScrollLeft == nextCanScrollLeft &&
-        _canScrollRight == nextCanScrollRight) {
-      return;
+    if (_isPermissionSection(widget.selectedSection) &&
+        oldWidget.selectedSection != widget.selectedSection) {
+      _isPermissionsExpanded = true;
     }
-
-    setState(() {
-      _canScrollLeft = nextCanScrollLeft;
-      _canScrollRight = nextCanScrollRight;
-    });
   }
 
   @override
   Widget build(BuildContext context) {
-    const minItemWidth = 76.0;
+    final attendanceSections = widget.visibleSections
+        .where(_isAttendanceSection)
+        .toList(growable: false);
+    final permissionSections = widget.visibleSections
+        .where(_isPermissionSection)
+        .toList(growable: false);
+    final leadingSections = widget.visibleSections
+        .where(
+          (section) =>
+              !_isAttendanceSection(section) &&
+              !_isPermissionSection(section) &&
+              section != AppSection.settings,
+        )
+        .toList(growable: false);
+    final settingsSections = widget.visibleSections
+        .where((section) => section == AppSection.settings)
+        .toList(growable: false);
+    final isAttendanceSelected = _isAttendanceSection(widget.selectedSection);
+    final isPermissionsSelected = _isPermissionSection(widget.selectedSection);
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 14),
-      decoration: const BoxDecoration(
-        color: AppPalette.surface,
-        border: Border(top: BorderSide(color: AppPalette.line)),
+    return Drawer(
+      width: math.min(MediaQuery.sizeOf(context).width * 0.84, 340),
+      backgroundColor: AppPalette.night,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(32),
+          bottomLeft: Radius.circular(32),
+        ),
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final itemWidth = math.max(
-            minItemWidth,
-            constraints.maxWidth / widget.visibleSections.length,
-          );
-
-          return Stack(
-            alignment: Alignment.center,
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SingleChildScrollView(
-                controller: _scrollController,
-                scrollDirection: Axis.horizontal,
-                physics: const BouncingScrollPhysics(),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(22),
+                ),
                 child: Row(
                   children: [
-                    for (final section in widget.visibleSections)
-                      SizedBox(
-                        width: itemWidth,
-                        child: _BottomBarItem(
+                    _UserAvatar(currentUser: widget.currentUser, size: 48),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.currentUser.fullName,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(color: Colors.white),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            widget.currentUser.email,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: AppPalette.onDarkMuted),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 22),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      for (final section in leadingSections) ...[
+                        _DesktopNavItem(
                           currentUser: widget.currentUser,
                           section: section,
                           isSelected: section == widget.selectedSection,
                           onTap: () => widget.onSelected(section),
                         ),
-                      ),
-                  ],
-                ),
-              ),
-              if (_canScrollLeft)
-                const Positioned(
-                  left: 0,
-                  child: _BottomBarScrollHint(icon: Icons.chevron_left_rounded),
-                ),
-              if (_canScrollRight)
-                const Positioned(
-                  right: 0,
-                  child: _BottomBarScrollHint(
-                    icon: Icons.chevron_right_rounded,
+                        const SizedBox(height: 10),
+                      ],
+                      if (attendanceSections.isNotEmpty) ...[
+                        _DesktopNavGroup(
+                          label: 'Asistencias',
+                          icon: Icons.apps_rounded,
+                          isSelected: isAttendanceSelected,
+                          isExpanded: _isAttendanceExpanded,
+                          onTap: () => setState(() {
+                            _isAttendanceExpanded = !_isAttendanceExpanded;
+                          }),
+                        ),
+                        AnimatedCrossFade(
+                          firstChild: const SizedBox.shrink(),
+                          secondChild: Padding(
+                            padding: const EdgeInsets.only(
+                              left: 14,
+                              top: 8,
+                              bottom: 2,
+                            ),
+                            child: Column(
+                              children: [
+                                for (final section in attendanceSections) ...[
+                                  _DesktopSubNavItem(
+                                    currentUser: widget.currentUser,
+                                    section: section,
+                                    isSelected:
+                                        section == widget.selectedSection,
+                                    onTap: () => widget.onSelected(section),
+                                  ),
+                                  const SizedBox(height: 8),
+                                ],
+                              ],
+                            ),
+                          ),
+                          crossFadeState: _isAttendanceExpanded
+                              ? CrossFadeState.showSecond
+                              : CrossFadeState.showFirst,
+                          duration: const Duration(milliseconds: 180),
+                        ),
+                      ],
+                      if (permissionSections.isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        _DesktopNavGroup(
+                          label: 'Permisos',
+                          icon: Icons.fact_check_outlined,
+                          isSelected: isPermissionsSelected,
+                          isExpanded: _isPermissionsExpanded,
+                          onTap: () => setState(() {
+                            _isPermissionsExpanded = !_isPermissionsExpanded;
+                          }),
+                        ),
+                        AnimatedCrossFade(
+                          firstChild: const SizedBox.shrink(),
+                          secondChild: Padding(
+                            padding: const EdgeInsets.only(
+                              left: 14,
+                              top: 8,
+                              bottom: 2,
+                            ),
+                            child: Column(
+                              children: [
+                                for (final section in permissionSections) ...[
+                                  _DesktopSubNavItem(
+                                    currentUser: widget.currentUser,
+                                    section: section,
+                                    isSelected:
+                                        section == widget.selectedSection,
+                                    onTap: () => widget.onSelected(section),
+                                  ),
+                                  const SizedBox(height: 8),
+                                ],
+                              ],
+                            ),
+                          ),
+                          crossFadeState: _isPermissionsExpanded
+                              ? CrossFadeState.showSecond
+                              : CrossFadeState.showFirst,
+                          duration: const Duration(milliseconds: 180),
+                        ),
+                      ],
+                      for (final section in settingsSections) ...[
+                        const SizedBox(height: 10),
+                        _DesktopNavItem(
+                          currentUser: widget.currentUser,
+                          section: section,
+                          isSelected: section == widget.selectedSection,
+                          onTap: () => widget.onSelected(section),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _BottomBarScrollHint extends StatelessWidget {
-  const _BottomBarScrollHint({required this.icon});
-
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: Container(
-        width: 28,
-        height: 58,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: icon == Icons.chevron_left_rounded
-                ? Alignment.centerLeft
-                : Alignment.centerRight,
-            end: icon == Icons.chevron_left_rounded
-                ? Alignment.centerRight
-                : Alignment.centerLeft,
-            colors: [
-              AppPalette.surface,
-              AppPalette.surface.withValues(alpha: 0.72),
-              AppPalette.surface.withValues(alpha: 0),
+              ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: widget.onLogout,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.22),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                  icon: const Icon(Icons.logout_rounded),
+                  label: const Text('Cerrar sesion'),
+                ),
+              ),
             ],
           ),
-        ),
-        child: Container(
-          width: 22,
-          height: 32,
-          decoration: BoxDecoration(
-            color: AppPalette.orangeSoft,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: AppPalette.line),
-          ),
-          child: Icon(icon, size: 20, color: AppPalette.orange),
         ),
       ),
     );
@@ -1026,67 +1177,6 @@ class _DesktopHeader extends StatelessWidget {
   }
 }
 
-class _BottomBarItem extends StatelessWidget {
-  const _BottomBarItem({
-    required this.currentUser,
-    required this.section,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  final AppUser currentUser;
-  final AppSection section;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    const activeColor = AppPalette.orange;
-    const inactiveColor = AppPalette.muted;
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: onTap,
-        splashFactory: NoSplash.splashFactory,
-        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          constraints: const BoxConstraints(minHeight: 64),
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
-          decoration: BoxDecoration(
-            color: isSelected ? AppPalette.orangeSoft : Colors.transparent,
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                _sectionIconForUser(currentUser, section),
-                size: 22,
-                color: isSelected ? activeColor : inactiveColor,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _sectionLabelForUser(currentUser, section),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: isSelected ? activeColor : inactiveColor,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _DesktopNavItem extends StatelessWidget {
   const _DesktopNavItem({
     required this.currentUser,
@@ -1334,6 +1424,7 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
       AppSection.users,
       AppSection.credentials,
       AppSection.permissionExits,
+      AppSection.lunches,
       AppSection.settings,
     ];
   }
@@ -1355,15 +1446,24 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
     ];
   }
 
-  return const [
+  if (user.isLunchControl) {
+    return const [
+      AppSection.lunchScanner,
+    ];
+  }
+
+  final sections = [
     AppSection.home,
     AppSection.events,
     AppSection.availableEvents,
     AppSection.myQr,
-    // Oculto temporalmente para funcionarios. Reactivar cuando vuelvan a usar Salidas.
-    // AppSection.permissionExits,
+    if (!_isDirectorJobTitle(user)) AppSection.permissionExits,
+    if (!_isDirectorJobTitle(user)) AppSection.myExitPermits,
+    if (_isExitPermitApproverUser(user)) AppSection.exitPermitRequests,
     AppSection.settings,
   ];
+
+  return sections;
 }
 
 bool _isAttendanceSection(AppSection section) {
@@ -1371,14 +1471,18 @@ bool _isAttendanceSection(AppSection section) {
     case AppSection.events:
     case AppSection.reports:
     case AppSection.map:
-    case AppSection.users:
     case AppSection.credentials:
       return true;
     case AppSection.home:
     case AppSection.availableEvents:
     case AppSection.permissionExits:
+    case AppSection.myExitPermits:
+    case AppSection.exitPermitRequests:
+    case AppSection.lunches:
+    case AppSection.lunchScanner:
     case AppSection.qrScanner:
     case AppSection.myQr:
+    case AppSection.users:
     case AppSection.settings:
       return false;
   }
@@ -1387,6 +1491,9 @@ bool _isAttendanceSection(AppSection section) {
 bool _isPermissionSection(AppSection section) {
   switch (section) {
     case AppSection.permissionExits:
+    case AppSection.myExitPermits:
+    case AppSection.exitPermitRequests:
+    case AppSection.lunches:
       return true;
     case AppSection.home:
     case AppSection.events:
@@ -1397,12 +1504,17 @@ bool _isPermissionSection(AppSection section) {
     case AppSection.credentials:
     case AppSection.qrScanner:
     case AppSection.myQr:
+    case AppSection.lunchScanner:
     case AppSection.settings:
       return false;
   }
 }
 
 AppSection _defaultSectionForUser(AppUser user) {
+  if (user.isLunchControl) {
+    return AppSection.lunchScanner;
+  }
+
   if (user.isCredentials) {
     return AppSection.credentials;
   }
@@ -1447,6 +1559,10 @@ String _sectionTitleForUser(AppUser user, AppSection section) {
         return 'Mi QR';
       case AppSection.permissionExits:
         return 'Formulario de salida';
+      case AppSection.myExitPermits:
+        return 'Mis solicitudes';
+      case AppSection.exitPermitRequests:
+        return 'Solicitudes recibidas';
       case AppSection.settings:
         return 'Perfil';
       default:
@@ -1463,8 +1579,16 @@ String _sectionTitleForUser(AppUser user, AppSection section) {
       return 'Eventos programados';
     case AppSection.myQr:
       return 'Mi QR';
+    case AppSection.myExitPermits:
+      return 'Mis solicitudes';
     case AppSection.permissionExits:
+      if (_isDirectorExitPermitUser(user)) {
+        return 'Solicitudes recibidas';
+      }
+
       return 'Formulario de salida';
+    case AppSection.exitPermitRequests:
+      return 'Solicitudes recibidas';
     case AppSection.settings:
       return 'Mi perfil';
     default:
@@ -1481,6 +1605,14 @@ String _sectionLabelForUser(AppUser user, AppSection section) {
         return 'Escanear QR';
       case AppSection.myQr:
         return 'Mi QR';
+      case AppSection.permissionExits:
+        return _isDirectorExitPermitUser(user)
+            ? 'Solicitudes recibidas'
+            : 'Salidas';
+      case AppSection.myExitPermits:
+        return 'Mis solicitudes';
+      case AppSection.exitPermitRequests:
+        return 'Solicitudes recibidas';
       case AppSection.settings:
         return 'Perfil';
       default:
@@ -1498,6 +1630,14 @@ String _sectionLabelForUser(AppUser user, AppSection section) {
         return 'Eventos programados';
       case AppSection.myQr:
         return 'Mi QR';
+      case AppSection.permissionExits:
+        return _isDirectorExitPermitUser(user)
+            ? 'Solicitudes recibidas'
+            : 'Salidas';
+      case AppSection.myExitPermits:
+        return 'Mis solicitudes';
+      case AppSection.exitPermitRequests:
+        return 'Solicitudes recibidas';
       case AppSection.settings:
         return 'Perfil';
       default:
@@ -1519,6 +1659,14 @@ IconData _sectionIconForUser(AppUser user, AppSection section) {
         return Icons.qr_code_scanner_rounded;
       case AppSection.myQr:
         return Icons.qr_code_2_rounded;
+      case AppSection.permissionExits:
+        return _isExitPermitApproverUser(user)
+            ? Icons.fact_check_outlined
+            : Icons.exit_to_app_rounded;
+      case AppSection.myExitPermits:
+        return Icons.assignment_outlined;
+      case AppSection.exitPermitRequests:
+        return Icons.assignment_turned_in_outlined;
       case AppSection.settings:
         return Icons.person_outline_rounded;
       default:
@@ -1536,14 +1684,101 @@ IconData _sectionIconForUser(AppUser user, AppSection section) {
         return Icons.event_note_rounded;
       case AppSection.myQr:
         return Icons.qr_code_2_rounded;
+      case AppSection.myExitPermits:
+        return Icons.assignment_outlined;
       case AppSection.settings:
         return Icons.person_outline_rounded;
+      case AppSection.exitPermitRequests:
+        return Icons.assignment_turned_in_outlined;
       default:
         return section.icon;
     }
   }
 
   return section.icon;
+}
+
+bool _isExitPermitApproverUser(AppUser user) {
+  const bossCodes = {
+    'CA018',
+    'CA015',
+    'CA014',
+    'CA013',
+    'CA012',
+    'CA011',
+    'CA010',
+  };
+  final cargoCodigo = user.cargoCodigo?.trim().toUpperCase();
+  final cargo = user.cargo
+      .toLowerCase()
+      .replaceAll('Ã¡', 'a')
+      .replaceAll('Ã©', 'e')
+      .replaceAll('Ã­', 'i')
+      .replaceAll('Ã³', 'o')
+      .replaceAll('Ãº', 'u');
+
+  return (cargoCodigo != null && bossCodes.contains(cargoCodigo)) ||
+      cargo.contains('jefe') ||
+      _isDirectorExitPermitUser(user);
+}
+
+bool _isDirectorExitPermitUser(AppUser user) {
+  final officeCode = user.officeCode?.trim();
+  return _isDirectorOfficeCode(officeCode) && _isDirectorJobTitle(user);
+}
+
+bool _isDirectorJobTitle(AppUser user) {
+  final cargo = user.cargo
+      .toLowerCase()
+      .replaceAll('ÃƒÂ¡', 'a')
+      .replaceAll('ÃƒÂ©', 'e')
+      .replaceAll('ÃƒÂ­', 'i')
+      .replaceAll('ÃƒÂ³', 'o')
+      .replaceAll('ÃƒÂº', 'u');
+
+  return cargo.contains('director') || cargo.contains('direcctor');
+}
+
+bool _isDirectorOfficeCode(String? code) {
+  const directorOfficeCodes = {
+    '0.1',
+    '0.2',
+    '0.5',
+    '1.1',
+    '1.3',
+    '2.1',
+    '2.2',
+    '3.3',
+    '3.4',
+    '4.1',
+    '4.2',
+    '5.1',
+    '5.2',
+    '5.3',
+    '5.5',
+    '6.1',
+    '6.2',
+    '6.3',
+    '6.4',
+    '7.2',
+    '7.3',
+    '8.1',
+    '8.2',
+    '8.3',
+    '9.1',
+    '9.2',
+    '10.1',
+    '10.2',
+    '10.3',
+    '10.4',
+    '11.1',
+    '11.2',
+    '11.4',
+    '12.1',
+    '12.2',
+  };
+
+  return code != null && directorOfficeCodes.contains(code);
 }
 
 List<PortalNavEntry> _portalEntriesForUser(AppUser user) {

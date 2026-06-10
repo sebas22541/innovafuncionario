@@ -27,6 +27,7 @@ class RolePortalShell extends StatefulWidget {
     required this.selectedSection,
     required this.entries,
     required this.onSelected,
+    required this.onBack,
     required this.onLogout,
     required this.child,
   });
@@ -36,6 +37,7 @@ class RolePortalShell extends StatefulWidget {
   final AppSection selectedSection;
   final List<PortalNavEntry> entries;
   final ValueChanged<AppSection> onSelected;
+  final VoidCallback onBack;
   final VoidCallback onLogout;
   final Widget child;
 
@@ -140,7 +142,7 @@ class _RolePortalShellState extends State<RolePortalShell> {
                     _PortalInnerHeader(
                       currentUser: widget.currentUser,
                       entry: _currentEntry,
-                      onBack: () => widget.onSelected(AppSection.home),
+                      onBack: widget.onBack,
                       onMenu: _openDrawer,
                     ),
                     Expanded(
@@ -186,10 +188,7 @@ class RolePortalHomeContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final actions = entries
         .where(
-          (entry) =>
-              entry.section != AppSection.home &&
-              // Oculto temporalmente solo el boton de Salidas del inicio.
-              entry.section != AppSection.permissionExits,
+          (entry) => entry.section != AppSection.home,
         )
         .toList(growable: false);
 
@@ -512,69 +511,81 @@ class _PortalDrawer extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Center(
-                child: Base64Avatar(
-                  size: 110,
-                  fallbackLabel: currentUser.fullName,
-                  photoSource: currentUser.fotoUrl,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-              ),
-              const SizedBox(height: 14),
-              Center(
-                child: Text(
-                  currentUser.fullName,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    color: Colors.black87,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 20,
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Base64Avatar(
+                          size: 110,
+                          fallbackLabel: currentUser.fullName,
+                          photoSource: currentUser.fotoUrl,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Center(
+                        child: Text(
+                          currentUser.fullName,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(
+                                color: Colors.black87,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 20,
+                              ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Center(
+                        child: Text(
+                          currentUser.email,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(
+                                color: AppPalette.muted,
+                                fontSize: 13,
+                              ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      for (final entry in menuEntries) ...[
+                        _PortalDrawerItem(
+                          icon: entry.icon,
+                          label: entry.label,
+                          isSelected: selectedSection == entry.section,
+                          onTap: () => onSelected(entry.section),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                      if (settingsEntry != null) ...[
+                        const SizedBox(height: 14),
+                        Container(height: 1, color: AppPalette.line),
+                        const SizedBox(height: 18),
+                        Text(
+                          'Otras opciones',
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(
+                                color: Colors.black54,
+                                fontWeight: FontWeight.w500,
+                                fontSize: 13,
+                              ),
+                        ),
+                        const SizedBox(height: 10),
+                        _PortalDrawerItem(
+                          icon: settingsEntry.icon,
+                          label: settingsEntry.label,
+                          isSelected: selectedSection == AppSection.settings,
+                          onTap: () => onSelected(AppSection.settings),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                    ],
                   ),
                 ),
               ),
-              const SizedBox(height: 6),
-              Center(
-                child: Text(
-                  currentUser.email,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppPalette.muted,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-              for (final entry in menuEntries) ...[
-                _PortalDrawerItem(
-                  icon: entry.icon,
-                  label: entry.label,
-                  isSelected: selectedSection == entry.section,
-                  onTap: () => onSelected(entry.section),
-                ),
-                const SizedBox(height: 8),
-              ],
-              if (settingsEntry != null) ...[
-                const SizedBox(height: 14),
-                Container(height: 1, color: AppPalette.line),
-                const SizedBox(height: 18),
-                Text(
-                  'Otras opciones',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: Colors.black54,
-                    fontWeight: FontWeight.w500,
-                    fontSize: 13,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                _PortalDrawerItem(
-                  icon: settingsEntry.icon,
-                  label: settingsEntry.label,
-                  isSelected: selectedSection == AppSection.settings,
-                  onTap: () => onSelected(AppSection.settings),
-                ),
-                const SizedBox(height: 8),
-              ],
-              const Spacer(),
+              const SizedBox(height: 10),
               _PortalDrawerItem(
                 icon: Icons.logout_rounded,
                 label: 'Cerrar sesion',

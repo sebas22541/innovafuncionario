@@ -600,10 +600,20 @@ function buildCloudinaryPdfPageImageUrl(input: {
 
 function buildCredentialQrPayload(
   frontImageUrl: string,
-  _user: CredentialUser,
-  _person: CredentialPerson,
+  user: CredentialUser,
+  person: CredentialPerson,
 ) {
-  return frontImageUrl;
+  const codigoQr = normalizeText(person?.codigo_qr) ??
+    normalizeText(user.ci) ??
+    `USR-${user.id}`;
+
+  return appendCredentialQrCode(frontImageUrl, codigoQr);
+}
+
+function appendCredentialQrCode(frontImageUrl: string, codigoQr: string) {
+  const separator = frontImageUrl.includes("?") ? "&" : "?";
+
+  return `${frontImageUrl}${separator}codigoQr=${encodeURIComponent(codigoQr)}`;
 }
 
 function stripVersionFromCloudinaryUrl(url: string) {

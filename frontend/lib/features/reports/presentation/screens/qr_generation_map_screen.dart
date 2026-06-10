@@ -1795,7 +1795,7 @@ class _QrGenerationRecordCard extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: isSelected
-                ? const Color(0xFFFCEDEC)
+                ? Colors.white
                 : AppPalette.surfaceSoft,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(

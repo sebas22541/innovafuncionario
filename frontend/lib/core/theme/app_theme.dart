@@ -80,6 +80,28 @@ class AppTheme {
           side: BorderSide(color: AppPalette.line),
         ),
       ),
+      dialogTheme: const DialogThemeData(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+      ),
+      datePickerTheme: const DatePickerThemeData(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        headerBackgroundColor: Colors.white,
+        dividerColor: AppPalette.line,
+      ),
+      timePickerTheme: const TimePickerThemeData(
+        backgroundColor: Colors.white,
+        dialBackgroundColor: Colors.white,
+        hourMinuteColor: Colors.white,
+        hourMinuteShape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(8)),
+          side: BorderSide(color: AppPalette.line),
+        ),
+        dayPeriodColor: Colors.white,
+        dayPeriodBorderSide: BorderSide(color: AppPalette.line),
+        entryModeIconColor: AppPalette.nightDeep,
+      ),
       dividerColor: AppPalette.line,
       filledButtonTheme: FilledButtonThemeData(
         style: ButtonStyle(

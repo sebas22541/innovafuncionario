@@ -1528,7 +1528,7 @@ class _QrStatusBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final backgroundColor = isExpired
-        ? const Color(0xFFFDECEC)
+        ? Colors.white
         : isStatic
         ? const Color(0xFFEAF7EF)
         : isGenerating
@@ -1750,8 +1750,14 @@ class _EditProfileDialogState extends State<_EditProfileDialog> {
                   textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
                     labelText: 'Segundo apellido',
+                    hintText: 'Opcional',
                   ),
-                  validator: _requiredValidator('Ingresa tu segundo apellido.'),
+                  validator: (value) {
+                    if ((value ?? '').trim().length > 80) {
+                      return 'El segundo apellido es demasiado largo.';
+                    }
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 12),
                 TextFormField(

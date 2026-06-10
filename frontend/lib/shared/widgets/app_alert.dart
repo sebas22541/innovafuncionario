@@ -194,9 +194,9 @@ class AppAlert {
       case AppAlertType.success:
         return const Color(0xFFEAF8EF);
       case AppAlertType.error:
-        return const Color(0xFFFCEDEC);
+        return Colors.white;
       case AppAlertType.info:
-        return const Color(0xFFF2EEFB);
+        return Colors.white;
       case AppAlertType.warning:
         return const Color(0xFFFFF5DF);
     }
