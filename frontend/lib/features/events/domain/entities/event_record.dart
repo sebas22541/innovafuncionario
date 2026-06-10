@@ -117,6 +117,7 @@ class EventAbsenteeEntry {
     this.ci,
     this.tipoVinculo,
     this.officeName,
+    this.requirementReason,
   });
 
   final int personId;
@@ -124,6 +125,7 @@ class EventAbsenteeEntry {
   final String? ci;
   final String? tipoVinculo;
   final String? officeName;
+  final String? requirementReason;
 }
 
 class EventRecordDraft {
