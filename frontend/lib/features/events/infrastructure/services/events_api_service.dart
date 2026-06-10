@@ -193,6 +193,10 @@ class EventsApiService {
       source['observaron'] ?? const [],
       'observaron',
     ).map(_parseRosterEntry).toList(growable: false);
+    final absentees = _readList(
+      source['faltaron'] ?? const [],
+      'faltaron',
+    ).map(_parseAbsenteeEntry).toList(growable: false);
 
     return EventRecord(
       id: _readInt(source['id'], 'id'),
@@ -231,10 +235,13 @@ class EventsApiService {
       ),
       attended: attended,
       observed: observed,
+      absentees: absentees,
       attendedCount:
           _readNullableInt(source['asistieronCount']) ?? attended.length,
       observedCount:
           _readNullableInt(source['observaronCount']) ?? observed.length,
+      absenteeCount:
+          _readNullableInt(source['faltaronCount']) ?? absentees.length,
       officeCountOverride: _readNullableInt(source['oficinasCount']),
       jobTitleCountOverride: _readNullableInt(source['cargosCount']),
       hasDetailedAttendanceData: source['detalleCompleto'] as bool? ?? true,
@@ -402,6 +409,22 @@ class EventsApiService {
           _readNullableString(source['departamento']),
       tipoVinculo: _readNullableString(source['tipoVinculo']),
       qrValue: _readNullableString(source['qrLeido']),
+    );
+  }
+
+  EventAbsenteeEntry _parseAbsenteeEntry(Map<String, dynamic> source) {
+    return EventAbsenteeEntry(
+      personId: _readInt(source['personaId'], 'faltante.personaId'),
+      ci: _readNullableString(source['ci']),
+      fullName: _readString(
+        source['nombreCompleto'],
+        'faltante.nombreCompleto',
+      ),
+      officeName:
+          _readNullableString(source['oficina']) ??
+          _readNullableString(source['unidad']) ??
+          _readNullableString(source['departamento']),
+      tipoVinculo: _readNullableString(source['tipoVinculo']),
     );
   }
 

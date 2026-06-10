@@ -3828,7 +3828,9 @@ class _ListOptionButton extends StatelessWidget {
   }
 }
 
-class _EventRosterTable extends StatelessWidget {
+const int _eventRosterPageSize = 30;
+
+class _EventRosterTable extends StatefulWidget {
   const _EventRosterTable({
     required this.eventControls,
     required this.entries,
@@ -3840,14 +3842,64 @@ class _EventRosterTable extends StatelessWidget {
   final EventListType selectedListType;
 
   @override
+  State<_EventRosterTable> createState() => _EventRosterTableState();
+}
+
+class _EventRosterTableState extends State<_EventRosterTable> {
+  int _currentPage = 0;
+
+  int get _pageCount {
+    if (widget.entries.isEmpty) {
+      return 1;
+    }
+
+    return ((widget.entries.length - 1) ~/ _eventRosterPageSize) + 1;
+  }
+
+  @override
+  void didUpdateWidget(covariant _EventRosterTable oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.selectedListType != widget.selectedListType) {
+      _currentPage = 0;
+      return;
+    }
+
+    final maxPage = _pageCount - 1;
+    if (_currentPage > maxPage) {
+      _currentPage = maxPage;
+    }
+  }
+
+  void _goToPage(int page) {
+    final maxPage = _pageCount - 1;
+    final nextPage = page.clamp(0, maxPage).toInt();
+
+    if (nextPage == _currentPage) {
+      return;
+    }
+
+    setState(() {
+      _currentPage = nextPage;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final accentColor = selectedListType == EventListType.attended
+    final accentColor = widget.selectedListType == EventListType.attended
         ? AppPalette.orange
         : AppPalette.night;
-    final statusLabel = selectedListType == EventListType.attended
+    final statusLabel = widget.selectedListType == EventListType.attended
         ? 'Asistio'
         : 'Observado';
-    final totalControls = eventControls.length;
+    final totalControls = widget.eventControls.length;
+    final pageStart = _currentPage * _eventRosterPageSize;
+    final rawPageEnd = pageStart + _eventRosterPageSize;
+    final pageEnd = rawPageEnd > widget.entries.length
+        ? widget.entries.length
+        : rawPageEnd;
+    final pageEntries = widget.entries.sublist(pageStart, pageEnd);
+    final hasMultiplePages = widget.entries.length > _eventRosterPageSize;
 
     return Card(
       child: Padding(
@@ -3865,7 +3917,7 @@ class _EventRosterTable extends StatelessWidget {
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Icon(
-                    selectedListType == EventListType.attended
+                    widget.selectedListType == EventListType.attended
                         ? Icons.how_to_reg_rounded
                         : Icons.visibility_outlined,
                     color: accentColor,
@@ -3874,7 +3926,7 @@ class _EventRosterTable extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    selectedListType == EventListType.attended
+                    widget.selectedListType == EventListType.attended
                         ? 'Tabla de asistencia'
                         : 'Tabla de observados',
                     style: Theme.of(context).textTheme.titleLarge,
@@ -3965,7 +4017,7 @@ class _EventRosterTable extends StatelessWidget {
                           ),
                         ],
                         rows: [
-                          for (final entry in entries)
+                          for (final entry in pageEntries)
                             DataRow(
                               cells: [
                                 DataCell(
@@ -4011,7 +4063,7 @@ class _EventRosterTable extends StatelessWidget {
                                   onTap: () => _showAttendanceControlsSheet(
                                     context,
                                     entry: entry,
-                                    eventControls: eventControls,
+                                    eventControls: widget.eventControls,
                                   ),
                                 ),
                                 DataCell(
@@ -4100,13 +4152,94 @@ class _EventRosterTable extends StatelessWidget {
               },
             ),
             const SizedBox(height: 12),
-            Text(
-              'Total: ${entries.length} registros',
-              style: Theme.of(context).textTheme.bodySmall,
+            _RosterPaginationControls(
+              currentPage: _currentPage,
+              pageCount: _pageCount,
+              pageStart: pageStart,
+              pageEnd: pageEnd,
+              totalEntries: widget.entries.length,
+              showControls: hasMultiplePages,
+              onFirst: () => _goToPage(0),
+              onPrevious: () => _goToPage(_currentPage - 1),
+              onNext: () => _goToPage(_currentPage + 1),
+              onLast: () => _goToPage(_pageCount - 1),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _RosterPaginationControls extends StatelessWidget {
+  const _RosterPaginationControls({
+    required this.currentPage,
+    required this.pageCount,
+    required this.pageStart,
+    required this.pageEnd,
+    required this.totalEntries,
+    required this.showControls,
+    required this.onFirst,
+    required this.onPrevious,
+    required this.onNext,
+    required this.onLast,
+  });
+
+  final int currentPage;
+  final int pageCount;
+  final int pageStart;
+  final int pageEnd;
+  final int totalEntries;
+  final bool showControls;
+  final VoidCallback onFirst;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+  final VoidCallback onLast;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final isFirstPage = currentPage == 0;
+    final isLastPage = currentPage >= pageCount - 1;
+    final rangeLabel = totalEntries == 0
+        ? 'Total: 0 registros'
+        : 'Mostrando ${pageStart + 1}-$pageEnd de $totalEntries registros';
+
+    if (!showControls) {
+      return Text(rangeLabel, style: textTheme.bodySmall);
+    }
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text(rangeLabel, style: textTheme.bodySmall),
+        Text(
+          'Pagina ${currentPage + 1} de $pageCount',
+          style: textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        IconButton.filledTonal(
+          onPressed: isFirstPage ? null : onFirst,
+          tooltip: 'Primera pagina',
+          icon: const Icon(Icons.first_page_rounded),
+        ),
+        IconButton.filledTonal(
+          onPressed: isFirstPage ? null : onPrevious,
+          tooltip: 'Pagina anterior',
+          icon: const Icon(Icons.chevron_left_rounded),
+        ),
+        IconButton.filledTonal(
+          onPressed: isLastPage ? null : onNext,
+          tooltip: 'Pagina siguiente',
+          icon: const Icon(Icons.chevron_right_rounded),
+        ),
+        IconButton.filledTonal(
+          onPressed: isLastPage ? null : onLast,
+          tooltip: 'Ultima pagina',
+          icon: const Icon(Icons.last_page_rounded),
+        ),
+      ],
     );
   }
 }

@@ -43,6 +43,12 @@ pipeline {
 
                     if (params.SERVICE == 'all') {
                         sh """
+                            set +x
+                            set -a
+                            . backend/.env.dev
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
                             docker-compose \
                             --env-file backend/.env.dev \
                             -f ${env.DOCKER_COMPOSE_FILE} \
@@ -50,6 +56,12 @@ pipeline {
                         """
                     } else {
                         sh """
+                            set +x
+                            set -a
+                            . backend/.env.dev
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
                             docker-compose \
                             --env-file backend/.env.dev \
                             -f ${env.DOCKER_COMPOSE_FILE} \
@@ -68,6 +80,12 @@ pipeline {
                     if (params.SERVICE == 'all') {
 
                         sh """
+                            set +x
+                            set -a
+                            . backend/.env.dev
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
                             docker-compose \
                             --env-file backend/.env.dev \
                             -f ${env.DOCKER_COMPOSE_FILE} \
@@ -77,6 +95,12 @@ pipeline {
                     } else {
 
                         sh """
+                            set +x
+                            set -a
+                            . backend/.env.dev
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
                             docker-compose \
                             --env-file backend/.env.dev \
                             -f ${env.DOCKER_COMPOSE_FILE} \
@@ -96,6 +120,12 @@ pipeline {
                     if (params.SERVICE == 'all') {
 
                         sh """
+                            set +x
+                            set -a
+                            . backend/.env.dev
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
                             docker-compose \
                             --env-file backend/.env.dev \
                             -f ${env.DOCKER_COMPOSE_FILE} \
@@ -105,6 +135,12 @@ pipeline {
                     } else {
 
                         sh """
+                            set +x
+                            set -a
+                            . backend/.env.dev
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
                             docker-compose \
                             --env-file backend/.env.dev \
                             -f ${env.DOCKER_COMPOSE_FILE} \
@@ -120,12 +156,14 @@ pipeline {
 
     post {
         failure {
-            sh """
-                docker-compose \
-                --env-file backend/.env.dev \
-                -f ${env.DOCKER_COMPOSE_FILE} \
-                ps
-            """
+            withEnv(['PAYLOAD_ENCRYPTION_KEY=post-failure-placeholder']) {
+                sh """
+                    docker-compose \
+                    --env-file backend/.env.dev \
+                    -f ${env.DOCKER_COMPOSE_FILE} \
+                    ps
+                """
+            }
         }
     }
 }

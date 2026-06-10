@@ -110,6 +110,22 @@ class EventRosterEntry {
   final String? qrValue;
 }
 
+class EventAbsenteeEntry {
+  const EventAbsenteeEntry({
+    required this.personId,
+    required this.fullName,
+    this.ci,
+    this.tipoVinculo,
+    this.officeName,
+  });
+
+  final int personId;
+  final String fullName;
+  final String? ci;
+  final String? tipoVinculo;
+  final String? officeName;
+}
+
 class EventRecordDraft {
   const EventRecordDraft({
     required this.name,
@@ -158,8 +174,10 @@ class EventRecord {
     this.excludedOfficeIds = const [],
     this.attended = const [],
     this.observed = const [],
+    this.absentees = const [],
     this.attendedCount,
     this.observedCount,
+    this.absenteeCount,
     this.officeCountOverride,
     this.jobTitleCountOverride,
     this.hasDetailedAttendanceData = true,
@@ -183,8 +201,10 @@ class EventRecord {
   final List<int> excludedOfficeIds;
   final List<EventRosterEntry> attended;
   final List<EventRosterEntry> observed;
+  final List<EventAbsenteeEntry> absentees;
   final int? attendedCount;
   final int? observedCount;
+  final int? absenteeCount;
   final int? officeCountOverride;
   final int? jobTitleCountOverride;
   final bool hasDetailedAttendanceData;
@@ -193,7 +213,10 @@ class EventRecord {
 
   int get resolvedObservedCount => observedCount ?? observed.length;
 
-  int get totalTrackedPeople => resolvedAttendedCount + resolvedObservedCount;
+  int get resolvedAbsenteeCount => absenteeCount ?? absentees.length;
+
+  int get totalTrackedPeople =>
+      resolvedAttendedCount + resolvedObservedCount + resolvedAbsenteeCount;
 
   int get officeCount => officeCountOverride ?? offices.length;
 
