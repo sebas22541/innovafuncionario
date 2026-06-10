@@ -425,6 +425,7 @@ class EventsApiService {
           _readNullableString(source['unidad']) ??
           _readNullableString(source['departamento']),
       tipoVinculo: _readNullableString(source['tipoVinculo']),
+      requirementReason: _readNullableString(source['motivoFalta']),
     );
   }
 

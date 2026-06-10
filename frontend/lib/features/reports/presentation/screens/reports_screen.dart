@@ -19,6 +19,15 @@ const Map<int, pw.TableColumnWidth> _eventReportPdfColumnWidths = {
   4: pw.FixedColumnWidth(163),
   5: pw.FixedColumnWidth(60),
 };
+const Map<int, pw.TableColumnWidth> _eventAbsenteePdfColumnWidths = {
+  0: pw.FixedColumnWidth(20),
+  1: pw.FixedColumnWidth(55),
+  2: pw.FixedColumnWidth(92),
+  3: pw.FixedColumnWidth(42),
+  4: pw.FixedColumnWidth(126),
+  5: pw.FixedColumnWidth(72),
+  6: pw.FixedColumnWidth(55),
+};
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -421,9 +430,34 @@ class _ReportsScreenState extends State<ReportsScreen> {
               'Direccion: ${event.address?.trim().isNotEmpty == true ? event.address! : 'Sin direccion'}',
               style: const pw.TextStyle(fontSize: _reportPdfFontSize),
             ),
+            pw.SizedBox(height: 12),
+            pw.TableHelper.fromTextArray(
+              headers: const [
+                'Total',
+                'Asistieron',
+                'Observados',
+                'Faltaron',
+              ],
+              data: [
+                [
+                  '${event.totalTrackedPeople}',
+                  '${event.resolvedAttendedCount}',
+                  '${event.resolvedObservedCount}',
+                  '${event.resolvedAbsenteeCount}',
+                ],
+              ],
+              headerStyle: pw.TextStyle(
+                fontSize: _reportPdfFontSize,
+                fontWeight: pw.FontWeight.bold,
+              ),
+              cellStyle: const pw.TextStyle(fontSize: _reportPdfFontSize),
+              headerDecoration: const pw.BoxDecoration(
+                color: PdfColor.fromInt(0xFFE7DFF6),
+              ),
+            ),
             pw.SizedBox(height: 16),
             pw.Text(
-              'Asistieron (${event.attended.length})',
+              'Asistieron (${event.resolvedAttendedCount})',
               style: pw.TextStyle(
                 fontSize: _reportPdfFontSize,
                 fontWeight: pw.FontWeight.bold,
@@ -458,7 +492,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ),
             pw.SizedBox(height: 18),
             pw.Text(
-              'Observados (${event.observed.length})',
+              'Observados (${event.resolvedObservedCount})',
               style: pw.TextStyle(
                 fontSize: _reportPdfFontSize,
                 fontWeight: pw.FontWeight.bold,
@@ -493,7 +527,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ),
             pw.SizedBox(height: 18),
             pw.Text(
-              'Faltaron (${event.absentees.length})',
+              'Faltaron (${event.resolvedAbsenteeCount})',
               style: pw.TextStyle(
                 fontSize: _reportPdfFontSize,
                 fontWeight: pw.FontWeight.bold,
@@ -513,9 +547,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   'Nombre',
                   'Tipo',
                   'Oficina',
+                  'Debia ir por',
                   'Estado',
                 ],
-                columnWidths: _eventReportPdfColumnWidths,
+                columnWidths: _eventAbsenteePdfColumnWidths,
                 data: absenteeRows,
                 headerStyle: pw.TextStyle(
                   fontSize: _reportPdfFontSize,
@@ -1253,7 +1288,8 @@ class _EventAbsenteeTableSection extends StatelessWidget {
                 1: FixedColumnWidth(240),
                 2: FixedColumnWidth(220),
                 3: FixedColumnWidth(150),
-                4: FixedColumnWidth(110),
+                4: FixedColumnWidth(150),
+                5: FixedColumnWidth(110),
               },
               border: TableBorder.all(color: AppPalette.line),
               children: [
@@ -1263,6 +1299,7 @@ class _EventAbsenteeTableSection extends StatelessWidget {
                     _EventTableHeaderCell(label: 'CI'),
                     _EventTableHeaderCell(label: 'Nombre'),
                     _EventTableHeaderCell(label: 'Oficina'),
+                    _EventTableHeaderCell(label: 'Debia ir por'),
                     _EventTableHeaderCell(label: 'Estado'),
                     _EventTableHeaderCell(label: 'Tipo'),
                   ],
@@ -1278,6 +1315,12 @@ class _EventAbsenteeTableSection extends StatelessWidget {
                       _EventTableValueCell(value: entry.fullName),
                       _EventTableValueCell(
                         value: entry.officeName ?? 'Sin oficina',
+                      ),
+                      _EventTableValueCell(
+                        value:
+                            entry.requirementReason?.trim().isNotEmpty == true
+                            ? entry.requirementReason!.trim()
+                            : 'Regla del evento',
                       ),
                       const _EventTableValueCell(value: 'No asistio'),
                       _EventTableValueCell(
@@ -1812,6 +1855,9 @@ List<List<String>> _buildEventAbsenteePdfRows(
           entry.value.fullName,
           _eventRosterTipoLabel(entry.value.tipoVinculo),
           entry.value.officeName ?? 'Sin oficina',
+          entry.value.requirementReason?.trim().isNotEmpty == true
+              ? entry.value.requirementReason!.trim()
+              : 'Regla del evento',
           'No asistio',
         ],
       )

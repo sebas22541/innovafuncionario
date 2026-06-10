@@ -7544,6 +7544,7 @@ async function loadEventAbsentees(event: any) {
       usuario: {
         is: {
           activo: true,
+          rol: rol_usuario.OPERADOR,
         },
       },
     },
@@ -7555,7 +7556,7 @@ async function loadEventAbsentees(event: any) {
   for (const person of candidates) {
     try {
       await assertPersonCanAttendEvent(person, event);
-      absentees.push(serializeEventAbsenteeRecord(person));
+      absentees.push(serializeEventAbsenteeRecord(person, event));
     } catch (error) {
       if (error instanceof HttpError && error.statusCode === 403) {
         continue;
@@ -7568,7 +7569,7 @@ async function loadEventAbsentees(event: any) {
   return absentees;
 }
 
-function serializeEventAbsenteeRecord(person: any) {
+function serializeEventAbsenteeRecord(person: any, event: any) {
   const linkedUser = person.usuario ?? null;
   const officeName = resolveLinkedOfficeName(linkedUser);
 
@@ -7583,7 +7584,49 @@ function serializeEventAbsenteeRecord(person: any) {
     unidad: officeName,
     cargo: linkedUser?.cargo ?? null,
     email: linkedUser?.email ?? null,
+    motivoFalta: buildEventRequirementReason(person, event),
   };
+}
+
+function buildEventRequirementReason(person: any, event: any) {
+  const linkedUser = person.usuario ?? null;
+  const userOfficeId = resolveLinkedOfficeId(linkedUser);
+  const userCargoCodigo = normalizeOptionalText(linkedUser?.cargo_codigo);
+  const matchesOffice =
+    userOfficeId != null &&
+    (event.evento_oficinas ?? []).some(
+      (item: { oficina_id: number }) => item.oficina_id === userOfficeId,
+    );
+  const matchesCargo =
+    userCargoCodigo != null &&
+    (event.evento_cargos ?? []).some(
+      (item: { cargo_codigo: string }) => item.cargo_codigo === userCargoCodigo,
+    );
+  const matchesOfficeCargo =
+    userOfficeId != null &&
+    userCargoCodigo != null &&
+    (event.evento_oficina_cargos ?? []).some(
+      (item: { oficina_id: number; cargo_codigo: string }) =>
+        item.oficina_id === userOfficeId && item.cargo_codigo === userCargoCodigo,
+    );
+
+  if (matchesOfficeCargo) {
+    return "Oficina y cargo";
+  }
+
+  if (matchesOffice && matchesCargo) {
+    return "Oficina y cargo";
+  }
+
+  if (matchesOffice) {
+    return "Oficina";
+  }
+
+  if (matchesCargo) {
+    return "Cargo";
+  }
+
+  return "Regla del evento";
 }
 
 function resolveLinkedOffice(linkedUser: any) {
