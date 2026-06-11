@@ -7554,22 +7554,17 @@ async function loadEventAbsentees(event: any) {
   const absentees = [];
 
   for (const person of candidates) {
-    try {
-      await assertPersonCanAttendEvent(person, event);
-      absentees.push(serializeEventAbsenteeRecord(person, event));
-    } catch (error) {
-      if (error instanceof HttpError && error.statusCode === 403) {
-        continue;
-      }
+    const requirementReason = await buildEventReportRequirementReason(person, event);
 
-      throw error;
+    if (requirementReason != null) {
+      absentees.push(serializeEventAbsenteeRecord(person, requirementReason));
     }
   }
 
   return absentees;
 }
 
-function serializeEventAbsenteeRecord(person: any, event: any) {
+function serializeEventAbsenteeRecord(person: any, requirementReason: string) {
   const linkedUser = person.usuario ?? null;
   const officeName = resolveLinkedOfficeName(linkedUser);
 
@@ -7584,13 +7579,16 @@ function serializeEventAbsenteeRecord(person: any, event: any) {
     unidad: officeName,
     cargo: linkedUser?.cargo ?? null,
     email: linkedUser?.email ?? null,
-    motivoFalta: buildEventRequirementReason(person, event),
+    motivoFalta: requirementReason,
   };
 }
 
-function buildEventRequirementReason(person: any, event: any) {
+async function buildEventReportRequirementReason(person: any, event: any) {
   const linkedUser = person.usuario ?? null;
-  const userOfficeId = resolveLinkedOfficeId(linkedUser);
+  const userOfficeId =
+    resolveLinkedOfficeId(linkedUser) ??
+    (await resolveOfficeForUser(prisma, linkedUser))?.id ??
+    null;
   const userCargoCodigo = normalizeOptionalText(linkedUser?.cargo_codigo);
   const matchesOffice =
     userOfficeId != null &&
@@ -7626,7 +7624,7 @@ function buildEventRequirementReason(person: any, event: any) {
     return "Cargo";
   }
 
-  return "Regla del evento";
+  return null;
 }
 
 function resolveLinkedOffice(linkedUser: any) {
