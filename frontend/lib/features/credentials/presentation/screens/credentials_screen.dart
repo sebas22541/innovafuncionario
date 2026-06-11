@@ -11,6 +11,7 @@ import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
+import '../../../auth/domain/entities/cargo_option.dart';
 import '../../../auth/domain/entities/office_option.dart';
 
 class CredentialsScreen extends StatefulWidget {
@@ -28,12 +29,15 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
   final ImagePicker _imagePicker = ImagePicker();
   final TextEditingController _ciController = TextEditingController();
   final TextEditingController _officeController = TextEditingController();
+  final TextEditingController _cargoController = TextEditingController();
   List<AppUser> _users = const [];
   List<OfficeOption> _offices = const [];
+  List<CargoOption> _cargos = const [];
   List<AppUser> _results = const [];
   Set<String> _downloadingEmails = const {};
   Set<String> _updatingPhotoEmails = const {};
   int? _selectedOfficeId;
+  String? _selectedCargoCode;
   bool _isLoading = true;
   bool _hasSearched = false;
   int _currentPage = 0;
@@ -61,6 +65,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
   void dispose() {
     _ciController.dispose();
     _officeController.dispose();
+    _cargoController.dispose();
     super.dispose();
   }
 
@@ -76,6 +81,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
           requesterEmail: widget.currentUser.email,
         ),
         dependencies.authApiService.fetchOffices(),
+        dependencies.authApiService.fetchCargos(),
       ]);
 
       if (!mounted) {
@@ -85,6 +91,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
       setState(() {
         _users = results[0] as List<AppUser>;
         _offices = results[1] as List<OfficeOption>;
+        _cargos = results[2] as List<CargoOption>;
         _isLoading = false;
       });
     } on BackendApiException catch (error) {
@@ -111,9 +118,13 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
   void _search() {
     final ciQuery = _ciController.text.trim().toLowerCase();
     final selectedOffice = _selectedOffice();
+    final selectedCargo = _selectedCargo();
 
-    if (ciQuery.isEmpty && selectedOffice == null) {
-      AppAlert.showError(context, 'Ingresa un CI o selecciona una oficina.');
+    if (ciQuery.isEmpty && selectedOffice == null && selectedCargo == null) {
+      AppAlert.showError(
+        context,
+        'Ingresa un CI, selecciona una oficina o selecciona un cargo.',
+      );
       setState(() {
         _hasSearched = false;
         _results = const [];
@@ -131,8 +142,10 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
                 ciQuery.isEmpty || user.ci.toLowerCase().contains(ciQuery);
             final matchesOffice =
                 selectedOffice == null || _matchesOffice(user, selectedOffice);
+            final matchesCargo =
+                selectedCargo == null || _matchesCargo(user, selectedCargo);
 
-            return matchesCi && matchesOffice;
+            return matchesCi && matchesOffice && matchesCargo;
           })
           .toList(growable: false);
     });
@@ -142,7 +155,9 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
     setState(() {
       _ciController.clear();
       _officeController.clear();
+      _cargoController.clear();
       _selectedOfficeId = null;
+      _selectedCargoCode = null;
       _results = const [];
       _hasSearched = false;
       _currentPage = 0;
@@ -172,6 +187,33 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
     setState(() {
       _selectedOfficeId = office?.id;
       _officeController.text = office?.name ?? '';
+      _currentPage = 0;
+    });
+  }
+
+  Future<void> _openCargoPicker() async {
+    final selectedCargo = _selectedCargo();
+    final result = await showModalBottomSheet<_CargoPickerResult>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) =>
+          _CargoPickerSheet(cargos: _cargos, selectedCargo: selectedCargo),
+    );
+
+    if (!mounted || result == null) {
+      return;
+    }
+
+    final cargo = result.cargo;
+
+    if (cargo == selectedCargo) {
+      return;
+    }
+
+    setState(() {
+      _selectedCargoCode = cargo?.code;
+      _cargoController.text = cargo?.name ?? '';
       _currentPage = 0;
     });
   }
@@ -296,13 +338,13 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Filtra por carnet de identidad u oficina para descargar la credencial del funcionario.',
+                    'Filtra por carnet de identidad, oficina o cargo para descargar la credencial del funcionario.',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 18),
                   LayoutBuilder(
                     builder: (context, constraints) {
-                      final isWide = constraints.maxWidth >= 720;
+                      final isWide = constraints.maxWidth >= 900;
 
                       if (isWide) {
                         return Row(
@@ -311,6 +353,8 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
                             Expanded(child: _buildCiField()),
                             const SizedBox(width: 12),
                             Expanded(child: _buildOfficeField()),
+                            const SizedBox(width: 12),
+                            Expanded(child: _buildCargoField()),
                           ],
                         );
                       }
@@ -320,6 +364,8 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
                           _buildCiField(),
                           const SizedBox(height: 12),
                           _buildOfficeField(),
+                          const SizedBox(height: 12),
+                          _buildCargoField(),
                         ],
                       );
                     },
@@ -398,7 +444,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
         key: ValueKey('empty-search'),
         icon: Icons.manage_search_rounded,
         title: 'Realiza una busqueda',
-        message: 'Ingresa un CI o selecciona una oficina para buscar.',
+        message: 'Ingresa un CI, selecciona una oficina o selecciona un cargo.',
       );
     }
 
@@ -495,6 +541,21 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
     );
   }
 
+  Widget _buildCargoField() {
+    return TextField(
+      key: ValueKey(_selectedCargoCode),
+      controller: _cargoController,
+      readOnly: true,
+      decoration: const InputDecoration(
+        labelText: 'Cargo',
+        hintText: 'Busca y selecciona un cargo',
+        prefixIcon: Icon(Icons.badge_outlined),
+        suffixIcon: Icon(Icons.search_rounded),
+      ),
+      onTap: _openCargoPicker,
+    );
+  }
+
   OfficeOption? _selectedOffice() {
     final selectedOfficeId = _selectedOfficeId;
 
@@ -505,6 +566,22 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
     for (final office in _offices) {
       if (office.id == selectedOfficeId) {
         return office;
+      }
+    }
+
+    return null;
+  }
+
+  CargoOption? _selectedCargo() {
+    final selectedCargoCode = _selectedCargoCode;
+
+    if (selectedCargoCode == null) {
+      return null;
+    }
+
+    for (final cargo in _cargos) {
+      if (cargo.code == selectedCargoCode) {
+        return cargo;
       }
     }
 
@@ -669,6 +746,169 @@ class _OfficePickerResult {
   const _OfficePickerResult.office(OfficeOption office) : this._(office);
 
   final OfficeOption? office;
+}
+
+class _CargoPickerSheet extends StatefulWidget {
+  const _CargoPickerSheet({required this.cargos, required this.selectedCargo});
+
+  final List<CargoOption> cargos;
+  final CargoOption? selectedCargo;
+
+  @override
+  State<_CargoPickerSheet> createState() => _CargoPickerSheetState();
+}
+
+class _CargoPickerSheetState extends State<_CargoPickerSheet> {
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _normalizeSearchText(_searchController.text);
+    final filteredCargos = widget.cargos
+        .where((cargo) {
+          if (query.isEmpty) {
+            return true;
+          }
+
+          return _normalizeSearchText(cargo.name).contains(query) ||
+              _normalizeSearchText(cargo.code).contains(query);
+        })
+        .toList(growable: false);
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          12,
+          20,
+          12,
+          12 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(30),
+          clipBehavior: Clip.antiAlias,
+          child: FractionallySizedBox(
+            heightFactor: 0.88,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Selecciona el cargo',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _searchController,
+                    autofocus: true,
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Buscar cargo',
+                      hintText: 'Escribe cargo o codigo',
+                      prefixIcon: Icon(Icons.search_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: filteredCargos.isEmpty
+                        ? const Center(child: Text('No se encontraron cargos.'))
+                        : ListView.separated(
+                            itemCount: filteredCargos.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(height: 8),
+                            itemBuilder: (context, index) {
+                              final cargo = filteredCargos[index];
+                              final isSelected =
+                                  widget.selectedCargo?.code == cargo.code;
+
+                              return InkWell(
+                                borderRadius: BorderRadius.circular(18),
+                                onTap: () => Navigator.of(
+                                  context,
+                                ).pop(_CargoPickerResult.cargo(cargo)),
+                                child: Ink(
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: isSelected
+                                        ? AppPalette.orangeSoft
+                                        : AppPalette.surfaceSoft,
+                                    borderRadius: BorderRadius.circular(18),
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? AppPalette.orange
+                                          : AppPalette.line,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              cargo.name,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: Theme.of(
+                                                context,
+                                              ).textTheme.titleMedium,
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'Codigo ${cargo.code}',
+                                              style: Theme.of(
+                                                context,
+                                              ).textTheme.bodySmall,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (isSelected)
+                                        const Icon(
+                                          Icons.check_circle_rounded,
+                                          color: AppPalette.orange,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CargoPickerResult {
+  const _CargoPickerResult._(this.cargo);
+
+  const _CargoPickerResult.cargo(CargoOption cargo) : this._(cargo);
+
+  final CargoOption? cargo;
 }
 
 class _CredentialDownloadButton extends StatelessWidget {
@@ -1530,6 +1770,20 @@ bool _matchesOffice(AppUser user, OfficeOption office) {
   );
 
   return selectedOfficeName.isNotEmpty && userOfficeName == selectedOfficeName;
+}
+
+bool _matchesCargo(AppUser user, CargoOption cargo) {
+  final selectedCargoCode = cargo.code.trim().toUpperCase();
+  final userCargoCode = (user.cargoCodigo ?? '').trim().toUpperCase();
+
+  if (selectedCargoCode.isNotEmpty && userCargoCode == selectedCargoCode) {
+    return true;
+  }
+
+  final selectedCargoName = _normalizeSearchText(cargo.name);
+  final userCargoName = _normalizeSearchText(user.cargo);
+
+  return selectedCargoName.isNotEmpty && userCargoName == selectedCargoName;
 }
 
 bool _officeTextLooksSimilar(String value, String query) {
