@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "585516535778",
+    "project_id": "innova-funcionario",
+    "storage_bucket": "innova-funcionario.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:585516535778:android:a96e873f6a33fc581b33bb",
+        "android_client_info": {
+          "package_name": "com.innova.funcionario.cochabamba.bo"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDAYwW5KvPT8nDyiwk3yPokfjFpk5Mxx34"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
