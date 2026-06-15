@@ -23,7 +23,7 @@ class AppEnvironment {
 
     if (!kIsWeb) {
       if (defaultTargetPlatform == TargetPlatform.android) {
-        return 'http://10.0.2.2:3000';
+        return 'http://10.0.2.2:4000';
       }
 
       return 'http://localhost:4000';
@@ -33,6 +33,6 @@ class AppEnvironment {
     final host = currentUri.host.isEmpty ? 'localhost' : currentUri.host;
     final scheme = currentUri.scheme == 'https' ? 'https' : 'http';
 
-    return '$scheme://$host:3000';
+    return '$scheme://$host:4000';
   }
 }
