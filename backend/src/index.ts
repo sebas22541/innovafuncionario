@@ -289,6 +289,8 @@ const server = http.createServer(async (request, response) => {
 
   if (!applyCors(request, response)) {
     logWarning("Origen no permitido.", buildRequestLogFields(request, requestId, {
+      origin: normalizeRequestOrigin(readSingleHeader(request.headers.origin)),
+      referrerOrigin: readReferrerOrigin(request),
       statusCode: 403,
     }));
     sendJson(response, 403, { error: "Origen no permitido." });
@@ -2370,12 +2372,12 @@ function applyCors(request: IncomingMessage, response: ServerResponse) {
   const origin = normalizeRequestOrigin(readSingleHeader(request.headers.origin));
   const referrerOrigin = readReferrerOrigin(request);
   const isAllowedOrigin = origin == null || isAllowedRequestOrigin(origin);
+  const isAllowedReferrer =
+    referrerOrigin == null || isAllowedRequestOrigin(referrerOrigin);
   const isTrustedUnsafeRequest =
     !isUnsafeHttpMethod(request.method) ||
     (origin != null && isAllowedRequestOrigin(origin)) ||
-    (origin == null &&
-      referrerOrigin != null &&
-      isAllowedRequestOrigin(referrerOrigin));
+    (origin == null && isAllowedReferrer);
 
   if (!isAllowedOrigin || !isTrustedUnsafeRequest) {
     return false;
