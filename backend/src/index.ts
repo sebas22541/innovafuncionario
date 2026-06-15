@@ -7408,40 +7408,44 @@ async function sendFirebaseNotification(input: SendNotificationInput) {
   let failed = 0;
   const invalidTokens: string[] = [];
 
-  for (const tokenChunk of chunkArray(tokens, 500)) {
-    const batchResult = await messaging.sendEachForMulticast({
-      tokens: tokenChunk,
-      notification: {
-        title: input.title,
-        body: input.body,
-      },
-      android: {
-        priority: "high",
-      },
-      apns: {
-        payload: {
-          aps: {
-            sound: "default",
+  try {
+    for (const tokenChunk of chunkArray(tokens, 500)) {
+      const batchResult = await messaging.sendEachForMulticast({
+        tokens: tokenChunk,
+        notification: {
+          title: input.title,
+          body: input.body,
+        },
+        android: {
+          priority: "high",
+        },
+        apns: {
+          payload: {
+            aps: {
+              sound: "default",
+            },
           },
         },
-      },
-      data: {
-        source: "innovafuncionario",
-      },
-    });
+        data: {
+          source: "innovafuncionario",
+        },
+      });
 
-    sent += batchResult.successCount;
-    failed += batchResult.failureCount;
-    batchResult.responses.forEach((item, index) => {
-      const code = item.error?.code;
+      sent += batchResult.successCount;
+      failed += batchResult.failureCount;
+      batchResult.responses.forEach((item, index) => {
+        const code = item.error?.code;
 
-      if (
-        code === "messaging/registration-token-not-registered" ||
-        code === "messaging/invalid-registration-token"
-      ) {
-        invalidTokens.push(tokenChunk[index]);
-      }
-    });
+        if (
+          code === "messaging/registration-token-not-registered" ||
+          code === "messaging/invalid-registration-token"
+        ) {
+          invalidTokens.push(tokenChunk[index]);
+        }
+      });
+    }
+  } catch (error) {
+    throw mapFirebaseMessagingError(error);
   }
 
   if (invalidTokens.length > 0) {
@@ -7530,6 +7534,35 @@ function getFirebaseMessagingClient() {
   }
 
   return getMessaging();
+}
+
+function mapFirebaseMessagingError(error: unknown) {
+  const code = readErrorCode(error);
+
+  if (
+    code === "app/invalid-credential" ||
+    code === "app/invalid-app-options" ||
+    code === "messaging/authentication-error" ||
+    code === "messaging/invalid-credential" ||
+    getErrorMessage(error).includes("Could not load the default credentials")
+  ) {
+    return new HttpError(
+      503,
+      "Firebase no esta configurado correctamente en el servidor dev.",
+    );
+  }
+
+  return error;
+}
+
+function readErrorCode(error: unknown) {
+  if (typeof error !== "object" || error == null || !("code" in error)) {
+    return null;
+  }
+
+  const code = (error as { code?: unknown }).code;
+
+  return typeof code === "string" ? code : null;
 }
 
 function readFirebaseServiceAccountCredential() {
