@@ -12,8 +12,9 @@ RUN npm ci
 
 COPY backend/ ./
 COPY frontend/assets/templates/credencial.pdf ./assets/templates/credencial.pdf
+COPY .infra/backend/dev/start.sh ./start.sh
 RUN npx prisma generate
 
 EXPOSE 3000
 
-CMD ["sh", "-c", "npx prisma migrate deploy && npm run dev"]
+CMD ["sh", "./start.sh"]

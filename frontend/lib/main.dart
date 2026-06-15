@@ -7,6 +7,7 @@ import 'injection_container.dart';
 import 'shared/infrastructure/app_image_cache.dart';
 import 'shared/infrastructure/app_permissions_service.dart';
 import 'shared/infrastructure/backend_api_client.dart';
+import 'shared/infrastructure/firebase_notifications_service.dart';
 import 'shared/infrastructure/session_store.dart';
 import 'shared/models/app_section.dart';
 import 'shared/models/app_user.dart';
@@ -15,6 +16,7 @@ import 'shared/widgets/app_navigation_shell.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AppImageCache.configure();
+  await FirebaseNotificationsService.initialize();
   await initDependencies();
   runApp(const QrWebApp());
 }
@@ -47,6 +49,7 @@ class _QrWebAppState extends State<QrWebApp> {
       try {
         user = await dependencies.authApiService.fetchCurrentUser();
         await SessionStore.saveUser(user);
+        await FirebaseNotificationsService.registerCurrentDevice();
       } on BackendApiException catch (error) {
         if (error.statusCode == 401) {
           await SessionStore.clearSession();
@@ -71,6 +74,7 @@ class _QrWebAppState extends State<QrWebApp> {
 
   void _handleAuthenticated(AppUser user) async {
     await SessionStore.saveUser(user);
+    await FirebaseNotificationsService.registerCurrentDevice();
 
     if (!mounted) {
       return;
@@ -83,6 +87,8 @@ class _QrWebAppState extends State<QrWebApp> {
   }
 
   void _handleLogout() async {
+    await FirebaseNotificationsService.unregisterCurrentDevice();
+
     try {
       await dependencies.authApiService.logout();
     } catch (_) {

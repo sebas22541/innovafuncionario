@@ -7,6 +7,7 @@ enum AppSection {
   reports,
   map,
   users,
+  notifications,
   credentials,
   permissionExits,
   myExitPermits,
@@ -35,6 +36,8 @@ extension AppSectionX on AppSection {
         return 'Mapa';
       case AppSection.users:
         return 'Usuarios';
+      case AppSection.notifications:
+        return 'Notificaciones';
       case AppSection.credentials:
         return 'Credenciales';
       case AppSection.permissionExits:
@@ -70,6 +73,8 @@ extension AppSectionX on AppSection {
         return 'Mapa de QR';
       case AppSection.users:
         return 'Gestion de usuarios';
+      case AppSection.notifications:
+        return 'Notificaciones';
       case AppSection.credentials:
         return 'Credenciales';
       case AppSection.permissionExits:
@@ -105,6 +110,8 @@ extension AppSectionX on AppSection {
         return Icons.map_outlined;
       case AppSection.users:
         return Icons.people_alt_outlined;
+      case AppSection.notifications:
+        return Icons.notifications_active_outlined;
       case AppSection.credentials:
         return Icons.badge_outlined;
       case AppSection.permissionExits:

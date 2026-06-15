@@ -111,6 +111,23 @@ class BackendApiClient {
     }
   }
 
+  Future<Map<String, dynamic>> deleteJsonWithBody(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    try {
+      final request = http.Request('DELETE', _buildUri(path))
+        ..headers.addAll(await _buildHeaders(contentTypeJson: true))
+        ..body = await _encodeJsonBody(body);
+      final streamedResponse = await _client.send(request);
+      final response = await http.Response.fromStream(streamedResponse);
+
+      return _decodeResponse(response);
+    } catch (error) {
+      throw _mapRequestError(error);
+    }
+  }
+
   Uri _buildUri(String path) => Uri.parse('$_baseUrl$path');
 
   Future<String> _encodeJsonBody(Map<String, dynamic> body) async {

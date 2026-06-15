@@ -231,10 +231,23 @@ model usuarios {
   salidas_aprobadas    salidas[]              @relation("SalidaAprobador")
   salidas_salida        salidas[]              @relation("SalidaSalidaRegistrador")
   salidas_llegada       salidas[]              @relation("SalidaLlegadaRegistrador")
+  notificacion_tokens   notificacion_tokens[]
 
   @@index([cargo_codigo], map: "idx_usuarios_cargo_codigo")
   @@index([oficina_comision_id], map: "idx_usuarios_oficina_comision_id")
   @@index([oficina_id], map: "idx_usuarios_oficina_id")
+}
+
+model notificacion_tokens {
+  id         Int      @id @default(autoincrement())
+  usuario_id Int
+  token      String   @unique
+  platform   String   @db.VarChar(20)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  usuarios   usuarios @relation(fields: [usuario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([usuario_id], map: "idx_notificacion_tokens_usuario_id")
 }
 
 enum estado_asistencia {

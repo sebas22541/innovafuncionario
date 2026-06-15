@@ -9,6 +9,7 @@ import '../../features/events/presentation/screens/user_events_screen.dart';
 import '../../features/credentials/presentation/screens/credentials_screen.dart';
 import '../../features/home/presentation/screens/home_screen.dart';
 import '../../features/lunches/presentation/screens/lunches_screen.dart';
+import '../../features/notifications/presentation/screens/notifications_screen.dart';
 import '../../features/permissions/presentation/screens/exit_permits_screen.dart';
 import '../../features/qr_scanner/presentation/screens/qr_scanner_screen.dart';
 import '../../features/reports/presentation/screens/qr_generation_map_screen.dart';
@@ -156,7 +157,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
     FocusManager.instance.primaryFocus?.unfocus();
     final defaultSection = _defaultSectionForUser(_currentUser);
 
-    if (_selectedSection == AppSection.lunchScanner && _lunchScannerModeActive) {
+    if (_selectedSection == AppSection.lunchScanner &&
+        _lunchScannerModeActive) {
       setState(() {
         _lunchScannerBackToken++;
         _lunchScannerModeActive = false;
@@ -211,6 +213,14 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       case AppSection.users:
         return _currentUser.isAdmin
             ? UsersScreen(currentUser: _currentUser)
+            : SettingsScreen(
+                currentUser: _currentUser,
+                onUserUpdated: _handleCurrentUserUpdated,
+                onLogout: widget.onLogout,
+              );
+      case AppSection.notifications:
+        return _currentUser.isAdmin
+            ? const NotificationsScreen()
             : SettingsScreen(
                 currentUser: _currentUser,
                 onUserUpdated: _handleCurrentUserUpdated,
@@ -1422,6 +1432,7 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
       AppSection.reports,
       AppSection.map,
       AppSection.users,
+      AppSection.notifications,
       AppSection.credentials,
       AppSection.permissionExits,
       AppSection.lunches,
@@ -1447,9 +1458,7 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
   }
 
   if (user.isLunchControl) {
-    return const [
-      AppSection.lunchScanner,
-    ];
+    return const [AppSection.lunchScanner];
   }
 
   final sections = [
@@ -1483,6 +1492,7 @@ bool _isAttendanceSection(AppSection section) {
     case AppSection.qrScanner:
     case AppSection.myQr:
     case AppSection.users:
+    case AppSection.notifications:
     case AppSection.settings:
       return false;
   }
@@ -1501,6 +1511,7 @@ bool _isPermissionSection(AppSection section) {
     case AppSection.reports:
     case AppSection.map:
     case AppSection.users:
+    case AppSection.notifications:
     case AppSection.credentials:
     case AppSection.qrScanner:
     case AppSection.myQr:

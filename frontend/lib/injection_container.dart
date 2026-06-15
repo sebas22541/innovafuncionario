@@ -1,6 +1,7 @@
 import 'features/auth/infrastructure/services/auth_api_service.dart';
 import 'features/events/infrastructure/services/events_api_service.dart';
 import 'features/lunches/infrastructure/services/lunches_api_service.dart';
+import 'features/notifications/infrastructure/services/notifications_api_service.dart';
 import 'features/permissions/infrastructure/services/exit_permits_api_service.dart';
 import 'features/reports/infrastructure/services/reports_api_service.dart';
 import 'features/qr_scanner/domain/repositories/qr_details_repository.dart';
@@ -20,6 +21,7 @@ Future<void> initDependencies() async {
   final exitPermitsApiService = ExitPermitsApiService(backendApiClient);
   final lunchesApiService = LunchesApiService(backendApiClient);
   final authApiService = AuthApiService(backendApiClient);
+  final notificationsApiService = NotificationsApiService(backendApiClient);
   final reportsApiService = ReportsApiService(backendApiClient);
 
   dependencies = AppDependencies._(
@@ -28,6 +30,7 @@ Future<void> initDependencies() async {
     eventsApiService: eventsApiService,
     exitPermitsApiService: exitPermitsApiService,
     lunchesApiService: lunchesApiService,
+    notificationsApiService: notificationsApiService,
     reportsApiService: reportsApiService,
     qrDetailsDataSource: qrDetailsDataSource,
     qrDetailsRepository: qrDetailsRepository,
@@ -42,6 +45,7 @@ class AppDependencies {
     required this.eventsApiService,
     required this.exitPermitsApiService,
     required this.lunchesApiService,
+    required this.notificationsApiService,
     required this.reportsApiService,
     required this.qrDetailsDataSource,
     required this.qrDetailsRepository,
@@ -53,6 +57,7 @@ class AppDependencies {
   final EventsApiService eventsApiService;
   final ExitPermitsApiService exitPermitsApiService;
   final LunchesApiService lunchesApiService;
+  final NotificationsApiService notificationsApiService;
   final ReportsApiService reportsApiService;
   final QrDetailsDataSource qrDetailsDataSource;
   final QrDetailsRepository qrDetailsRepository;

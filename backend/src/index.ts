@@ -13,6 +13,8 @@ import http, {
   type ServerResponse,
 } from "node:http";
 import { URL } from "node:url";
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getMessaging } from "firebase-admin/messaging";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
@@ -81,6 +83,7 @@ const JWT_SECRET =
 const ALLOWED_CORS_ORIGINS = parseAllowedCorsOrigins(
   process.env.CORS_ALLOWED_ORIGINS,
 );
+const ALLOW_LOCALHOST_CORS = process.env.ALLOW_LOCALHOST_CORS === "true";
 const PAYLOAD_ENCRYPTION_KEY = normalizeOptionalEnvValue(
   process.env.PAYLOAD_ENCRYPTION_KEY,
 );
@@ -101,6 +104,9 @@ const SEED_ADMIN_EMAIL = normalizeEmailValue(
 const DYNAMIC_QR_SIGNING_SECRET =
   process.env.QR_DYNAMIC_SECRET ??
   createHash("sha256").update(`${DATABASE_URL}:dynamic-qr`).digest("hex");
+const FIREBASE_SERVICE_ACCOUNT_JSON = normalizeOptionalEnvValue(
+  process.env.FIREBASE_SERVICE_ACCOUNT_JSON,
+);
 
 if (!DATABASE_URL) {
   logFatal(
@@ -289,6 +295,8 @@ const server = http.createServer(async (request, response) => {
 
   if (!applyCors(request, response)) {
     logWarning("Origen no permitido.", buildRequestLogFields(request, requestId, {
+      origin: normalizeRequestOrigin(readSingleHeader(request.headers.origin)),
+      referrerOrigin: readReferrerOrigin(request),
       statusCode: 403,
     }));
     sendJson(response, 403, { error: "Origen no permitido." });
@@ -965,6 +973,44 @@ const server = http.createServer(async (request, response) => {
 
       sendJson(response, 200, {
         data: await loadSerializedJobTitles(),
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/notificaciones/token") {
+      assertAuthenticatedRequester(authenticatedUser);
+      const input = parseRegisterNotificationTokenInput(await readJsonBody(request));
+
+      await registerNotificationToken(authenticatedUser.id, input);
+
+      sendJson(response, 200, {
+        data: { registered: true },
+      });
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/api/notificaciones/token") {
+      assertAuthenticatedRequester(authenticatedUser);
+      const input = parseRegisterNotificationTokenInput(await readJsonBody(request));
+
+      await deleteNotificationToken(authenticatedUser.id, input.token);
+
+      sendJson(response, 200, {
+        data: { deleted: true },
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/notificaciones/enviar") {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede enviar notificaciones.",
+      );
+      const input = parseSendNotificationInput(await readJsonBody(request));
+      const result = await sendFirebaseNotification(input);
+
+      sendJson(response, 200, {
+        data: result,
       });
       return;
     }
@@ -2291,6 +2337,21 @@ type LunchReportQuery = {
   officeId: number | null;
 };
 
+type RegisterNotificationTokenInput = {
+  token: string;
+  platform: string;
+};
+
+type SendNotificationInput = {
+  title: string;
+  body: string;
+  cargoCodigos: string[];
+  oficinaIds: number[];
+  cis: string[];
+  tiposVinculo: string[];
+  sendToAll: boolean;
+};
+
 type RegisterUserInput = {
   email: string;
   password: string;
@@ -2370,12 +2431,12 @@ function applyCors(request: IncomingMessage, response: ServerResponse) {
   const origin = normalizeRequestOrigin(readSingleHeader(request.headers.origin));
   const referrerOrigin = readReferrerOrigin(request);
   const isAllowedOrigin = origin == null || isAllowedRequestOrigin(origin);
+  const isAllowedReferrer =
+    referrerOrigin == null || isAllowedRequestOrigin(referrerOrigin);
   const isTrustedUnsafeRequest =
     !isUnsafeHttpMethod(request.method) ||
     (origin != null && isAllowedRequestOrigin(origin)) ||
-    (origin == null &&
-      referrerOrigin != null &&
-      isAllowedRequestOrigin(referrerOrigin));
+    (origin == null && isAllowedReferrer);
 
   if (!isAllowedOrigin || !isTrustedUnsafeRequest) {
     return false;
@@ -2402,7 +2463,23 @@ function isUnsafeHttpMethod(method: string | undefined) {
 }
 
 function isAllowedRequestOrigin(origin: string) {
-  return ALLOWED_CORS_ORIGINS.has(origin);
+  return (
+    ALLOWED_CORS_ORIGINS.has(origin) ||
+    (ALLOW_LOCALHOST_CORS && isLocalhostOrigin(origin))
+  );
+}
+
+function isLocalhostOrigin(origin: string) {
+  try {
+    const url = new URL(origin);
+
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1")
+    );
+  } catch {
+    return false;
+  }
 }
 
 function readSingleHeader(value: string | string[] | undefined) {
@@ -2929,6 +3006,26 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_usuarios_oficina_comision_id"
       ON "usuarios" ("oficina_comision_id")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "notificacion_tokens" (
+      "id" SERIAL PRIMARY KEY,
+      "usuario_id" INTEGER NOT NULL,
+      "token" TEXT NOT NULL UNIQUE,
+      "platform" VARCHAR(20) NOT NULL,
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "notificacion_tokens_usuario_id_fkey"
+        FOREIGN KEY ("usuario_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_notificacion_tokens_usuario_id"
+      ON "notificacion_tokens" ("usuario_id")
   `);
 
   await pool.query(`
@@ -4274,6 +4371,55 @@ function parseLunchReportQuery(url: URL): LunchReportQuery {
   };
 }
 
+function parseRegisterNotificationTokenInput(
+  payload: unknown,
+): RegisterNotificationTokenInput {
+  const body = expectRecord(payload);
+
+  return {
+    token: readRequiredString(body, "token", 20, 4096),
+    platform: readRequiredUppercaseChoice(body, "platform", [
+      "ANDROID",
+      "IOS",
+    ]),
+  };
+}
+
+function parseSendNotificationInput(payload: unknown): SendNotificationInput {
+  const body = expectRecord(payload);
+  const sendToAll = readOptionalBoolean(body, "sendToAll") ?? false;
+  const cargoCodigos = readOptionalStringList(body, "cargoCodigos", "cargo");
+  const oficinaIds = readOptionalIntList(body, "oficinaIds");
+  const cis = readOptionalStringList(body, "cis", "CI").map(normalizeCiLookupValue);
+  const tiposVinculo = readOptionalUppercaseChoiceList(body, "tiposVinculo", [
+    "ITEM",
+    "EVENTUAL",
+    "CONSULTOR",
+  ]);
+  const hasFilters =
+    cargoCodigos.length > 0 ||
+    oficinaIds.length > 0 ||
+    cis.length > 0 ||
+    tiposVinculo.length > 0;
+
+  if (!sendToAll && !hasFilters) {
+    throw new HttpError(
+      400,
+      "Selecciona todos o al menos un filtro de destinatarios.",
+    );
+  }
+
+  return {
+    title: readRequiredString(body, "title", 3, 120),
+    body: readRequiredString(body, "body", 3, 500),
+    cargoCodigos,
+    oficinaIds,
+    cis,
+    tiposVinculo,
+    sendToAll,
+  };
+}
+
 function readLunchQueryDate(url: URL) {
   const rawValue = url.searchParams.get("fecha")?.trim();
 
@@ -4910,6 +5056,20 @@ function readRequiredBoolean(source: JsonRecord, key: string) {
   return value;
 }
 
+function readOptionalBoolean(source: JsonRecord, key: string) {
+  const value = source[key];
+
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value !== "boolean") {
+    throw new HttpError(400, `El campo ${key} debe ser verdadero o falso.`);
+  }
+
+  return value;
+}
+
 function readRequiredFloat(
   source: JsonRecord,
   key: string,
@@ -4995,6 +5155,31 @@ function readRequiredUppercaseChoice(
   }
 
   return value;
+}
+
+function readOptionalUppercaseChoiceList(
+  source: JsonRecord,
+  key: string,
+  allowedValues: string[],
+) {
+  const values = readOptionalStringList(source, key, key);
+
+  return [
+    ...new Set(
+      values.map((value) => {
+        const normalizedValue = value.toUpperCase();
+
+        if (!allowedValues.includes(normalizedValue)) {
+          throw new HttpError(
+            400,
+            `El campo ${key} contiene un valor no permitido.`,
+          );
+        }
+
+        return normalizedValue;
+      }),
+    ),
+  ];
 }
 
 function readResourceId(pathname: string, prefix: string) {
@@ -7179,6 +7364,203 @@ async function loadDashboardSummary() {
   return summary;
 }
 
+async function registerNotificationToken(
+  userId: number,
+  input: RegisterNotificationTokenInput,
+) {
+  await pool.query(
+    `
+      INSERT INTO "notificacion_tokens" ("usuario_id", "token", "platform")
+      VALUES ($1, $2, $3)
+      ON CONFLICT ("token") DO UPDATE SET
+        "usuario_id" = EXCLUDED."usuario_id",
+        "platform" = EXCLUDED."platform",
+        "updated_at" = CURRENT_TIMESTAMP
+    `,
+    [userId, input.token, input.platform],
+  );
+}
+
+async function deleteNotificationToken(userId: number, token: string) {
+  await pool.query(
+    `
+      DELETE FROM "notificacion_tokens"
+      WHERE "usuario_id" = $1 AND "token" = $2
+    `,
+    [userId, token],
+  );
+}
+
+async function sendFirebaseNotification(input: SendNotificationInput) {
+  const tokens = await loadNotificationTargetTokens(input);
+
+  if (tokens.length === 0) {
+    return {
+      requested: 0,
+      sent: 0,
+      failed: 0,
+      message: "No hay dispositivos registrados para esos filtros.",
+    };
+  }
+
+  const messaging = getFirebaseMessagingClient();
+  let sent = 0;
+  let failed = 0;
+  const invalidTokens: string[] = [];
+
+  for (const tokenChunk of chunkArray(tokens, 500)) {
+    const batchResult = await messaging.sendEachForMulticast({
+      tokens: tokenChunk,
+      notification: {
+        title: input.title,
+        body: input.body,
+      },
+      android: {
+        priority: "high",
+      },
+      apns: {
+        payload: {
+          aps: {
+            sound: "default",
+          },
+        },
+      },
+      data: {
+        source: "innovafuncionario",
+      },
+    });
+
+    sent += batchResult.successCount;
+    failed += batchResult.failureCount;
+    batchResult.responses.forEach((item, index) => {
+      const code = item.error?.code;
+
+      if (
+        code === "messaging/registration-token-not-registered" ||
+        code === "messaging/invalid-registration-token"
+      ) {
+        invalidTokens.push(tokenChunk[index]);
+      }
+    });
+  }
+
+  if (invalidTokens.length > 0) {
+    await removeNotificationTokens(invalidTokens);
+  }
+
+  return {
+    requested: tokens.length,
+    sent,
+    failed,
+    removedInvalidTokens: invalidTokens.length,
+  };
+}
+
+async function loadNotificationTargetTokens(input: SendNotificationInput) {
+  const clauses = [
+    `u."activo" = TRUE`,
+    `nt."platform" IN ('ANDROID', 'IOS')`,
+  ];
+  const params: unknown[] = [];
+
+  if (!input.sendToAll) {
+    if (input.cargoCodigos.length > 0) {
+      params.push(input.cargoCodigos);
+      clauses.push(`u."cargo_codigo" = ANY($${params.length}::text[])`);
+    }
+
+    if (input.oficinaIds.length > 0) {
+      params.push(input.oficinaIds);
+      clauses.push(
+        `COALESCE(u."oficina_comision_id", u."oficina_id") = ANY($${params.length}::int[])`,
+      );
+    }
+
+    if (input.cis.length > 0) {
+      params.push(input.cis);
+      clauses.push(
+        `UPPER(REPLACE(COALESCE(u."ci", ''), '-', '')) = ANY($${params.length}::text[])`,
+      );
+    }
+
+    if (input.tiposVinculo.length > 0) {
+      params.push(input.tiposVinculo);
+      clauses.push(
+        `UPPER(COALESCE(u."tipo_vinculo", '')) = ANY($${params.length}::text[])`,
+      );
+    }
+  }
+
+  const result = await pool.query<{ token: string }>(
+    `
+      SELECT DISTINCT nt."token"
+      FROM "notificacion_tokens" nt
+      INNER JOIN "usuarios" u ON u."id" = nt."usuario_id"
+      WHERE ${clauses.join(" AND ")}
+    `,
+    params,
+  );
+
+  return result.rows.map((row) => row.token);
+}
+
+async function removeNotificationTokens(tokens: string[]) {
+  if (tokens.length === 0) {
+    return;
+  }
+
+  await pool.query(
+    `
+      DELETE FROM "notificacion_tokens"
+      WHERE "token" = ANY($1::text[])
+    `,
+    [tokens],
+  );
+}
+
+function getFirebaseMessagingClient() {
+  if (getApps().length === 0) {
+    const credential = readFirebaseServiceAccountCredential();
+
+    if (credential == null) {
+      initializeApp();
+    } else {
+      initializeApp({ credential });
+    }
+  }
+
+  return getMessaging();
+}
+
+function readFirebaseServiceAccountCredential() {
+  if (FIREBASE_SERVICE_ACCOUNT_JSON == null) {
+    return null;
+  }
+
+  try {
+    const jsonText = FIREBASE_SERVICE_ACCOUNT_JSON.trim().startsWith("{")
+      ? FIREBASE_SERVICE_ACCOUNT_JSON
+      : Buffer.from(FIREBASE_SERVICE_ACCOUNT_JSON, "base64").toString("utf8");
+
+    return cert(JSON.parse(jsonText));
+  } catch {
+    throw new HttpError(
+      500,
+      "FIREBASE_SERVICE_ACCOUNT_JSON no tiene un formato valido.",
+    );
+  }
+}
+
+function chunkArray<T>(values: T[], size: number) {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+
+  return chunks;
+}
+
 async function loadSerializedEventSummaries() {
   const cachedEvents = readCacheValue(eventSummaryCache);
 
@@ -7554,22 +7936,17 @@ async function loadEventAbsentees(event: any) {
   const absentees = [];
 
   for (const person of candidates) {
-    try {
-      await assertPersonCanAttendEvent(person, event);
-      absentees.push(serializeEventAbsenteeRecord(person, event));
-    } catch (error) {
-      if (error instanceof HttpError && error.statusCode === 403) {
-        continue;
-      }
+    const requirementReason = await buildEventReportRequirementReason(person, event);
 
-      throw error;
+    if (requirementReason != null) {
+      absentees.push(serializeEventAbsenteeRecord(person, requirementReason));
     }
   }
 
   return absentees;
 }
 
-function serializeEventAbsenteeRecord(person: any, event: any) {
+function serializeEventAbsenteeRecord(person: any, requirementReason: string) {
   const linkedUser = person.usuario ?? null;
   const officeName = resolveLinkedOfficeName(linkedUser);
 
@@ -7584,13 +7961,16 @@ function serializeEventAbsenteeRecord(person: any, event: any) {
     unidad: officeName,
     cargo: linkedUser?.cargo ?? null,
     email: linkedUser?.email ?? null,
-    motivoFalta: buildEventRequirementReason(person, event),
+    motivoFalta: requirementReason,
   };
 }
 
-function buildEventRequirementReason(person: any, event: any) {
+async function buildEventReportRequirementReason(person: any, event: any) {
   const linkedUser = person.usuario ?? null;
-  const userOfficeId = resolveLinkedOfficeId(linkedUser);
+  const userOfficeId =
+    resolveLinkedOfficeId(linkedUser) ??
+    (await resolveOfficeForUser(prisma, linkedUser))?.id ??
+    null;
   const userCargoCodigo = normalizeOptionalText(linkedUser?.cargo_codigo);
   const matchesOffice =
     userOfficeId != null &&
@@ -7626,7 +8006,7 @@ function buildEventRequirementReason(person: any, event: any) {
     return "Cargo";
   }
 
-  return "Regla del evento";
+  return null;
 }
 
 function resolveLinkedOffice(linkedUser: any) {
