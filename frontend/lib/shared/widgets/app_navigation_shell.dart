@@ -9,6 +9,7 @@ import '../../features/events/presentation/screens/user_events_screen.dart';
 import '../../features/credentials/presentation/screens/credentials_screen.dart';
 import '../../features/home/presentation/screens/home_screen.dart';
 import '../../features/lunches/presentation/screens/lunches_screen.dart';
+import '../../features/notifications/infrastructure/services/notifications_api_service.dart';
 import '../../features/notifications/presentation/screens/notifications_screen.dart';
 import '../../features/permissions/presentation/screens/exit_permits_screen.dart';
 import '../../features/qr_scanner/presentation/screens/qr_scanner_screen.dart';
@@ -16,6 +17,7 @@ import '../../features/reports/presentation/screens/qr_generation_map_screen.dar
 import '../../features/reports/presentation/screens/reports_screen.dart';
 import '../../features/settings/presentation/screens/settings_screen.dart';
 import '../../features/users/presentation/screens/users_screen.dart';
+import '../../injection_container.dart';
 import '../models/app_section.dart';
 import '../models/app_user.dart';
 import 'app_alert.dart';
@@ -27,6 +29,8 @@ class AppNavigationShell extends StatefulWidget {
     super.key,
     required this.currentUser,
     this.initialSection,
+    this.sectionRequestToken = 0,
+    this.notificationsRefreshToken = 0,
     this.onCurrentUserChanged,
     this.onSectionChanged,
     required this.onLogout,
@@ -34,6 +38,8 @@ class AppNavigationShell extends StatefulWidget {
 
   final AppUser currentUser;
   final AppSection? initialSection;
+  final int sectionRequestToken;
+  final int notificationsRefreshToken;
   final ValueChanged<AppUser>? onCurrentUserChanged;
   final ValueChanged<AppSection>? onSectionChanged;
   final VoidCallback onLogout;
@@ -48,6 +54,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
   late AppUser _currentUser;
   bool _lunchScannerModeActive = false;
   int _lunchScannerBackToken = 0;
+  int _unreadNotifications = 0;
 
   @override
   void initState() {
@@ -57,6 +64,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       _currentUser,
       widget.initialSection,
     );
+    _loadUnreadNotifications();
   }
 
   @override
@@ -71,6 +79,19 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
         _selectedSection = _defaultSectionForUser(_currentUser);
         widget.onSectionChanged?.call(_selectedSection);
       }
+    }
+
+    if ((oldWidget.initialSection != widget.initialSection ||
+            oldWidget.sectionRequestToken != widget.sectionRequestToken) &&
+        widget.initialSection != null &&
+        _visibleSectionsForUser(_currentUser).contains(widget.initialSection)) {
+      _selectedSection = widget.initialSection!;
+      widget.onSectionChanged?.call(_selectedSection);
+    }
+
+    if (oldWidget.notificationsRefreshToken !=
+        widget.notificationsRefreshToken) {
+      _loadUnreadNotifications();
     }
   }
 
@@ -109,6 +130,62 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
     }
 
     _selectSection(section);
+  }
+
+  Future<void> _loadUnreadNotifications() async {
+    try {
+      final notifications = await dependencies.notificationsApiService
+          .fetchReceivedNotifications();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _unreadNotifications = notifications
+            .where((notification) => notification.isUnread)
+            .length;
+      });
+    } catch (_) {
+      // La campana no debe bloquear la navegacion si el backend no responde.
+    }
+  }
+
+  Future<void> _openNotificationsPanel() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    final selected = await showGeneralDialog<ReceivedNotification>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Cerrar notificaciones',
+      barrierColor: Colors.black.withValues(alpha: 0.48),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return Align(
+          alignment: Alignment.centerRight,
+          child: _ReceivedNotificationsPanel(
+            onClose: () => Navigator.of(context).pop(),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final offset =
+            Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero).animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+            );
+
+        return SlideTransition(position: offset, child: child);
+      },
+    );
+
+    await _loadUnreadNotifications();
+
+    if (!mounted || selected == null) {
+      return;
+    }
+
+    if (selected.targetSection == AppSection.exitPermitRequests.storageKey) {
+      _handleSectionSelection(AppSection.exitPermitRequests);
+    }
   }
 
   Future<void> _openMyQrDialog() async {
@@ -323,6 +400,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 entries: _portalEntriesForUser(_currentUser),
                 onSelected: _handleSectionSelection,
                 onBack: _handleSystemBack,
+                onNotifications: _openNotificationsPanel,
+                unreadNotifications: _unreadNotifications,
                 onLogout: widget.onLogout,
                 child: animatedContent,
               )
@@ -340,7 +419,9 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 currentUser: _currentUser,
                 selectedSection: _selectedSection,
                 visibleSections: visibleSections,
+                unreadNotifications: _unreadNotifications,
                 onSelected: _handleSectionSelection,
+                onNotifications: _openNotificationsPanel,
                 onLogout: widget.onLogout,
                 child: animatedContent,
               );
@@ -474,7 +555,9 @@ class _MobileAppFrame extends StatefulWidget {
     required this.currentUser,
     required this.selectedSection,
     required this.visibleSections,
+    required this.unreadNotifications,
     required this.onSelected,
+    required this.onNotifications,
     required this.onLogout,
     required this.child,
   });
@@ -483,7 +566,9 @@ class _MobileAppFrame extends StatefulWidget {
   final AppUser currentUser;
   final AppSection selectedSection;
   final List<AppSection> visibleSections;
+  final int unreadNotifications;
   final ValueChanged<AppSection> onSelected;
+  final VoidCallback onNotifications;
   final VoidCallback onLogout;
   final Widget child;
 
@@ -568,6 +653,8 @@ class _MobileAppFrameState extends State<_MobileAppFrame> {
               _MobileTopBar(
                 currentUser: widget.currentUser,
                 selectedSection: widget.selectedSection,
+                unreadNotifications: widget.unreadNotifications,
+                onNotifications: widget.onNotifications,
                 onMenu: _openMenu,
               ),
               Expanded(child: widget.child),
@@ -583,11 +670,15 @@ class _MobileTopBar extends StatelessWidget {
   const _MobileTopBar({
     required this.currentUser,
     required this.selectedSection,
+    required this.unreadNotifications,
+    required this.onNotifications,
     required this.onMenu,
   });
 
   final AppUser currentUser;
   final AppSection selectedSection;
+  final int unreadNotifications;
+  final VoidCallback onNotifications;
   final VoidCallback onMenu;
 
   @override
@@ -613,6 +704,10 @@ class _MobileTopBar extends StatelessWidget {
                   child: _BrandLogo(height: 56),
                 ),
               ),
+              _NotificationIconButton(
+                unreadCount: unreadNotifications,
+                onPressed: onNotifications,
+              ),
               IconButton(
                 onPressed: onMenu,
                 tooltip: 'Menu',
@@ -624,6 +719,388 @@ class _MobileTopBar extends StatelessWidget {
       ),
     );
   }
+}
+
+class _NotificationIconButton extends StatelessWidget {
+  const _NotificationIconButton({
+    required this.unreadCount,
+    required this.onPressed,
+  });
+
+  final int unreadCount;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        IconButton(
+          onPressed: onPressed,
+          tooltip: 'Notificaciones',
+          icon: const Icon(
+            Icons.notifications_rounded,
+            color: Colors.white,
+            size: 24,
+          ),
+        ),
+        if (unreadCount > 0)
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Container(
+              width: unreadCount > 9 ? 18 : 10,
+              height: unreadCount > 9 ? 18 : 10,
+              alignment: Alignment.center,
+              decoration: const BoxDecoration(
+                color: Color(0xFFE85487),
+                shape: BoxShape.circle,
+              ),
+              child: unreadCount > 9
+                  ? Text(
+                      unreadCount > 99 ? '99+' : '$unreadCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    )
+                  : null,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ReceivedNotificationsPanel extends StatefulWidget {
+  const _ReceivedNotificationsPanel({required this.onClose});
+
+  final VoidCallback onClose;
+
+  @override
+  State<_ReceivedNotificationsPanel> createState() =>
+      _ReceivedNotificationsPanelState();
+}
+
+class _ReceivedNotificationsPanelState
+    extends State<_ReceivedNotificationsPanel> {
+  late Future<List<ReceivedNotification>> _notificationsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _notificationsFuture = dependencies.notificationsApiService
+        .fetchReceivedNotifications();
+  }
+
+  Future<void> _handleNotificationTap(ReceivedNotification notification) async {
+    try {
+      await dependencies.notificationsApiService.markReceivedNotificationRead(
+        notification.id,
+      );
+    } catch (_) {
+      // La navegacion sigue aunque no se pueda marcar como leida.
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    Navigator.of(context).pop(notification);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final width = math.min(MediaQuery.sizeOf(context).width * 0.82, 620.0);
+
+    return Material(
+      color: Colors.white,
+      child: SizedBox(
+        width: width,
+        height: double.infinity,
+        child: Column(
+          children: [
+            Container(
+              height: 94,
+              padding: const EdgeInsets.fromLTRB(28, 22, 18, 16),
+              color: AppPalette.night,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Notificaciones',
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 24,
+                          ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: widget.onClose,
+                    tooltip: 'Cerrar',
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: Colors.white,
+                      size: 30,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: FutureBuilder<List<ReceivedNotification>>(
+                future: _notificationsFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState != ConnectionState.done) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          'No fue posible cargar tus notificaciones.',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodyLarge,
+                        ),
+                      ),
+                    );
+                  }
+
+                  final notifications = snapshot.data ?? const [];
+
+                  if (notifications.isEmpty) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          'No tienes notificaciones recibidas.',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodyLarge,
+                        ),
+                      ),
+                    );
+                  }
+
+                  return ListView(
+                    padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
+                    children: [
+                      for (final group in _groupNotificationsByDate(
+                        notifications,
+                      )) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 14, top: 4),
+                          child: Text(
+                            _formatDateLabel(group.date),
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(
+                                  color: Colors.black87,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                        ),
+                        for (final notification in group.notifications) ...[
+                          _ReceivedNotificationCard(
+                            notification: notification,
+                            onTap: () => _handleNotificationTap(notification),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                      ],
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NotificationDateGroup {
+  const _NotificationDateGroup({
+    required this.date,
+    required this.notifications,
+  });
+
+  final DateTime date;
+  final List<ReceivedNotification> notifications;
+}
+
+List<_NotificationDateGroup> _groupNotificationsByDate(
+  List<ReceivedNotification> notifications,
+) {
+  final groups = <_NotificationDateGroup>[];
+
+  for (final notification in notifications) {
+    final localDate = notification.createdAt.toLocal();
+    final dateOnly = DateTime(localDate.year, localDate.month, localDate.day);
+
+    if (groups.isEmpty || groups.last.date != dateOnly) {
+      groups.add(
+        _NotificationDateGroup(date: dateOnly, notifications: [notification]),
+      );
+    } else {
+      groups.last.notifications.add(notification);
+    }
+  }
+
+  return groups;
+}
+
+class _ReceivedNotificationCard extends StatelessWidget {
+  const _ReceivedNotificationCard({
+    required this.notification,
+    required this.onTap,
+  });
+
+  final ReceivedNotification notification;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final unread = notification.isUnread;
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Material(
+          color: unread ? Colors.white : const Color(0xFFF1F1F1),
+          borderRadius: BorderRadius.circular(22),
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(22),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                  color: unread
+                      ? const Color(0xFFE06C9A)
+                      : const Color(0xFFD7D7D7),
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 76,
+                    height: 76,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE85487),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Icon(
+                      Icons.assignment_rounded,
+                      color: Colors.white,
+                      size: 34,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _notificationCategory(notification),
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(
+                                color: const Color(0xFF00A7BD),
+                                fontWeight: FontWeight.w800,
+                                fontSize: 15,
+                              ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          notification.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                color: Colors.black87,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 16,
+                              ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          notification.body,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(color: Colors.black87, fontSize: 14),
+                        ),
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: Text(
+                            _formatTimeLabel(notification.createdAt),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Colors.black87,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (unread) const Positioned(top: -8, right: -4, child: _UnreadDot()),
+      ],
+    );
+  }
+}
+
+class _UnreadDot extends StatelessWidget {
+  const _UnreadDot();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFE85487),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2),
+      ),
+      child: const SizedBox(width: 18, height: 18),
+    );
+  }
+}
+
+String _notificationCategory(ReceivedNotification notification) {
+  if (notification.type == 'exit_permit_request') {
+    return 'Permisos';
+  }
+
+  return 'Noticias';
+}
+
+String _formatDateLabel(DateTime date) {
+  final day = date.day.toString().padLeft(2, '0');
+  final month = date.month.toString().padLeft(2, '0');
+
+  return '$day/$month/${date.year}';
+}
+
+String _formatTimeLabel(DateTime value) {
+  final local = value.toLocal();
+  final hour12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+  final minute = local.minute.toString().padLeft(2, '0');
+  final suffix = local.hour < 12 ? 'a.m.' : 'p.m.';
+
+  return '$hour12:$minute $suffix';
 }
 
 class _MobileNavigationDrawer extends StatefulWidget {

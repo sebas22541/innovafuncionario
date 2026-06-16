@@ -28,6 +28,8 @@ class RolePortalShell extends StatefulWidget {
     required this.entries,
     required this.onSelected,
     required this.onBack,
+    required this.onNotifications,
+    required this.unreadNotifications,
     required this.onLogout,
     required this.child,
   });
@@ -38,6 +40,8 @@ class RolePortalShell extends StatefulWidget {
   final List<PortalNavEntry> entries;
   final ValueChanged<AppSection> onSelected;
   final VoidCallback onBack;
+  final VoidCallback onNotifications;
+  final int unreadNotifications;
   final VoidCallback onLogout;
   final Widget child;
 
@@ -133,7 +137,11 @@ class _RolePortalShellState extends State<RolePortalShell> {
           body: _isHome
               ? Column(
                   children: [
-                    _PortalHomeTopBar(onMenu: _openDrawer),
+                    _PortalHomeTopBar(
+                      unreadNotifications: widget.unreadNotifications,
+                      onNotifications: widget.onNotifications,
+                      onMenu: _openDrawer,
+                    ),
                     Expanded(child: widget.child),
                   ],
                 )
@@ -143,6 +151,8 @@ class _RolePortalShellState extends State<RolePortalShell> {
                       currentUser: widget.currentUser,
                       entry: _currentEntry,
                       onBack: widget.onBack,
+                      unreadNotifications: widget.unreadNotifications,
+                      onNotifications: widget.onNotifications,
                       onMenu: _openDrawer,
                     ),
                     Expanded(
@@ -187,9 +197,7 @@ class RolePortalHomeContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final actions = entries
-        .where(
-          (entry) => entry.section != AppSection.home,
-        )
+        .where((entry) => entry.section != AppSection.home)
         .toList(growable: false);
 
     return SingleChildScrollView(
@@ -308,8 +316,14 @@ class RolePortalHomeContent extends StatelessWidget {
 }
 
 class _PortalHomeTopBar extends StatelessWidget {
-  const _PortalHomeTopBar({required this.onMenu});
+  const _PortalHomeTopBar({
+    required this.unreadNotifications,
+    required this.onNotifications,
+    required this.onMenu,
+  });
 
+  final int unreadNotifications;
+  final VoidCallback onNotifications;
   final VoidCallback onMenu;
 
   @override
@@ -324,6 +338,10 @@ class _PortalHomeTopBar extends StatelessWidget {
             children: [
               const _CochalLogo(height: 32),
               const Spacer(),
+              _PortalNotificationIconButton(
+                unreadCount: unreadNotifications,
+                onPressed: onNotifications,
+              ),
               IconButton(
                 onPressed: onMenu,
                 icon: const Icon(
@@ -346,12 +364,16 @@ class _PortalInnerHeader extends StatelessWidget {
     required this.currentUser,
     required this.entry,
     required this.onBack,
+    required this.unreadNotifications,
+    required this.onNotifications,
     required this.onMenu,
   });
 
   final AppUser currentUser;
   final PortalNavEntry entry;
   final VoidCallback onBack;
+  final int unreadNotifications;
+  final VoidCallback onNotifications;
   final VoidCallback onMenu;
 
   @override
@@ -386,6 +408,10 @@ class _PortalInnerHeader extends StatelessWidget {
                 borderRadius: BorderRadius.circular(999),
               ),
               const SizedBox(width: 6),
+              _PortalNotificationIconButton(
+                unreadCount: unreadNotifications,
+                onPressed: onNotifications,
+              ),
               IconButton(
                 onPressed: onMenu,
                 icon: const Icon(
@@ -418,6 +444,58 @@ class _PortalInnerHeader extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _PortalNotificationIconButton extends StatelessWidget {
+  const _PortalNotificationIconButton({
+    required this.unreadCount,
+    required this.onPressed,
+  });
+
+  final int unreadCount;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        IconButton(
+          onPressed: onPressed,
+          tooltip: 'Notificaciones',
+          icon: const Icon(
+            Icons.notifications_rounded,
+            color: Colors.white,
+            size: 24,
+          ),
+        ),
+        if (unreadCount > 0)
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Container(
+              width: unreadCount > 9 ? 18 : 10,
+              height: unreadCount > 9 ? 18 : 10,
+              alignment: Alignment.center,
+              decoration: const BoxDecoration(
+                color: Color(0xFFE85487),
+                shape: BoxShape.circle,
+              ),
+              child: unreadCount > 9
+                  ? Text(
+                      unreadCount > 99 ? '99+' : '$unreadCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    )
+                  : null,
+            ),
+          ),
+      ],
     );
   }
 }
@@ -543,10 +621,7 @@ class _PortalDrawer extends StatelessWidget {
                           currentUser.email,
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(
-                                color: AppPalette.muted,
-                                fontSize: 13,
-                              ),
+                              ?.copyWith(color: AppPalette.muted, fontSize: 13),
                         ),
                       ),
                       const SizedBox(height: 20),

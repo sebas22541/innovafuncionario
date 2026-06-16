@@ -19,9 +19,32 @@ class FirebaseNotificationsService {
   FirebaseNotificationsService._();
 
   static StreamSubscription<String>? _tokenRefreshSubscription;
+  static StreamSubscription<RemoteMessage>? _messageOpenedSubscription;
+  static StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
   static String? _registeredToken;
   static String? _registeredPlatform;
+  static VoidCallback? _openExitPermitRequests;
+  static VoidCallback? _notificationsChanged;
   static bool _initialized = false;
+  static bool _initialMessageChecked = false;
+  static bool _pendingExitPermitRequestsOpen = false;
+
+  static void configureNavigation({
+    required VoidCallback onOpenExitPermitRequests,
+    required VoidCallback onNotificationsChanged,
+  }) {
+    _openExitPermitRequests = onOpenExitPermitRequests;
+    _notificationsChanged = onNotificationsChanged;
+
+    if (_pendingExitPermitRequestsOpen) {
+      _pendingExitPermitRequestsOpen = false;
+      onOpenExitPermitRequests();
+    }
+
+    if (_initialized) {
+      _listenNotificationTaps();
+    }
+  }
 
   static Future<void> initialize() async {
     if (!_supportsFirebaseMessaging || _initialized) {
@@ -32,6 +55,7 @@ class FirebaseNotificationsService {
       await Firebase.initializeApp();
       FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
       _initialized = true;
+      _listenNotificationTaps();
     } catch (_) {
       _initialized = false;
     }
@@ -101,6 +125,50 @@ class FirebaseNotificationsService {
     } catch (_) {
       // El cierre de sesion no debe quedar bloqueado por la baja del token.
     }
+  }
+
+  static void _listenNotificationTaps() {
+    if (!_supportsFirebaseMessaging || !_initialized) {
+      return;
+    }
+
+    _messageOpenedSubscription ??= FirebaseMessaging.onMessageOpenedApp.listen(
+      _handleNotificationTap,
+    );
+    _foregroundMessageSubscription ??= FirebaseMessaging.onMessage.listen((
+      message,
+    ) {
+      if (message.data['source'] == 'innovafuncionario') {
+        _notificationsChanged?.call();
+      }
+    });
+
+    if (_initialMessageChecked) {
+      return;
+    }
+
+    _initialMessageChecked = true;
+    FirebaseMessaging.instance.getInitialMessage().then((message) {
+      if (message != null) {
+        _handleNotificationTap(message);
+      }
+    });
+  }
+
+  static void _handleNotificationTap(RemoteMessage message) {
+    if (message.data['targetSection'] != 'exitPermitRequests') {
+      return;
+    }
+
+    _notificationsChanged?.call();
+    final callback = _openExitPermitRequests;
+
+    if (callback == null) {
+      _pendingExitPermitRequestsOpen = true;
+      return;
+    }
+
+    callback();
   }
 }
 

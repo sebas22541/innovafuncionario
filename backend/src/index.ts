@@ -777,6 +777,12 @@ const server = http.createServer(async (request, response) => {
         },
       });
 
+      notifyExitPermitApprovers(salida.id).catch((error) => {
+        logError("No se pudo enviar la notificacion de solicitud de salida.", error, {
+          salidaId: salida.id,
+        });
+      });
+
       sendJson(response, 201, {
         data: serializeExitPermit(salida),
       });
@@ -997,6 +1003,36 @@ const server = http.createServer(async (request, response) => {
 
       sendJson(response, 200, {
         data: { deleted: true },
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/notificaciones/recibidas") {
+      assertAuthenticatedRequester(authenticatedUser);
+      const notifications = await loadReceivedNotifications(authenticatedUser.id);
+
+      sendJson(response, 200, {
+        data: notifications.map(serializeReceivedNotification),
+      });
+      return;
+    }
+
+    const notificationReadMatch = /^\/api\/notificaciones\/(\d+)\/leida$/.exec(
+      url.pathname,
+    );
+
+    if (request.method === "PUT" && notificationReadMatch != null) {
+      assertAuthenticatedRequester(authenticatedUser);
+      const notificationId = Number.parseInt(notificationReadMatch[1] ?? "", 10);
+
+      if (!Number.isInteger(notificationId) || notificationId <= 0) {
+        throw new HttpError(400, "La notificacion seleccionada no es valida.");
+      }
+
+      await markReceivedNotificationRead(authenticatedUser.id, notificationId);
+
+      sendJson(response, 200, {
+        data: { updated: true },
       });
       return;
     }
@@ -2352,6 +2388,18 @@ type SendNotificationInput = {
   sendToAll: boolean;
 };
 
+type ReceivedNotificationRecord = {
+  id: number;
+  usuario_id: number;
+  tipo: string;
+  titulo: string;
+  cuerpo: string;
+  destino_seccion: string | null;
+  salida_id: number | null;
+  leida_en: Date | null;
+  created_at: Date;
+};
+
 type RegisterUserInput = {
   email: string;
   password: string;
@@ -3026,6 +3074,34 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_notificacion_tokens_usuario_id"
       ON "notificacion_tokens" ("usuario_id")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "notificaciones" (
+      "id" SERIAL PRIMARY KEY,
+      "usuario_id" INTEGER NOT NULL,
+      "tipo" VARCHAR(60) NOT NULL,
+      "titulo" VARCHAR(180) NOT NULL,
+      "cuerpo" TEXT NOT NULL,
+      "destino_seccion" VARCHAR(80),
+      "salida_id" INTEGER,
+      "leida_en" TIMESTAMPTZ(6),
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "notificaciones_usuario_id_fkey"
+        FOREIGN KEY ("usuario_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_notificaciones_usuario_created"
+      ON "notificaciones" ("usuario_id", "created_at" DESC)
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_notificaciones_usuario_leida"
+      ON "notificaciones" ("usuario_id", "leida_en")
   `);
 
   await pool.query(`
@@ -7391,9 +7467,75 @@ async function deleteNotificationToken(userId: number, token: string) {
   );
 }
 
+async function loadReceivedNotifications(userId: number) {
+  const result = await pool.query<ReceivedNotificationRecord>(
+    `
+      SELECT
+        "id",
+        "usuario_id",
+        "tipo",
+        "titulo",
+        "cuerpo",
+        "destino_seccion",
+        "salida_id",
+        "leida_en",
+        "created_at"
+      FROM "notificaciones"
+      WHERE "usuario_id" = $1
+      ORDER BY "created_at" DESC, "id" DESC
+      LIMIT 80
+    `,
+    [userId],
+  );
+
+  return result.rows;
+}
+
+async function markReceivedNotificationRead(userId: number, notificationId: number) {
+  await pool.query(
+    `
+      UPDATE "notificaciones"
+      SET "leida_en" = COALESCE("leida_en", CURRENT_TIMESTAMP)
+      WHERE "id" = $1 AND "usuario_id" = $2
+    `,
+    [notificationId, userId],
+  );
+}
+
+function serializeReceivedNotification(notification: ReceivedNotificationRecord) {
+  return {
+    id: notification.id,
+    usuarioId: notification.usuario_id,
+    tipo: notification.tipo,
+    titulo: notification.titulo,
+    cuerpo: notification.cuerpo,
+    destinoSeccion: notification.destino_seccion,
+    salidaId: notification.salida_id,
+    leidaEn: notification.leida_en?.toISOString() ?? null,
+    createdAt: notification.created_at.toISOString(),
+  };
+}
+
 async function sendFirebaseNotification(input: SendNotificationInput) {
   const tokens = await loadNotificationTargetTokens(input);
 
+  return sendFirebaseMulticastNotification(tokens, {
+    title: input.title,
+    body: input.body,
+    data: {
+      source: "innovafuncionario",
+    },
+  });
+}
+
+async function sendFirebaseMulticastNotification(
+  tokens: string[],
+  input: {
+    title: string;
+    body: string;
+    data?: Record<string, string>;
+  },
+) {
   if (tokens.length === 0) {
     return {
       requested: 0,
@@ -7428,6 +7570,7 @@ async function sendFirebaseNotification(input: SendNotificationInput) {
         },
         data: {
           source: "innovafuncionario",
+          ...(input.data ?? {}),
         },
       });
 
@@ -7458,6 +7601,212 @@ async function sendFirebaseNotification(input: SendNotificationInput) {
     failed,
     removedInvalidTokens: invalidTokens.length,
   };
+}
+
+async function notifyExitPermitApprovers(salidaId: number) {
+  const salida = await prisma.salidas.findUnique({
+    where: { id: salidaId },
+    include: exitPermitRecordInclude,
+  });
+
+  if (salida == null || salida.estado !== estado_salida.PENDIENTE) {
+    return;
+  }
+
+  const targets = await loadExitPermitApproverNotificationTargets(salida);
+  const title = "Solicitud de salida pendiente";
+  const body = `${salida.solicitante_nombre_completo} envio una solicitud de salida.`;
+
+  await createReceivedNotifications(targets.userIds, {
+    type: "exit_permit_request",
+    title,
+    body,
+    targetSection: "exitPermitRequests",
+    salidaId: salida.id,
+  });
+
+  await sendFirebaseMulticastNotification(targets.tokens, {
+    title,
+    body,
+    data: {
+      source: "innovafuncionario",
+      type: "exit_permit_request",
+      targetSection: "exitPermitRequests",
+      salidaId: String(salida.id),
+    },
+  });
+}
+
+async function loadExitPermitApproverNotificationTargets(salida: any) {
+  const applicant = salida.usuarios;
+  const candidateWhere = buildExitPermitNotificationCandidateWhere(salida);
+
+  if (candidateWhere == null) {
+    return { userIds: [] as number[], tokens: [] as string[] };
+  }
+
+  const candidates = await prisma.usuarios.findMany({
+    where: candidateWhere,
+    include: userWithOfficeInclude,
+  });
+  const approverIds = candidates
+    .filter((approver) => canReviewExitPermit(approver, salida, applicant))
+    .map((approver) => approver.id);
+
+  if (approverIds.length === 0) {
+    return { userIds: [] as number[], tokens: [] as string[] };
+  }
+
+  const result = await pool.query<{ token: string }>(
+    `
+      SELECT DISTINCT "token"
+      FROM "notificacion_tokens"
+      WHERE "usuario_id" = ANY($1::int[])
+        AND "platform" IN ('ANDROID', 'IOS')
+    `,
+    [approverIds],
+  );
+
+  return {
+    userIds: approverIds,
+    tokens: result.rows.map((row) => row.token),
+  };
+}
+
+async function createReceivedNotifications(
+  userIds: number[],
+  input: {
+    type: string;
+    title: string;
+    body: string;
+    targetSection: string;
+    salidaId: number;
+  },
+) {
+  const uniqueUserIds = [...new Set(userIds.filter((userId) => userId > 0))];
+
+  if (uniqueUserIds.length === 0) {
+    return;
+  }
+
+  await pool.query(
+    `
+      INSERT INTO "notificaciones" (
+        "usuario_id",
+        "tipo",
+        "titulo",
+        "cuerpo",
+        "destino_seccion",
+        "salida_id"
+      )
+      SELECT
+        unnest($1::int[]),
+        $2,
+        $3,
+        $4,
+        $5,
+        $6
+    `,
+    [
+      uniqueUserIds,
+      input.type,
+      input.title,
+      input.body,
+      input.targetSection,
+      input.salidaId,
+    ],
+  );
+}
+
+function buildExitPermitNotificationCandidateWhere(salida: any) {
+  const applicant = salida.usuarios;
+
+  if (isChiefExitPermitApplicant(applicant)) {
+    const applicantOfficeCode = normalizeOptionalText(
+      resolveLinkedOfficeCode(applicant),
+    );
+    const directionCode = applicantOfficeCode?.split(".")[0] ?? null;
+
+    if (directionCode == null) {
+      return null;
+    }
+
+    return {
+      id: { not: salida.usuario_id },
+      activo: true,
+      rol: rol_usuario.OPERADOR,
+      AND: [
+        {
+          OR: [
+            {
+              cargo: {
+                contains: "director",
+                mode: "insensitive" as const,
+              },
+            },
+            {
+              cargo: {
+                contains: "direcctor",
+                mode: "insensitive" as const,
+              },
+            },
+          ],
+        },
+        {
+          OR: [
+            {
+              oficinas: {
+                cod: directionCode,
+              },
+            },
+            {
+              oficina_comision: {
+                cod: directionCode,
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  const applicantOfficeId = salida.solicitante_oficina_id;
+
+  if (applicantOfficeId == null) {
+    return null;
+  }
+
+  return {
+    id: { not: salida.usuario_id },
+    activo: true,
+    rol: rol_usuario.OPERADOR,
+    OR: [
+      { oficina_id: applicantOfficeId },
+      { oficina_comision_id: applicantOfficeId },
+    ],
+  };
+}
+
+function canReviewExitPermit(approver: any, salida: any, applicant: any) {
+  const approverOfficeId = resolveLinkedOfficeId(approver);
+  const applicantIsChief = isChiefExitPermitApplicant(applicant);
+  const applicantIsDirector = isDirectorJobTitle(applicant?.cargo);
+
+  if (!isExitPermitApproverUser(approver) || salida.usuario_id === approver.id) {
+    return false;
+  }
+
+  if (isDirectorExitPermitApprover(approver)) {
+    return applicantIsChief && isApplicantInDirectorScope(approver, applicant);
+  }
+
+  return (
+    approverOfficeId != null &&
+    salida.solicitante_oficina_id != null &&
+    approverOfficeId === salida.solicitante_oficina_id &&
+    !applicantIsChief &&
+    !applicantIsDirector
+  );
 }
 
 async function loadNotificationTargetTokens(input: SendNotificationInput) {
