@@ -108,6 +108,13 @@ const FIREBASE_SERVICE_ACCOUNT_JSON = normalizeOptionalEnvValue(
   process.env.FIREBASE_SERVICE_ACCOUNT_JSON,
 );
 
+// INICIO SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
+const FUNCIONARIO_CI_SERVICE_TOKEN_SHA256 = normalizeOptionalEnvValue(
+  process.env.FUNCIONARIO_CI_SERVICE_TOKEN_SHA256,
+);
+const FUNCIONARIO_CI_SERVICE_PATH = "/api/integraciones/funcionarios/verificar-ci";
+// FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
+
 if (!DATABASE_URL) {
   logFatal(
     "DATABASE_URL no esta definido en backend/.env.",
@@ -326,6 +333,25 @@ const server = http.createServer(async (request, response) => {
       });
       return;
     }
+
+    // INICIO SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
+    if (request.method === "POST" && url.pathname === FUNCIONARIO_CI_SERVICE_PATH) {
+      assertFuncionarioCiServiceToken(request);
+      const input = parseFuncionarioCiLookupInput(await readJsonBody(request));
+      const funcionario = await prisma.usuarios.findFirst({
+        where: { ci: input.ci },
+        select: { id: true },
+      });
+
+      sendPlainJson(response, 200, {
+        data: {
+          ci: input.ci,
+          esFuncionario: funcionario != null,
+        },
+      });
+      return;
+    }
+    // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
 
     if (request.method === "POST" && url.pathname === "/api/auth/register") {
       await assertAdminRequester(
@@ -2174,6 +2200,15 @@ const server = http.createServer(async (request, response) => {
         userId: authenticatedUserForLog?.id,
         userEmail: authenticatedUserForLog?.email,
       }));
+      if (requestPath === FUNCIONARIO_CI_SERVICE_PATH) {
+        sendPlainJson(response, error.statusCode, {
+          status: error.statusCode,
+          message: error.message,
+          error: error.message,
+        });
+        return;
+      }
+
       sendErrorJson(response, error.statusCode, error.message);
       return;
     }
@@ -2606,6 +2641,17 @@ function sendJson(
   response.end(JSON.stringify(payload, null, 2));
 }
 
+function sendPlainJson(
+  response: ServerResponse,
+  statusCode: number,
+  payload: unknown,
+) {
+  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Pragma", "no-cache");
+  response.writeHead(statusCode);
+  response.end(JSON.stringify(payload, null, 2));
+}
+
 function sendErrorJson(
   response: ServerResponse,
   statusCode: number,
@@ -2835,6 +2881,15 @@ function isPublicRoute(request: IncomingMessage, url: URL) {
     return true;
   }
 
+  // INICIO SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
+  if (
+    request.method === "POST" &&
+    url.pathname === FUNCIONARIO_CI_SERVICE_PATH
+  ) {
+    return true;
+  }
+  // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
+
   if (
     request.method === "POST" &&
     url.pathname === "/api/auth/login"
@@ -2865,6 +2920,42 @@ function readOptionalBearerToken(request: IncomingMessage) {
 
   return match[1].trim();
 }
+
+// INICIO SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
+function assertFuncionarioCiServiceToken(request: IncomingMessage) {
+  if (FUNCIONARIO_CI_SERVICE_TOKEN_SHA256 == null) {
+    throw new HttpError(
+      503,
+      "El servicio de verificacion de funcionarios no esta configurado.",
+    );
+  }
+
+  const token = readOptionalBearerToken(request);
+
+  if (token == null) {
+    throw new HttpError(401, "Debes enviar el token del servicio.");
+  }
+
+  if (!constantTimeEqualText(sha256Hex(token), FUNCIONARIO_CI_SERVICE_TOKEN_SHA256)) {
+    throw new HttpError(403, "Token del servicio invalido.");
+  }
+}
+
+function sha256Hex(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function constantTimeEqualText(left: string, right: string) {
+  const leftHash = Buffer.from(left);
+  const rightHash = Buffer.from(right);
+
+  if (leftHash.length !== rightHash.length) {
+    return false;
+  }
+
+  return timingSafeEqual(leftHash, rightHash);
+}
+// FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
 
 type AuthTokenPayload = {
   sub: number;
@@ -4234,6 +4325,16 @@ function parseLoginInput(payload: unknown): LoginInput {
     password: readRequiredString(body, "password", 6, 200),
   };
 }
+
+// INICIO SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
+function parseFuncionarioCiLookupInput(payload: unknown) {
+  const body = expectRecord(payload);
+
+  return {
+    ci: readRequiredString(body, "ci", 1, 30),
+  };
+}
+// FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
 
 function readOptionalLoginIdentifier(source: JsonRecord, key: string) {
   const rawValue = readOptionalString(source, key, 3, 150);
