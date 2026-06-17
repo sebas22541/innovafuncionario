@@ -2533,7 +2533,7 @@ function applyCors(request: IncomingMessage, response: ServerResponse) {
   response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   response.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization",
+    "Content-Type, Authorization, x-service",
   );
   response.setHeader("Access-Control-Max-Age", "86400");
   response.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -2930,7 +2930,7 @@ function assertFuncionarioCiServiceToken(request: IncomingMessage) {
     );
   }
 
-  const token = readOptionalBearerToken(request);
+  const token = readFuncionarioCiServiceHeaderToken(request);
 
   if (token == null) {
     throw new HttpError(401, "Debes enviar el token del servicio.");
@@ -2939,6 +2939,12 @@ function assertFuncionarioCiServiceToken(request: IncomingMessage) {
   if (!constantTimeEqualText(sha256Hex(token), FUNCIONARIO_CI_SERVICE_TOKEN_SHA256)) {
     throw new HttpError(403, "Token del servicio invalido.");
   }
+}
+
+function readFuncionarioCiServiceHeaderToken(request: IncomingMessage) {
+  const token = readSingleHeader(request.headers["x-service"]);
+
+  return normalizeOptionalText(token);
 }
 
 function sha256Hex(value: string) {
