@@ -6655,6 +6655,9 @@ async function registerLunchScan(qrValue: string, scannerUserId: number) {
   const lunchDateText = formatDateInAppTimeZone(scannedAt);
   const lunchDate = readDateOnlyString(lunchDateText, "fecha");
   const lunchTime = formatTimeInAppTimeZone(scannedAt);
+
+  assertLunchScanWithinAllowedTime(lunchTime);
+
   const qrSnapshot = {
     rawValue: scannedValue,
     lookupCode,
@@ -6734,6 +6737,38 @@ async function registerLunchScan(qrValue: string, scannerUserId: number) {
     mensaje: `${actionLabel} de almuerzo registrada para ${record.funcionario_nombre_completo}.`,
     registro: serializeLunchRecord(record),
   };
+}
+
+function assertLunchScanWithinAllowedTime(lunchTime: string) {
+  const minutes = parseTimeTextToMinutes(lunchTime);
+  const startMinutes = 12 * 60;
+  const endMinutes = 15 * 60;
+
+  if (minutes < startMinutes || minutes >= endMinutes) {
+    throw new HttpError(
+      403,
+      "No cumple el horario de almuerzo. El escaneo solo esta permitido de 12:00 a 15:00.",
+    );
+  }
+}
+
+function parseTimeTextToMinutes(value: string) {
+  const [hourText, minuteText] = value.split(":");
+  const hour = Number.parseInt(hourText ?? "", 10);
+  const minute = Number.parseInt(minuteText ?? "", 10);
+
+  if (
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    throw new HttpError(500, "No fue posible validar el horario de almuerzo.");
+  }
+
+  return hour * 60 + minute;
 }
 
 async function registerExitPermitScan(qrValue: string, scannerUserId: number) {

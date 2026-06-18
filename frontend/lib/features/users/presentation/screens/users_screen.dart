@@ -1155,6 +1155,14 @@ class _UserListCard extends StatelessWidget {
               photoSource: user.fotoUrl,
               borderRadius: BorderRadius.circular(18),
             );
+            final tappableAvatar = Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => _showUserPhotoViewer(context, user),
+                borderRadius: BorderRadius.circular(18),
+                child: avatar,
+              ),
+            );
             final details = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1263,14 +1271,14 @@ class _UserListCard extends StatelessWidget {
             if (isCompact) {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: [avatar, const SizedBox(height: 12), details],
+                children: [tappableAvatar, const SizedBox(height: 12), details],
               );
             }
 
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                avatar,
+                tappableAvatar,
                 const SizedBox(width: 16),
                 Expanded(child: details),
               ],
@@ -1279,6 +1287,128 @@ class _UserListCard extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+Future<void> _showUserPhotoViewer(BuildContext context, AppUser user) {
+  return showDialog<void>(
+    context: context,
+    barrierColor: Colors.black87,
+    builder: (context) => Dialog.fullscreen(
+      backgroundColor: Colors.black,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Center(
+              child: InteractiveViewer(
+                minScale: 0.8,
+                maxScale: 4,
+                child: _UserPhotoPreview(user: user),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 16,
+            right: 16,
+            child: SafeArea(
+              child: IconButton.filled(
+                onPressed: () => Navigator.of(context).pop(),
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.white.withValues(alpha: 0.16),
+                  foregroundColor: Colors.white,
+                ),
+                icon: const Icon(Icons.close_rounded),
+                tooltip: 'Cerrar',
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _UserPhotoPreview extends StatelessWidget {
+  const _UserPhotoPreview({required this.user});
+
+  final AppUser user;
+
+  @override
+  Widget build(BuildContext context) {
+    final photoSource = user.fotoUrl?.trim();
+    final photoUri = _parseHttpPhotoUri(photoSource);
+    final photoBytes = photoUri == null ? _decodePhotoBytes(photoSource) : null;
+
+    if (photoUri != null) {
+      return Image.network(
+        photoUri.toString(),
+        fit: BoxFit.contain,
+        errorBuilder: (_, _, _) => _FullScreenPhotoFallback(user: user),
+      );
+    }
+
+    if (photoBytes != null) {
+      return Image.memory(
+        photoBytes,
+        fit: BoxFit.contain,
+        errorBuilder: (_, _, _) => _FullScreenPhotoFallback(user: user),
+      );
+    }
+
+    return _FullScreenPhotoFallback(user: user);
+  }
+}
+
+class _FullScreenPhotoFallback extends StatelessWidget {
+  const _FullScreenPhotoFallback({required this.user});
+
+  final AppUser user;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 180,
+      height: 180,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: AppPalette.orangeSoft,
+        borderRadius: BorderRadius.circular(40),
+      ),
+      child: Text(
+        user.initial,
+        style: const TextStyle(
+          color: AppPalette.orange,
+          fontSize: 72,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+Uri? _parseHttpPhotoUri(String? photoSource) {
+  if (photoSource == null || photoSource.isEmpty) {
+    return null;
+  }
+
+  final uri = Uri.tryParse(photoSource);
+
+  if (uri == null) {
+    return null;
+  }
+
+  return uri.scheme == 'http' || uri.scheme == 'https' ? uri : null;
+}
+
+Uint8List? _decodePhotoBytes(String? photoSource) {
+  if (photoSource == null || photoSource.isEmpty) {
+    return null;
+  }
+
+  try {
+    return base64Decode(photoSource);
+  } catch (_) {
+    return null;
   }
 }
 
@@ -2228,7 +2358,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                           fontWeight: _selectedCargo == null
                               ? null
                               : FontWeight.w600,
-                            ),
+                        ),
                       ),
                       const SizedBox(height: 14),
                       _PickerField(
@@ -3156,7 +3286,9 @@ bool _userMatchesCargo(AppUser user, CargoOption cargo) {
   final expectedCode = cargo.code.trim().toUpperCase();
   final userCode = (user.cargoCodigo ?? '').trim().toUpperCase();
   final userSubcargoCode = (user.subcargoCodigo ?? '').trim().toUpperCase();
-  final userEffectiveCode = (user.cargoEfectivoCodigo ?? '').trim().toUpperCase();
+  final userEffectiveCode = (user.cargoEfectivoCodigo ?? '')
+      .trim()
+      .toUpperCase();
 
   if (expectedCode.isNotEmpty &&
       (userCode == expectedCode ||
