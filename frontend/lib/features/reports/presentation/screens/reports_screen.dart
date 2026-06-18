@@ -6,7 +6,11 @@ import 'package:printing/printing.dart';
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/models/app_user.dart';
+import '../../../../shared/widgets/app_alert.dart';
 import '../../../../shared/widgets/base64_avatar.dart';
+import '../../../auth/domain/entities/cargo_option.dart';
+import '../../../auth/domain/entities/office_option.dart';
 import '../../../events/domain/entities/event_record.dart';
 import '../../domain/entities/attendance_report.dart';
 
@@ -28,9 +32,22 @@ const Map<int, pw.TableColumnWidth> _eventAbsenteePdfColumnWidths = {
   5: pw.FixedColumnWidth(72),
   6: pw.FixedColumnWidth(55),
 };
+const Map<int, pw.TableColumnWidth> _personnelPdfColumnWidths = {
+  0: pw.FixedColumnWidth(45),
+  1: pw.FixedColumnWidth(58),
+  2: pw.FixedColumnWidth(126),
+  3: pw.FixedColumnWidth(58),
+  4: pw.FixedColumnWidth(92),
+  5: pw.FixedColumnWidth(116),
+  6: pw.FixedColumnWidth(116),
+  7: pw.FixedColumnWidth(50),
+};
+const _personnelTipoOptions = ['ITEM', 'EVENTUAL', 'CONSULTOR'];
 
 class ReportsScreen extends StatefulWidget {
-  const ReportsScreen({super.key});
+  const ReportsScreen({super.key, required this.currentUser});
+
+  final AppUser currentUser;
 
   @override
   State<ReportsScreen> createState() => _ReportsScreenState();
@@ -38,18 +55,30 @@ class ReportsScreen extends StatefulWidget {
 
 class _ReportsScreenState extends State<ReportsScreen> {
   final TextEditingController _ciController = TextEditingController();
+  final TextEditingController _personnelSearchController =
+      TextEditingController();
   final ScrollController _pageScrollController = ScrollController();
   List<EventRecord> _events = const [];
+  List<AppUser> _personnelUsers = const [];
+  List<OfficeOption> _personnelOffices = const [];
+  List<CargoOption> _personnelCargos = const [];
   AttendanceReport? _report;
   EventRecord? _eventReport;
   int? _selectedEventId;
+  _PersonnelStatusFilter _personnelStatus = _PersonnelStatusFilter.all;
+  Set<String> _personnelTipos = {};
+  Set<int> _personnelOfficeIds = {};
+  Set<String> _personnelCargoCodes = {};
   bool _isLoading = false;
   bool _isLoadingEvents = false;
+  bool _isLoadingPersonnel = false;
   bool _isLoadingEventReport = false;
   bool _isExporting = false;
   bool _isExportingEventPdf = false;
+  bool _isExportingPersonnelPdf = false;
   String? _errorMessage;
   String? _eventErrorMessage;
+  String? _personnelErrorMessage;
 
   @override
   void initState() {
@@ -60,6 +89,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   @override
   void dispose() {
     _ciController.dispose();
+    _personnelSearchController.dispose();
     _pageScrollController.dispose();
     super.dispose();
   }
@@ -262,6 +292,139 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return null;
   }
 
+  List<AppUser> get _filteredPersonnelUsers {
+    final normalizedQuery = _normalizeSearch(_personnelSearchController.text);
+    final selectedOfficeIds = _personnelOfficeIds;
+    final selectedCargoCodes = _personnelCargoCodes;
+    final selectedTipos = _personnelTipos;
+    final filteredUsers = _personnelUsers
+        .where((user) {
+          if (user.role == AppUserRole.lunch) {
+            return false;
+          }
+
+          switch (_personnelStatus) {
+            case _PersonnelStatusFilter.active:
+              if (!user.activo) {
+                return false;
+              }
+              break;
+            case _PersonnelStatusFilter.inactive:
+              if (user.activo) {
+                return false;
+              }
+              break;
+            case _PersonnelStatusFilter.all:
+              break;
+          }
+
+          if (selectedTipos.isNotEmpty &&
+              !selectedTipos.contains(user.tipoVinculo.trim().toUpperCase())) {
+            return false;
+          }
+
+          if (selectedOfficeIds.isNotEmpty &&
+              !_userMatchesAnyOffice(user, selectedOfficeIds)) {
+            return false;
+          }
+
+          if (selectedCargoCodes.isNotEmpty &&
+              !_userMatchesAnyCargo(user, selectedCargoCodes)) {
+            return false;
+          }
+
+          if (normalizedQuery.isNotEmpty) {
+            final searchable = _normalizeSearch(
+              [
+                user.ci,
+                user.fullName,
+                user.numeroItem,
+                user.tipoVinculo,
+                user.primaryOfficeName,
+                user.officeName,
+                user.commissionOfficeName,
+                user.effectiveCargo,
+                user.cargo,
+              ].whereType<String>().join(' '),
+            );
+
+            if (!searchable.contains(normalizedQuery)) {
+              return false;
+            }
+          }
+
+          return true;
+        })
+        .toList(growable: false);
+
+    return _sortPersonnelUsers(filteredUsers);
+  }
+
+  Future<void> _ensurePersonnelReferences() async {
+    if (_personnelUsers.isNotEmpty &&
+        _personnelOffices.isNotEmpty &&
+        _personnelCargos.isNotEmpty) {
+      return;
+    }
+
+    setState(() {
+      _isLoadingPersonnel = true;
+      _personnelErrorMessage = null;
+    });
+
+    try {
+      final results = await Future.wait([
+        dependencies.authApiService.fetchUsers(
+          requesterEmail: widget.currentUser.email,
+        ),
+        dependencies.authApiService.fetchOffices(),
+        dependencies.authApiService.fetchCargos(),
+      ]);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _personnelUsers = results[0] as List<AppUser>;
+        _personnelOffices = results[1] as List<OfficeOption>;
+        _personnelCargos = results[2] as List<CargoOption>;
+      });
+    } on BackendApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _personnelErrorMessage = error.message;
+      });
+      AppAlert.showError(context, error.message);
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      const message = 'No fue posible cargar los datos de personal.';
+      setState(() {
+        _personnelErrorMessage = message;
+      });
+      AppAlert.showError(context, message);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingPersonnel = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _refreshPersonnelReferences() async {
+    setState(() {
+      _personnelUsers = const [];
+    });
+    await _ensurePersonnelReferences();
+  }
+
   Future<void> _openEventPicker() async {
     if (_isLoadingEvents) {
       return;
@@ -288,6 +451,109 @@ class _ReportsScreenState extends State<ReportsScreen> {
     });
 
     await _loadEventReport();
+  }
+
+  Future<void> _pickPersonnelOffices() async {
+    await _ensurePersonnelReferences();
+
+    if (!mounted || _personnelOffices.isEmpty) {
+      return;
+    }
+
+    final result = await showModalBottomSheet<Set<int>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _SelectionSheet<OfficeOption, int>(
+        title: 'Seleccionar oficinas',
+        items: _personnelOffices,
+        selectedValues: _personnelOfficeIds,
+        valueOf: (office) => office.id,
+        titleOf: (office) => office.name,
+        subtitleOf: (office) => 'Cod. ${office.code} | Nivel ${office.level}',
+      ),
+    );
+
+    if (result == null) {
+      return;
+    }
+
+    setState(() {
+      _personnelOfficeIds = result;
+    });
+  }
+
+  Future<void> _pickPersonnelCargos() async {
+    await _ensurePersonnelReferences();
+
+    if (!mounted || _personnelCargos.isEmpty) {
+      return;
+    }
+
+    final result = await showModalBottomSheet<Set<String>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _SelectionSheet<CargoOption, String>(
+        title: 'Seleccionar cargos',
+        items: _personnelCargos,
+        selectedValues: _personnelCargoCodes,
+        valueOf: (cargo) => cargo.code,
+        titleOf: (cargo) => cargo.name,
+        subtitleOf: (cargo) => 'Cod. ${cargo.code}',
+      ),
+    );
+
+    if (result == null) {
+      return;
+    }
+
+    setState(() {
+      _personnelCargoCodes = result;
+    });
+  }
+
+  void _togglePersonnelTipo(String tipo) {
+    setState(() {
+      if (_personnelTipos.contains(tipo)) {
+        _personnelTipos.remove(tipo);
+      } else {
+        _personnelTipos.add(tipo);
+      }
+    });
+  }
+
+  void _clearPersonnelFilters() {
+    setState(() {
+      _personnelSearchController.clear();
+      _personnelStatus = _PersonnelStatusFilter.all;
+      _personnelTipos = {};
+      _personnelOfficeIds = {};
+      _personnelCargoCodes = {};
+    });
+  }
+
+  String _personnelFiltersSummary() {
+    final parts = <String>[_personnelStatus.label];
+
+    if (_personnelTipos.isNotEmpty) {
+      parts.add('Tipos: ${_personnelTipos.map(_tipoVinculoLabel).join(', ')}');
+    }
+
+    if (_personnelOfficeIds.isNotEmpty) {
+      parts.add('${_personnelOfficeIds.length} oficinas');
+    }
+
+    if (_personnelCargoCodes.isNotEmpty) {
+      parts.add('${_personnelCargoCodes.length} cargos');
+    }
+
+    final search = _personnelSearchController.text.trim();
+    if (search.isNotEmpty) {
+      parts.add('Busqueda: $search');
+    }
+
+    return parts.join(' | ');
   }
 
   Future<void> _exportPdf() async {
@@ -432,12 +698,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ),
             pw.SizedBox(height: 12),
             pw.TableHelper.fromTextArray(
-              headers: const [
-                'Total',
-                'Asistieron',
-                'Observados',
-                'Faltaron',
-              ],
+              headers: const ['Total', 'Asistieron', 'Observados', 'Faltaron'],
               data: [
                 [
                   '${event.totalTrackedPeople}',
@@ -578,11 +839,99 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
+  Future<void> _exportPersonnelPdf() async {
+    await _ensurePersonnelReferences();
+
+    if (!mounted) {
+      return;
+    }
+
+    final users = _filteredPersonnelUsers;
+
+    if (users.isEmpty) {
+      AppAlert.showWarning(
+        context,
+        'No hay usuarios para exportar con esos filtros.',
+      );
+      return;
+    }
+
+    setState(() {
+      _isExportingPersonnelPdf = true;
+    });
+
+    try {
+      final document = pw.Document();
+      final rows = _buildPersonnelPdfRows(users);
+      final filters = _personnelFiltersSummary();
+
+      document.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4.landscape,
+          build: (context) => [
+            pw.Text(
+              'Reporte de personal',
+              style: pw.TextStyle(
+                fontSize: _reportPdfFontSize + 2,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 8),
+            pw.Text(
+              'Total exportado: ${users.length}',
+              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
+            ),
+            pw.Text(
+              'Filtros: $filters',
+              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
+            ),
+            pw.SizedBox(height: 12),
+            pw.TableHelper.fromTextArray(
+              headers: const [
+                'Item',
+                'CI',
+                'Nombre',
+                'Tipo',
+                'Cargo',
+                'Unidad',
+                'Comision',
+                'Estado',
+              ],
+              columnWidths: _personnelPdfColumnWidths,
+              data: rows,
+              headerStyle: pw.TextStyle(
+                fontSize: _reportPdfFontSize,
+                fontWeight: pw.FontWeight.bold,
+              ),
+              cellStyle: const pw.TextStyle(fontSize: _reportPdfFontSize - 1),
+              cellAlignment: pw.Alignment.centerLeft,
+              headerDecoration: const pw.BoxDecoration(
+                color: PdfColor.fromInt(0xFFE7DFF6),
+              ),
+            ),
+          ],
+        ),
+      );
+
+      await Printing.layoutPdf(
+        onLayout: (_) async => document.save(),
+        name: 'reporte-personal-${_formatFilenameDate(DateTime.now())}.pdf',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExportingPersonnelPdf = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final report = _report;
     final eventReport = _eventReport;
     final selectedEvent = _findEventById(_selectedEventId);
+    final filteredPersonnelUsers = _filteredPersonnelUsers;
 
     return Scrollbar(
       controller: _pageScrollController,
@@ -593,6 +942,169 @@ class _ReportsScreenState extends State<ReportsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(22),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Exportacion de personal',
+                      style: Theme.of(context).textTheme.headlineMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Genera un PDF con item, CI, nombre, tipo, cargo, unidad, comision y estado. Incluye todos los roles excepto almuerzo.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 18),
+                    TextField(
+                      controller: _personnelSearchController,
+                      onTap: _ensurePersonnelReferences,
+                      onChanged: (_) => setState(() {}),
+                      decoration: InputDecoration(
+                        labelText: 'Buscar',
+                        hintText: 'CI, nombre, item, cargo u oficina',
+                        prefixIcon: const Icon(Icons.search_rounded),
+                        suffixIcon:
+                            _personnelSearchController.text.trim().isEmpty
+                            ? null
+                            : IconButton(
+                                onPressed: () {
+                                  setState(_personnelSearchController.clear);
+                                },
+                                icon: const Icon(Icons.close_rounded),
+                              ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        DropdownButton<_PersonnelStatusFilter>(
+                          value: _personnelStatus,
+                          borderRadius: BorderRadius.circular(16),
+                          underline: const SizedBox.shrink(),
+                          items: _PersonnelStatusFilter.values
+                              .map(
+                                (status) => DropdownMenuItem(
+                                  value: status,
+                                  child: Text(status.label),
+                                ),
+                              )
+                              .toList(growable: false),
+                          onChanged: (value) {
+                            if (value == null) {
+                              return;
+                            }
+
+                            setState(() {
+                              _personnelStatus = value;
+                            });
+                          },
+                        ),
+                        for (final tipo in _personnelTipoOptions)
+                          FilterChip(
+                            selected: _personnelTipos.contains(tipo),
+                            label: Text(_tipoVinculoLabel(tipo)),
+                            onSelected: (_) => _togglePersonnelTipo(tipo),
+                          ),
+                        OutlinedButton.icon(
+                          onPressed: _isLoadingPersonnel
+                              ? null
+                              : _pickPersonnelOffices,
+                          icon: const Icon(Icons.apartment_rounded),
+                          label: Text(
+                            _personnelOfficeIds.isEmpty
+                                ? 'Oficinas'
+                                : '${_personnelOfficeIds.length} oficinas',
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _isLoadingPersonnel
+                              ? null
+                              : _pickPersonnelCargos,
+                          icon: const Icon(Icons.work_outline_rounded),
+                          label: Text(
+                            _personnelCargoCodes.isEmpty
+                                ? 'Cargos'
+                                : '${_personnelCargoCodes.length} cargos',
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: _clearPersonnelFilters,
+                          icon: const Icon(Icons.filter_alt_off_outlined),
+                          label: const Text('Limpiar'),
+                        ),
+                      ],
+                    ),
+                    if (_isLoadingPersonnel) ...[
+                      const SizedBox(height: 12),
+                      const LinearProgressIndicator(),
+                    ],
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        _ReportChip(
+                          icon: Icons.people_alt_outlined,
+                          label: _personnelUsers.isEmpty
+                              ? 'Sin cargar'
+                              : '${filteredPersonnelUsers.length} usuarios',
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _isLoadingPersonnel
+                              ? null
+                              : _refreshPersonnelReferences,
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: const Text('Actualizar'),
+                        ),
+                        ElevatedButton.icon(
+                          onPressed:
+                              _isLoadingPersonnel || _isExportingPersonnelPdf
+                              ? null
+                              : _exportPersonnelPdf,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppPalette.orange,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 16,
+                            ),
+                          ),
+                          icon: _isExportingPersonnelPdf
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.picture_as_pdf_outlined),
+                          label: const Text('Exportar PDF'),
+                        ),
+                      ],
+                    ),
+                    if (_personnelErrorMessage != null) ...[
+                      const SizedBox(height: 14),
+                      Text(
+                        _personnelErrorMessage!,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFFD94841),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(22),
@@ -1666,6 +2178,171 @@ class _EventPickerSheetState extends State<_EventPickerSheet> {
   }
 }
 
+class _SelectionSheet<T, V> extends StatefulWidget {
+  const _SelectionSheet({
+    required this.title,
+    required this.items,
+    required this.selectedValues,
+    required this.valueOf,
+    required this.titleOf,
+    required this.subtitleOf,
+  });
+
+  final String title;
+  final List<T> items;
+  final Set<V> selectedValues;
+  final V Function(T item) valueOf;
+  final String Function(T item) titleOf;
+  final String Function(T item) subtitleOf;
+
+  @override
+  State<_SelectionSheet<T, V>> createState() => _SelectionSheetState<T, V>();
+}
+
+class _SelectionSheetState<T, V> extends State<_SelectionSheet<T, V>> {
+  final TextEditingController _searchController = TextEditingController();
+  late Set<V> _draftSelected;
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _draftSelected = {...widget.selectedValues};
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  List<T> get _filteredItems {
+    final normalizedQuery = _normalizeSearch(_query);
+
+    if (normalizedQuery.isEmpty) {
+      return widget.items;
+    }
+
+    return widget.items
+        .where((item) {
+          final searchable = _normalizeSearch(
+            '${widget.titleOf(item)} ${widget.subtitleOf(item)}',
+          );
+          return searchable.contains(normalizedQuery);
+        })
+        .toList(growable: false);
+  }
+
+  void _toggle(T item) {
+    final value = widget.valueOf(item);
+
+    setState(() {
+      if (_draftSelected.contains(value)) {
+        _draftSelected.remove(value);
+      } else {
+        _draftSelected.add(value);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final filteredItems = _filteredItems;
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(12, 18, 12, 12 + bottomInset),
+        child: Material(
+          color: AppPalette.surface,
+          borderRadius: BorderRadius.circular(28),
+          child: FractionallySizedBox(
+            heightFactor: 0.88,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          widget.title,
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _searchController,
+                    onChanged: (value) => setState(() => _query = value),
+                    decoration: const InputDecoration(
+                      labelText: 'Buscar',
+                      prefixIcon: Icon(Icons.search_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('${_draftSelected.length} seleccionados'),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: filteredItems.isEmpty
+                        ? const Center(child: Text('No hay resultados.'))
+                        : ListView.separated(
+                            itemCount: filteredItems.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(height: 8),
+                            itemBuilder: (context, index) {
+                              final item = filteredItems[index];
+                              final value = widget.valueOf(item);
+                              final selected = _draftSelected.contains(value);
+
+                              return CheckboxListTile(
+                                value: selected,
+                                onChanged: (_) => _toggle(item),
+                                title: Text(widget.titleOf(item)),
+                                subtitle: Text(widget.subtitleOf(item)),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                tileColor: selected
+                                    ? AppPalette.orangeSoft
+                                    : Colors.white,
+                              );
+                            },
+                          ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () => setState(_draftSelected.clear),
+                        child: const Text('Limpiar'),
+                      ),
+                      const Spacer(),
+                      ElevatedButton(
+                        onPressed: () =>
+                            Navigator.of(context).pop(_draftSelected),
+                        child: const Text('Aplicar'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ReportDetailsDialog extends StatelessWidget {
   const _ReportDetailsDialog({required this.report});
 
@@ -1791,6 +2468,16 @@ class _ReportInfoLine extends StatelessWidget {
   }
 }
 
+enum _PersonnelStatusFilter {
+  all('Todos'),
+  active('Activos'),
+  inactive('Inactivos');
+
+  const _PersonnelStatusFilter(this.label);
+
+  final String label;
+}
+
 String _formatDateTime(DateTime dateTime) {
   return '${_formatDate(dateTime)} ${_formatTime(dateTime)}';
 }
@@ -1864,6 +2551,109 @@ List<List<String>> _buildEventAbsenteePdfRows(
       .toList(growable: false);
 }
 
+List<List<String>> _buildPersonnelPdfRows(List<AppUser> users) {
+  return users
+      .map(
+        (user) => [
+          _cleanPdfValue(user.numeroItem, fallback: '-'),
+          _cleanPdfValue(user.ci, fallback: 'Sin CI'),
+          _cleanPdfValue(user.fullName, fallback: 'Sin nombre'),
+          _tipoVinculoLabel(user.tipoVinculo),
+          _cleanPdfValue(user.effectiveCargo, fallback: 'Sin cargo'),
+          _cleanPdfValue(
+            user.primaryOfficeName ?? user.officeName ?? user.unidad,
+            fallback: 'Sin unidad',
+          ),
+          _cleanPdfValue(
+            user.commissionOfficeName,
+            fallback: user.hasCommission ? 'Sin dato' : '-',
+          ),
+          user.estadoLabel,
+        ],
+      )
+      .toList(growable: false);
+}
+
+List<AppUser> _sortPersonnelUsers(List<AppUser> users) {
+  final sortedUsers = [...users];
+
+  sortedUsers.sort((left, right) {
+    final typeComparison = _eventRosterTypeOrder(
+      left.tipoVinculo,
+    ).compareTo(_eventRosterTypeOrder(right.tipoVinculo));
+
+    if (typeComparison != 0) {
+      return typeComparison;
+    }
+
+    final leftItem = int.tryParse(left.numeroItem.trim());
+    final rightItem = int.tryParse(right.numeroItem.trim());
+
+    if (leftItem != null && rightItem != null && leftItem != rightItem) {
+      return leftItem.compareTo(rightItem);
+    }
+
+    if (leftItem != null && rightItem == null) {
+      return -1;
+    }
+
+    if (leftItem == null && rightItem != null) {
+      return 1;
+    }
+
+    return left.fullName.toLowerCase().compareTo(right.fullName.toLowerCase());
+  });
+
+  return sortedUsers;
+}
+
+bool _userMatchesAnyOffice(AppUser user, Set<int> officeIds) {
+  final userOfficeIds = <int?>{
+    user.officeId,
+    user.primaryOfficeId,
+    user.commissionOfficeId,
+  };
+
+  return userOfficeIds.any((id) => id != null && officeIds.contains(id));
+}
+
+bool _userMatchesAnyCargo(AppUser user, Set<String> cargoCodes) {
+  final userCargoCodes = <String?>{
+    user.effectiveCargoCode,
+    user.subcargoCodigo,
+    user.cargoCodigo,
+  };
+
+  return userCargoCodes.any((code) {
+    final normalizedCode = code?.trim();
+    return normalizedCode != null &&
+        normalizedCode.isNotEmpty &&
+        cargoCodes.contains(normalizedCode);
+  });
+}
+
+String _cleanPdfValue(String? value, {required String fallback}) {
+  final cleaned = value?.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  if (cleaned == null || cleaned.isEmpty) {
+    return fallback;
+  }
+
+  return cleaned;
+}
+
+String _normalizeSearch(String value) {
+  return value
+      .toLowerCase()
+      .replaceAll('á', 'a')
+      .replaceAll('é', 'e')
+      .replaceAll('í', 'i')
+      .replaceAll('ó', 'o')
+      .replaceAll('ú', 'u')
+      .replaceAll('ñ', 'n')
+      .trim();
+}
+
 List<EventRosterEntry> _sortEventRosterEntries(List<EventRosterEntry> entries) {
   final sortedEntries = [...entries];
 
@@ -1932,6 +2722,16 @@ String _buildEventReportFilename(EventRecord event) {
 
   final safeName = normalizedName.isEmpty ? 'evento' : normalizedName;
   return 'reporte-evento-${event.id}-$safeName.pdf';
+}
+
+String _formatFilenameDate(DateTime value) {
+  final year = value.year.toString();
+  final month = value.month.toString().padLeft(2, '0');
+  final day = value.day.toString().padLeft(2, '0');
+  final hour = value.hour.toString().padLeft(2, '0');
+  final minute = value.minute.toString().padLeft(2, '0');
+
+  return '$year$month$day-$hour$minute';
 }
 
 String _eventSearchLabel(EventRecord event) {

@@ -749,6 +749,14 @@ class _LunchScanResultCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
+            if (mode == _ScannerMode.lunch) ...[
+              _ResultBanner(
+                icon: Icons.schedule_rounded,
+                color: AppPalette.orange,
+                text: 'Horario permitido para almuerzo: 12:00 a 15:00.',
+              ),
+              const SizedBox(height: 12),
+            ],
             if (errorMessage != null)
               _ResultBanner(
                 icon: Icons.error_outline_rounded,

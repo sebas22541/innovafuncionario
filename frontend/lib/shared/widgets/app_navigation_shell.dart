@@ -275,7 +275,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
         );
       case AppSection.reports:
         return _currentUser.isAdmin
-            ? const ReportsScreen()
+            ? ReportsScreen(currentUser: _currentUser)
             : UserEventsScreen(
                 currentUser: _currentUser,
                 viewMode: UserEventsViewMode.attended,
