@@ -95,7 +95,8 @@ model oficinas {
 model cargos {
   codigo                String                  @id @db.VarChar(50)
   cargo                 String                  @db.VarChar(150)
-  usuarios              usuarios[]
+  usuarios              usuarios[]              @relation("UsuarioCargo")
+  usuarios_subcargo     usuarios[]              @relation("UsuarioSubcargo")
   evento_cargos         evento_cargos[]
   evento_oficina_cargos evento_oficina_cargos[]
 
@@ -207,6 +208,8 @@ model usuarios {
   oficina_comision_id  Int?
   cargo_codigo         String?                @db.VarChar(50)
   cargo                String?                @db.VarChar(120)
+  subcargo_codigo      String?                @db.VarChar(50)
+  subcargo             String?                @db.VarChar(120)
   lugar                String?                @db.VarChar(120)
   numero_item          String?                @db.VarChar(50)
   foto_url             String?                @db.Text
@@ -219,7 +222,8 @@ model usuarios {
   updated_at           DateTime               @default(now()) @db.Timestamptz(6)
   asistencias          asistencias[]
   asistencia_controles asistencia_controles[]
-  cargos               cargos?                @relation(fields: [cargo_codigo], references: [codigo], onUpdate: NoAction)
+  cargos               cargos?                @relation("UsuarioCargo", fields: [cargo_codigo], references: [codigo], onUpdate: NoAction)
+  subcargo_ref         cargos?                @relation("UsuarioSubcargo", fields: [subcargo_codigo], references: [codigo], onUpdate: NoAction)
   eventos              eventos[]
   oficinas             oficinas?              @relation("UsuarioOficina", fields: [oficina_id], references: [id], onUpdate: NoAction)
   oficina_comision     oficinas?              @relation("UsuarioOficinaComision", fields: [oficina_comision_id], references: [id], onUpdate: NoAction)
@@ -234,6 +238,7 @@ model usuarios {
   notificacion_tokens   notificacion_tokens[]
 
   @@index([cargo_codigo], map: "idx_usuarios_cargo_codigo")
+  @@index([subcargo_codigo], map: "idx_usuarios_subcargo_codigo")
   @@index([oficina_comision_id], map: "idx_usuarios_oficina_comision_id")
   @@index([oficina_id], map: "idx_usuarios_oficina_id")
 }

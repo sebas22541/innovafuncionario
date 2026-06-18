@@ -50,6 +50,10 @@ class AppUser {
     required this.numeroItem,
     required this.activo,
     this.cargoCodigo,
+    this.subcargoCodigo,
+    this.subcargo = '',
+    this.cargoEfectivoCodigo,
+    this.cargoEfectivo = '',
     this.fotoUrl,
     this.officeId,
     this.officeName,
@@ -82,6 +86,10 @@ class AppUser {
   final String numeroItem;
   final bool activo;
   final String? cargoCodigo;
+  final String? subcargoCodigo;
+  final String subcargo;
+  final String? cargoEfectivoCodigo;
+  final String cargoEfectivo;
   final String? fotoUrl;
   final int? officeId;
   final String? officeName;
@@ -115,6 +123,10 @@ class AppUser {
       numeroItem: numeroItem,
       activo: activo,
       cargoCodigo: cargoCodigo,
+      subcargoCodigo: subcargoCodigo,
+      subcargo: subcargo,
+      cargoEfectivoCodigo: cargoEfectivoCodigo,
+      cargoEfectivo: cargoEfectivo,
       fotoUrl: fotoUrl,
       officeId: officeId,
       officeName: officeName,
@@ -153,6 +165,10 @@ class AppUser {
       numeroItem: _readString(source['numeroItem'], 'numeroItem'),
       activo: source['activo'] as bool? ?? true,
       cargoCodigo: source['cargoCodigo'] as String?,
+      subcargoCodigo: source['subcargoCodigo'] as String?,
+      subcargo: source['subcargo'] as String? ?? '',
+      cargoEfectivoCodigo: source['cargoEfectivoCodigo'] as String?,
+      cargoEfectivo: source['cargoEfectivo'] as String? ?? '',
       fotoUrl: (source['fotoUrl'] ?? source['fotoBase64']) as String?,
       officeId: source['oficinaId'] as int?,
       officeName: source['oficinaNombre'] as String?,
@@ -186,6 +202,10 @@ class AppUser {
       'cargo': cargo,
       'lugar': lugar,
       'cargoCodigo': cargoCodigo,
+      'subcargoCodigo': subcargoCodigo,
+      'subcargo': subcargo,
+      'cargoEfectivoCodigo': cargoEfectivoCodigo,
+      'cargoEfectivo': cargoEfectivo,
       'numeroItem': numeroItem,
       'activo': activo,
       'fotoUrl': fotoUrl,

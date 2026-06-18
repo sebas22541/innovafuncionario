@@ -167,6 +167,7 @@ class _UsersScreenState extends State<UsersScreen> {
     final cacheKey =
         '${user.id ?? 'new'}|${user.email}|${user.ci}|${user.celular}|${user.fullName}|'
         '${user.cargoCodigo}|${user.cargo}|'
+        '${user.subcargoCodigo ?? ''}|${user.subcargo}|${user.cargoEfectivo}|'
         '${user.officeCode}|${user.officeName}|${user.primaryOfficeName}|'
         '${user.commissionOfficeName}|${user.unidad}|${user.lugar}';
     final cachedText = _userSearchIndex[cacheKey];
@@ -180,6 +181,7 @@ class _UsersScreenState extends State<UsersScreen> {
       '${user.primerApellido} ${user.segundoApellido} '
       '${user.tercerApellido} ${user.email} '
       '${user.cargoCodigo ?? ''} ${user.cargo} '
+      '${user.subcargoCodigo ?? ''} ${user.subcargo} ${user.cargoEfectivo} '
       '${user.officeCode} ${user.officeName} '
       '${user.primaryOfficeName} ${user.commissionOfficeName} '
       '${user.unidad} ${user.lugar}',
@@ -276,8 +278,10 @@ class _UsersScreenState extends State<UsersScreen> {
         oficinaId: draft.office.id,
         oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
+        subcargoCodigo: draft.subcargo?.code,
         unidad: draft.office.name,
         cargo: draft.cargo.name,
+        subcargo: draft.subcargo?.name ?? '',
         lugar: draft.lugar,
         numeroItem: draft.numeroItem,
         activo: draft.activo,
@@ -428,8 +432,10 @@ class _UsersScreenState extends State<UsersScreen> {
         oficinaId: draft.office.id,
         oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
+        subcargoCodigo: draft.subcargo?.code,
         unidad: draft.office.name,
         cargo: draft.cargo.name,
+        subcargo: draft.subcargo?.name ?? '',
         lugar: draft.lugar,
         numeroItem: draft.numeroItem,
         activo: draft.activo,
@@ -1233,6 +1239,14 @@ class _UserListCard extends StatelessWidget {
                         value: user.primaryOfficeName!,
                       ),
                     _UserMeta(label: 'Cargo', value: user.cargo),
+                    if (user.subcargo.trim().isNotEmpty)
+                      _UserMeta(label: 'Subcargo', value: user.subcargo),
+                    if (user.cargoEfectivo.trim().isNotEmpty &&
+                        user.cargoEfectivo != user.cargo)
+                      _UserMeta(
+                        label: 'Cargo efectivo',
+                        value: user.cargoEfectivo,
+                      ),
                     if (user.lugar.trim().isNotEmpty)
                       _UserMeta(label: 'Lugar', value: user.lugar),
                     _UserMeta(
@@ -1634,6 +1648,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   final TextEditingController _commissionOfficeController =
       TextEditingController();
   final TextEditingController _cargoController = TextEditingController();
+  final TextEditingController _subcargoController = TextEditingController();
   final TextEditingController _lugarController = TextEditingController();
   final TextEditingController _numeroItemController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
@@ -1647,6 +1662,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   OfficeOption? _selectedCommissionOffice;
   bool _hasCommission = false;
   CargoOption? _selectedCargo;
+  CargoOption? _selectedSubcargo;
   Uint8List? _photoBytes;
   bool _showPhotoError = false;
   bool _hidePassword = true;
@@ -1699,6 +1715,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
         _selectedCommissionOffice?.name ?? user.commissionOfficeName ?? '';
     _selectedCargo = _findInitialCargo(user);
     _cargoController.text = _selectedCargo?.name ?? user.cargo;
+    _selectedSubcargo = _findInitialSubcargo(user);
+    _subcargoController.text = _selectedSubcargo?.name ?? user.subcargo;
     _lugarController.text = user.lugar;
   }
 
@@ -1713,6 +1731,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _unidadController.dispose();
     _commissionOfficeController.dispose();
     _cargoController.dispose();
+    _subcargoController.dispose();
     _lugarController.dispose();
     _numeroItemController.dispose();
     _passwordController.dispose();
@@ -1760,9 +1779,37 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
       _selectedCargo = cargo;
       _cargoController.text = cargo.name;
 
-      if (!_isPorteroCargo(cargo)) {
+      if (!_requiresLugarForCargo(cargo)) {
         _lugarController.clear();
       }
+    });
+  }
+
+  Future<void> _pickSubcargo() async {
+    final cargo = await showModalBottomSheet<CargoOption>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _CargoSelectionSheet(
+        cargos: widget.cargos,
+        selectedCargo: _selectedSubcargo,
+      ),
+    );
+
+    if (!mounted || cargo == null) {
+      return;
+    }
+
+    setState(() {
+      _selectedSubcargo = cargo;
+      _subcargoController.text = cargo.name;
+    });
+  }
+
+  void _clearSubcargo() {
+    setState(() {
+      _selectedSubcargo = null;
+      _subcargoController.clear();
     });
   }
 
@@ -1814,6 +1861,25 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   CargoOption? _findInitialCargo(AppUser user) {
     for (final cargo in widget.cargos) {
       if (cargo.name.toLowerCase() == user.cargo.toLowerCase()) {
+        return cargo;
+      }
+    }
+
+    return null;
+  }
+
+  CargoOption? _findInitialSubcargo(AppUser user) {
+    final subcargoCode = user.subcargoCodigo?.trim().toUpperCase();
+
+    for (final cargo in widget.cargos) {
+      if (subcargoCode != null &&
+          subcargoCode.isNotEmpty &&
+          cargo.code.trim().toUpperCase() == subcargoCode) {
+        return cargo;
+      }
+
+      if (user.subcargo.trim().isNotEmpty &&
+          cargo.name.toLowerCase() == user.subcargo.toLowerCase()) {
         return cargo;
       }
     }
@@ -1879,7 +1945,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
         office: _selectedOffice!,
         commissionOffice: _hasCommission ? _selectedCommissionOffice : null,
         cargo: _selectedCargo!,
-        lugar: _isPorteroCargo(_selectedCargo)
+        subcargo: _selectedSubcargo,
+        lugar: _requiresLugarForCargo(_selectedCargo)
             ? _lugarController.text.trim()
             : '',
         numeroItem: _numeroItemController.text.trim(),
@@ -2161,9 +2228,39 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                           fontWeight: _selectedCargo == null
                               ? null
                               : FontWeight.w600,
+                            ),
+                      ),
+                      const SizedBox(height: 14),
+                      _PickerField(
+                        controller: _subcargoController,
+                        label: 'Subcargo / funcion actual',
+                        hint: 'Opcional: selecciona el cargo que cumple ahora',
+                        icon: Icons.assignment_ind_outlined,
+                        onTap: _pickSubcargo,
+                        suffixIcon: _selectedSubcargo == null
+                            ? null
+                            : IconButton(
+                                tooltip: 'Quitar subcargo',
+                                onPressed: _clearSubcargo,
+                                icon: const Icon(Icons.close_rounded),
+                              ),
+                        validator: (_) => null,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _selectedSubcargo == null
+                            ? 'Si se asigna, este cargo contara para permisos y solicitudes.'
+                            : 'Funcion actual: ${_selectedSubcargo!.name}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: _selectedSubcargo == null
+                              ? null
+                              : AppPalette.orange,
+                          fontWeight: _selectedSubcargo == null
+                              ? null
+                              : FontWeight.w600,
                         ),
                       ),
-                      if (_isPorteroCargo(_selectedCargo)) ...[
+                      if (_requiresLugarForCargo(_selectedCargo)) ...[
                         const SizedBox(height: 14),
                         _FormField(
                           controller: _lugarController,
@@ -2350,6 +2447,7 @@ class _ManagedUserDraft {
     required this.office,
     required this.commissionOffice,
     required this.cargo,
+    required this.subcargo,
     required this.lugar,
     required this.numeroItem,
     required this.email,
@@ -2369,6 +2467,7 @@ class _ManagedUserDraft {
   final OfficeOption office;
   final OfficeOption? commissionOffice;
   final CargoOption cargo;
+  final CargoOption? subcargo;
   final String lugar;
   final String numeroItem;
   final String email;
@@ -2512,6 +2611,7 @@ class _PickerField extends StatelessWidget {
     required this.onTap,
     required this.validator,
     this.isRequired = false,
+    this.suffixIcon,
   });
 
   final TextEditingController controller;
@@ -2521,6 +2621,7 @@ class _PickerField extends StatelessWidget {
   final Future<void> Function() onTap;
   final String? Function(String?) validator;
   final bool isRequired;
+  final Widget? suffixIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -2573,7 +2674,7 @@ class _PickerField extends StatelessWidget {
                                   ?.copyWith(color: AppPalette.muted),
                             ),
                     ),
-                    Icon(icon, color: AppPalette.orange),
+                    suffixIcon ?? Icon(icon, color: AppPalette.orange),
                   ],
                 ),
               ),
@@ -3054,27 +3155,39 @@ bool _userBelongsToOffice(AppUser user, OfficeOption office) {
 bool _userMatchesCargo(AppUser user, CargoOption cargo) {
   final expectedCode = cargo.code.trim().toUpperCase();
   final userCode = (user.cargoCodigo ?? '').trim().toUpperCase();
+  final userSubcargoCode = (user.subcargoCodigo ?? '').trim().toUpperCase();
+  final userEffectiveCode = (user.cargoEfectivoCodigo ?? '').trim().toUpperCase();
 
-  if (expectedCode.isNotEmpty && userCode == expectedCode) {
+  if (expectedCode.isNotEmpty &&
+      (userCode == expectedCode ||
+          userSubcargoCode == expectedCode ||
+          userEffectiveCode == expectedCode)) {
     return true;
   }
 
   final expectedName = _normalizeSearchText(cargo.name);
   final userCargo = _normalizeSearchText(user.cargo);
+  final userSubcargo = _normalizeSearchText(user.subcargo);
+  final userEffectiveCargo = _normalizeSearchText(user.cargoEfectivo);
 
-  return expectedName.isNotEmpty && userCargo == expectedName;
+  return expectedName.isNotEmpty &&
+      (userCargo == expectedName ||
+          userSubcargo == expectedName ||
+          userEffectiveCargo == expectedName);
 }
 
-bool _isPorteroCargo(CargoOption? cargo) {
+bool _requiresLugarForCargo(CargoOption? cargo) {
   if (cargo == null) {
     return false;
   }
 
   const porteroCargoCodes = {'CA116', 'CA082', 'CA096', 'CA087'};
   final normalizedCode = cargo.code.trim().toUpperCase();
+  final normalizedName = _normalizeSearchText(cargo.name);
 
   return porteroCargoCodes.contains(normalizedCode) ||
-      _normalizeSearchText(cargo.name).startsWith('portero');
+      normalizedName.startsWith('portero') ||
+      normalizedName.startsWith('guardia municipal');
 }
 
 bool _officeTextLooksSimilar(String value, String query) {

@@ -401,11 +401,24 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(400, "El cargo seleccionado no existe.");
       }
 
+      const selectedSubcargo =
+        input.subcargoCodigo == null
+          ? null
+          : await prisma.cargos.findUnique({
+              where: { codigo: input.subcargoCodigo },
+            });
+
+      if (input.subcargoCodigo != null && !selectedSubcargo) {
+        throw new HttpError(400, "El subcargo seleccionado no existe.");
+      }
+
       const resolvedUnit = selectedOffice?.oficina ?? input.unidad ?? "";
       const resolvedOfficeId = selectedOffice?.id ?? null;
       const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
       const resolvedCargo = selectedCargo?.cargo ?? input.cargo;
       const resolvedCargoCode = selectedCargo?.codigo ?? null;
+      const resolvedSubcargo = selectedSubcargo?.cargo ?? input.subcargo;
+      const resolvedSubcargoCode = selectedSubcargo?.codigo ?? null;
       const resolvedLugar = resolvePorteroLugar(
         resolvedCargo,
         resolvedCargoCode,
@@ -446,6 +459,8 @@ const server = http.createServer(async (request, response) => {
           oficina_comision_id: resolvedCommissionOfficeId,
           cargo_codigo: resolvedCargoCode,
           cargo: resolvedCargo,
+          subcargo_codigo: resolvedSubcargoCode,
+          subcargo: resolvedSubcargo,
           lugar: resolvedLugar,
           numero_item: input.numeroItem,
           foto_url: storedProfilePhoto,
@@ -781,7 +796,7 @@ const server = http.createServer(async (request, response) => {
         );
       }
 
-      if (isDirectorJobTitle(user.cargo)) {
+      if (isDirectorExitPermitApprover(user)) {
         throw new HttpError(
           403,
           "Los directores solo pueden revisar solicitudes de salida.",
@@ -797,7 +812,7 @@ const server = http.createServer(async (request, response) => {
           fecha_permiso: input.fechaPermiso,
           solicitante_nombre_completo: buildUserDisplayName(user),
           solicitante_numero_item: normalizeOptionalText(user.numero_item),
-          solicitante_cargo: normalizeOptionalText(user.cargo),
+          solicitante_cargo: resolveEffectiveJobTitleName(user),
           solicitante_oficina_id: resolveLinkedOfficeId(user),
           solicitante_oficina: resolveLinkedOfficeName(user),
         },
@@ -1143,11 +1158,24 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(400, "El cargo seleccionado no existe.");
       }
 
+      const selectedSubcargo =
+        input.subcargoCodigo == null
+          ? null
+          : await prisma.cargos.findUnique({
+              where: { codigo: input.subcargoCodigo },
+            });
+
+      if (input.subcargoCodigo != null && !selectedSubcargo) {
+        throw new HttpError(400, "El subcargo seleccionado no existe.");
+      }
+
       const resolvedUnit = selectedOffice?.oficina ?? input.unidad ?? "";
       const resolvedOfficeId = selectedOffice?.id ?? null;
       const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
       const resolvedCargo = selectedCargo?.cargo ?? input.cargo;
       const resolvedCargoCode = selectedCargo?.codigo ?? null;
+      const resolvedSubcargo = selectedSubcargo?.cargo ?? input.subcargo;
+      const resolvedSubcargoCode = selectedSubcargo?.codigo ?? null;
       const resolvedLugar = resolvePorteroLugar(
         resolvedCargo,
         resolvedCargoCode,
@@ -1195,6 +1223,8 @@ const server = http.createServer(async (request, response) => {
           oficina_comision_id: resolvedCommissionOfficeId,
           cargo_codigo: resolvedCargoCode,
           cargo: resolvedCargo,
+          subcargo_codigo: resolvedSubcargoCode,
+          subcargo: resolvedSubcargo,
           lugar: resolvedLugar,
           numero_item: input.numeroItem,
           foto_url: storedProfilePhoto,
@@ -1277,6 +1307,17 @@ const server = http.createServer(async (request, response) => {
             throw new HttpError(400, "El cargo seleccionado no existe.");
           }
 
+          const selectedSubcargo =
+            managedInput.subcargoCodigo == null
+              ? null
+              : await tx.cargos.findUnique({
+                  where: { codigo: managedInput.subcargoCodigo },
+                });
+
+          if (managedInput.subcargoCodigo != null && !selectedSubcargo) {
+            throw new HttpError(400, "El subcargo seleccionado no existe.");
+          }
+
           const duplicatedUser = await findUserByLoginOrCi(tx, {
             login: managedInput.email,
             ci: managedInput.ci,
@@ -1297,6 +1338,8 @@ const server = http.createServer(async (request, response) => {
           const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
           const resolvedCargo = selectedCargo?.cargo ?? managedInput.cargo;
           const resolvedCargoCode = selectedCargo?.codigo ?? null;
+          const resolvedSubcargo = selectedSubcargo?.cargo ?? managedInput.subcargo;
+          const resolvedSubcargoCode = selectedSubcargo?.codigo ?? null;
           const resolvedLugar = resolvePorteroLugar(
             resolvedCargo,
             resolvedCargoCode,
@@ -1330,6 +1373,8 @@ const server = http.createServer(async (request, response) => {
               oficina_comision_id: resolvedCommissionOfficeId,
               cargo_codigo: resolvedCargoCode,
               cargo: resolvedCargo,
+              subcargo_codigo: resolvedSubcargoCode,
+              subcargo: resolvedSubcargo,
               lugar: resolvedLugar,
               numero_item: managedInput.numeroItem,
               foto_url: nextPhotoSource,
@@ -2450,6 +2495,8 @@ type RegisterUserInput = {
   oficinaComisionId: number | null;
   cargoCodigo: string | null;
   cargo: string;
+  subcargoCodigo: string | null;
+  subcargo: string | null;
   lugar: string | null;
   numeroItem: string | null;
   activo: boolean;
@@ -3123,6 +3170,12 @@ async function ensureRuntimeSchema() {
 
   await pool.query(`
     ALTER TABLE "usuarios"
+      ADD COLUMN IF NOT EXISTS "subcargo_codigo" VARCHAR(50),
+      ADD COLUMN IF NOT EXISTS "subcargo" VARCHAR(120)
+  `);
+
+  await pool.query(`
+    ALTER TABLE "usuarios"
       ADD COLUMN IF NOT EXISTS "session_version" INTEGER NOT NULL DEFAULT 0
   `);
 
@@ -3145,12 +3198,29 @@ async function ensureRuntimeSchema() {
           ON DELETE SET NULL
           ON UPDATE NO ACTION;
       END IF;
+
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'usuarios_subcargo_codigo_fkey'
+      ) THEN
+        ALTER TABLE "usuarios"
+          ADD CONSTRAINT "usuarios_subcargo_codigo_fkey"
+          FOREIGN KEY ("subcargo_codigo")
+          REFERENCES "cargos" ("codigo")
+          ON UPDATE NO ACTION;
+      END IF;
     END $$
   `);
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_usuarios_oficina_comision_id"
       ON "usuarios" ("oficina_comision_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_usuarios_subcargo_codigo"
+      ON "usuarios" ("subcargo_codigo")
   `);
 
   await pool.query(`
@@ -4120,16 +4190,23 @@ function normalizeLooseMatchText(value: unknown) {
     .trim();
 }
 
-function isPorteroCargo(
+function requiresLugarForCargo(
   cargo: string | null | undefined,
   cargoCodigo: string | null | undefined,
 ) {
-  const porteroCargoCodes = new Set(["CA116", "CA082", "CA096", "CA087"]);
+  const locationRequiredCargoCodes = new Set([
+    "CA116",
+    "CA082",
+    "CA096",
+    "CA087",
+  ]);
   const normalizedCode = normalizeOptionalText(cargoCodigo)?.toUpperCase();
+  const normalizedCargo = normalizeLooseMatchText(cargo);
 
   return (
-    (normalizedCode != null && porteroCargoCodes.has(normalizedCode)) ||
-    normalizeLooseMatchText(cargo)?.startsWith("PORTERO") === true
+    (normalizedCode != null && locationRequiredCargoCodes.has(normalizedCode)) ||
+    normalizedCargo?.startsWith("PORTERO") === true ||
+    normalizedCargo?.startsWith("GUARDIA MUNICIPAL") === true
   );
 }
 
@@ -4138,14 +4215,14 @@ function resolvePorteroLugar(
   cargoCodigo: string | null | undefined,
   lugar: string | null,
 ) {
-  if (!isPorteroCargo(cargo, cargoCodigo)) {
+  if (!requiresLugarForCargo(cargo, cargoCodigo)) {
     return null;
   }
 
   const normalizedLugar = normalizeOptionalText(lugar);
 
   if (normalizedLugar == null) {
-    throw new HttpError(400, "Debes ingresar el lugar del portero.");
+    throw new HttpError(400, "Debes ingresar el lugar del cargo seleccionado.");
   }
 
   return normalizedLugar;
@@ -4673,6 +4750,8 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
   const unidad = readOptionalString(body, "unidad", 0, 120);
   const cargoCodigo = readOptionalString(body, "cargoCodigo", 1, 50);
   const cargo = readOptionalString(body, "cargo", 2, 120);
+  const subcargoCodigo = readOptionalString(body, "subcargoCodigo", 1, 50);
+  const subcargo = readOptionalString(body, "subcargo", 0, 120);
   const lugar = readOptionalString(body, "lugar", 0, 120);
   const ci = readRequiredString(body, "ci", 3, 30);
   const primerApellido = readRequiredString(body, "primerApellido", 2, 80);
@@ -4706,6 +4785,8 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
     oficinaComisionId,
     cargoCodigo,
     cargo: cargo ?? "",
+    subcargoCodigo,
+    subcargo,
     lugar,
     numeroItem:
       tipoVinculo === "ITEM"
@@ -4756,6 +4837,8 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
   const unidad = readOptionalString(body, "unidad", 0, 120);
   const cargoCodigo = readOptionalString(body, "cargoCodigo", 1, 50);
   const cargo = readOptionalString(body, "cargo", 2, 120);
+  const subcargoCodigo = readOptionalString(body, "subcargoCodigo", 1, 50);
+  const subcargo = readOptionalString(body, "subcargo", 0, 120);
   const lugar = readOptionalString(body, "lugar", 0, 120);
   const requestedRole = readRequiredUppercaseChoice(body, "rol", [
     rol_usuario.ADMIN,
@@ -4792,6 +4875,8 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     oficinaComisionId,
     cargoCodigo,
     cargo: cargo ?? "",
+    subcargoCodigo,
+    subcargo,
     lugar,
     numeroItem:
       tipoVinculo === "ITEM"
@@ -5493,7 +5578,7 @@ function assertCanReviewExitPermit(approver: any, salida: any) {
   const approverOfficeId = resolveLinkedOfficeId(approver);
   const applicant = salida.usuarios;
   const applicantIsChief = isChiefExitPermitApplicant(applicant);
-  const applicantIsDirector = isDirectorJobTitle(applicant?.cargo);
+  const applicantIsDirector = isDirectorExitPermitApprover(applicant);
 
   if (isDirectorExitPermitApprover(approver)) {
     if (!applicantIsChief || !isApplicantInDirectorScope(approver, applicant)) {
@@ -5543,10 +5628,10 @@ function buildExitPermitReviewWhere(
     return {
       ...baseWhere,
       usuarios: {
-        cargo_codigo: {
-          in: Array.from(EXIT_PERMIT_CHIEF_CARGO_CODES),
-        },
-        OR: buildDirectorOfficeScopeUserFilters(directionCode),
+        AND: [
+          buildEffectiveChiefJobTitleUserWhere(),
+          { OR: buildDirectorOfficeScopeUserFilters(directionCode) },
+        ],
       },
     };
   }
@@ -5556,29 +5641,8 @@ function buildExitPermitReviewWhere(
     solicitante_oficina_id: resolveLinkedOfficeId(approver),
     usuarios: {
       AND: [
-        {
-          NOT: {
-            cargo_codigo: {
-              in: Array.from(EXIT_PERMIT_CHIEF_CARGO_CODES),
-            },
-          },
-        },
-        {
-          NOT: {
-            cargo: {
-              contains: "director",
-              mode: "insensitive" as const,
-            },
-          },
-        },
-        {
-          NOT: {
-            cargo: {
-              contains: "direcctor",
-              mode: "insensitive" as const,
-            },
-          },
-        },
+        { NOT: buildEffectiveChiefJobTitleUserWhere() },
+        { NOT: buildEffectiveDirectorJobTitleUserWhere() },
       ],
     },
   };
@@ -5758,25 +5822,28 @@ function isExitPermitApproverUser(user: any) {
     user != null &&
     user.activo === true &&
     user.rol === rol_usuario.OPERADOR &&
-    (isBossJobTitle(user.cargo, user.cargo_codigo) ||
+    (isBossJobTitle(
+      resolveEffectiveJobTitleName(user),
+      resolveEffectiveJobTitleCode(user),
+    ) ||
       isDirectorExitPermitApprover(user)) &&
     resolveLinkedOfficeId(user) != null
   );
 }
 
 function isChiefExitPermitApplicant(user: any) {
-  const normalizedCode = normalizeOptionalText(user?.cargo_codigo)?.toUpperCase();
+  const normalizedCode = resolveEffectiveJobTitleCode(user)?.toUpperCase();
 
   return (
     (normalizedCode != null &&
       EXIT_PERMIT_CHIEF_CARGO_CODES.has(normalizedCode)) ||
-    normalizeTextForComparison(user?.cargo).includes("jefe")
+    normalizeTextForComparison(resolveEffectiveJobTitleName(user)).includes("jefe")
   );
 }
 
 function isDirectorExitPermitApprover(user: any) {
   return (
-    isDirectorJobTitle(user?.cargo) &&
+    isDirectorJobTitle(resolveEffectiveJobTitleName(user)) &&
     resolveDirectorOfficeCode(user) != null
   );
 }
@@ -5818,6 +5885,88 @@ function buildDirectorOfficeScopeUserFilters(directionCode: string | null) {
       },
     },
   ];
+}
+
+function buildEffectiveChiefJobTitleUserWhere(): Prisma.usuariosWhereInput {
+  return {
+    OR: [
+      {
+        subcargo_codigo: {
+          in: Array.from(EXIT_PERMIT_CHIEF_CARGO_CODES),
+        },
+      },
+      {
+        AND: [
+          { subcargo_codigo: null },
+          { subcargo: null },
+          {
+            cargo_codigo: {
+              in: Array.from(EXIT_PERMIT_CHIEF_CARGO_CODES),
+            },
+          },
+        ],
+      },
+      {
+        subcargo: {
+          contains: "jefe",
+          mode: "insensitive" as const,
+        },
+      },
+      {
+        AND: [
+          { subcargo_codigo: null },
+          { subcargo: null },
+          {
+            cargo: {
+              contains: "jefe",
+              mode: "insensitive" as const,
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function buildEffectiveDirectorJobTitleUserWhere(): Prisma.usuariosWhereInput {
+  return {
+    OR: [
+      {
+        subcargo: {
+          contains: "director",
+          mode: "insensitive" as const,
+        },
+      },
+      {
+        subcargo: {
+          contains: "direcctor",
+          mode: "insensitive" as const,
+        },
+      },
+      {
+        AND: [
+          { subcargo_codigo: null },
+          { subcargo: null },
+          {
+            OR: [
+              {
+                cargo: {
+                  contains: "director",
+                  mode: "insensitive" as const,
+                },
+              },
+              {
+                cargo: {
+                  contains: "direcctor",
+                  mode: "insensitive" as const,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
 }
 
 function isApplicantInDirectorScope(director: any, applicant: any) {
@@ -6517,7 +6666,7 @@ async function registerLunchScan(qrValue: string, scannerUserId: number) {
         funcionario_nombre_completo: buildUserDisplayName(funcionario),
         funcionario_ci: normalizeOptionalText(funcionario.ci),
         funcionario_numero_item: normalizeOptionalText(funcionario.numero_item),
-        funcionario_cargo: normalizeOptionalText(funcionario.cargo),
+        funcionario_cargo: resolveEffectiveJobTitleName(funcionario),
         funcionario_oficina_id: resolveLinkedOfficeId(funcionario),
         funcionario_oficina: resolveLinkedOfficeName(funcionario),
       },
@@ -7091,7 +7240,7 @@ function buildUserQrPayloadObject(user: any, qrCode: string) {
     nombreVisible: buildUserDisplayName(user),
     tipoVinculo: normalizeOptionalText(user.tipo_vinculo) ?? "",
     unidad: normalizeOptionalText(user.unidad) ?? "",
-    cargo: normalizeOptionalText(user.cargo) ?? "",
+    cargo: resolveEffectiveJobTitleName(user) ?? "",
     lugar: normalizeOptionalText(user.lugar) ?? "",
     numeroItem: normalizeOptionalText(user.numero_item) ?? "",
     activo: user.activo === true,
@@ -7482,7 +7631,7 @@ function buildAttendanceQrSnapshot(
     ci: linkedUser?.ci ?? person.ci ?? null,
     email: linkedUser?.email ?? null,
     unidad: linkedUser?.unidad ?? null,
-    cargo: linkedUser?.cargo ?? null,
+    cargo: resolveEffectiveJobTitleName(linkedUser),
     tipoVinculo: linkedUser?.tipo_vinculo ?? null,
     numeroItem: linkedUser?.numero_item ?? null,
     fotoRegistrada: normalizeOptionalText(linkedUser?.foto_url) != null,
@@ -7843,22 +7992,7 @@ function buildExitPermitNotificationCandidateWhere(salida: any) {
       activo: true,
       rol: rol_usuario.OPERADOR,
       AND: [
-        {
-          OR: [
-            {
-              cargo: {
-                contains: "director",
-                mode: "insensitive" as const,
-              },
-            },
-            {
-              cargo: {
-                contains: "direcctor",
-                mode: "insensitive" as const,
-              },
-            },
-          ],
-        },
+        buildEffectiveDirectorJobTitleUserWhere(),
         {
           OR: [
             {
@@ -7897,7 +8031,7 @@ function buildExitPermitNotificationCandidateWhere(salida: any) {
 function canReviewExitPermit(approver: any, salida: any, applicant: any) {
   const approverOfficeId = resolveLinkedOfficeId(approver);
   const applicantIsChief = isChiefExitPermitApplicant(applicant);
-  const applicantIsDirector = isDirectorJobTitle(applicant?.cargo);
+  const applicantIsDirector = isDirectorExitPermitApprover(applicant);
 
   if (!isExitPermitApproverUser(approver) || salida.usuario_id === approver.id) {
     return false;
@@ -7926,7 +8060,9 @@ async function loadNotificationTargetTokens(input: SendNotificationInput) {
   if (!input.sendToAll) {
     if (input.cargoCodigos.length > 0) {
       params.push(input.cargoCodigos);
-      clauses.push(`u."cargo_codigo" = ANY($${params.length}::text[])`);
+      clauses.push(
+        `COALESCE(u."subcargo_codigo", u."cargo_codigo") = ANY($${params.length}::text[])`,
+      );
     }
 
     if (input.oficinaIds.length > 0) {
@@ -8448,7 +8584,7 @@ function serializeEventAbsenteeRecord(person: any, requirementReason: string) {
     ci: linkedUser?.ci ?? person.ci ?? null,
     tipoVinculo: linkedUser?.tipo_vinculo ?? null,
     unidad: officeName,
-    cargo: linkedUser?.cargo ?? null,
+    cargo: resolveEffectiveJobTitleName(linkedUser),
     email: linkedUser?.email ?? null,
     motivoFalta: requirementReason,
   };
@@ -8460,7 +8596,7 @@ async function buildEventReportRequirementReason(person: any, event: any) {
     resolveLinkedOfficeId(linkedUser) ??
     (await resolveOfficeForUser(prisma, linkedUser))?.id ??
     null;
-  const userCargoCodigo = normalizeOptionalText(linkedUser?.cargo_codigo);
+  const userCargoCodigo = resolveEffectiveJobTitleCode(linkedUser);
   const matchesOffice =
     userOfficeId != null &&
     (event.evento_oficinas ?? []).some(
@@ -8547,6 +8683,22 @@ function resolveCommissionOfficeName(linkedUser: any) {
   return normalizeOptionalText(linkedUser?.oficina_comision?.oficina) ?? null;
 }
 
+function resolveEffectiveJobTitleCode(user: any) {
+  return (
+    normalizeOptionalText(user?.subcargo_codigo) ??
+    normalizeOptionalText(user?.cargo_codigo) ??
+    null
+  );
+}
+
+function resolveEffectiveJobTitleName(user: any) {
+  return (
+    normalizeOptionalText(user?.subcargo) ??
+    normalizeOptionalText(user?.cargo) ??
+    null
+  );
+}
+
 function serializeAppUser(user: any, person?: any | null, authToken?: string) {
   // El frontend recibe dos piezas equivalentes:
   // 1. `qrCode` para mostrar el ID externo en texto.
@@ -8580,6 +8732,10 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     tieneComision: commissionOfficeName != null || user.oficina_comision_id != null,
     cargoCodigo: user.cargo_codigo ?? null,
     cargo: user.cargo ?? "",
+    subcargoCodigo: user.subcargo_codigo ?? null,
+    subcargo: user.subcargo ?? "",
+    cargoEfectivoCodigo: resolveEffectiveJobTitleCode(user),
+    cargoEfectivo: resolveEffectiveJobTitleName(user) ?? "",
     lugar: user.lugar ?? "",
     numeroItem: user.numero_item ?? "",
     activo: user.activo,
@@ -8687,7 +8843,7 @@ function serializeAttendanceRecord(attendance: any) {
     ci: linkedUser?.ci ?? attendance.personas.ci ?? null,
     tipoVinculo: linkedUser?.tipo_vinculo ?? null,
     unidad: officeName,
-    cargo: linkedUser?.cargo ?? null,
+    cargo: resolveEffectiveJobTitleName(linkedUser),
     fotoUrl: linkedUser?.foto_url ?? null,
     email: linkedUser?.email ?? null,
     registradoEn: attendance.registrado_en.toISOString(),
@@ -8754,7 +8910,7 @@ function serializeReportPerson(source: {
     oficinaId: resolveLinkedOfficeId(linkedUser),
     oficinaCodigo: resolveLinkedOfficeCode(linkedUser),
     unidad: officeName,
-    cargo: linkedUser?.cargo ?? null,
+    cargo: resolveEffectiveJobTitleName(linkedUser),
     tipoVinculo: linkedUser?.tipo_vinculo ?? null,
     numeroItem: linkedUser?.numero_item ?? null,
     email: linkedUser?.email ?? null,
@@ -8794,8 +8950,8 @@ function serializeQrPersonDetail(
     oficinaId: resolveLinkedOfficeId(linkedUser),
     oficinaNombre: officeName,
     oficinaCodigo: resolveLinkedOfficeCode(linkedUser),
-    cargoCodigo: linkedUser?.cargo_codigo ?? null,
-    cargo: linkedUser?.cargo ?? null,
+    cargoCodigo: resolveEffectiveJobTitleCode(linkedUser),
+    cargo: resolveEffectiveJobTitleName(linkedUser),
     tipoVinculo: linkedUser?.tipo_vinculo ?? null,
     numeroItem: linkedUser?.numero_item ?? null,
     activo: linkedUser?.activo ?? person.activo,
@@ -8872,8 +9028,8 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
       )
       .filter((cargoName: string | null) => cargoName != null),
   );
-  const userCargoCodigo = normalizeOptionalText(linkedUser?.cargo_codigo);
-  const userCargoName = normalizeLooseMatchText(linkedUser?.cargo);
+  const userCargoCodigo = resolveEffectiveJobTitleCode(linkedUser);
+  const userCargoName = normalizeLooseMatchText(resolveEffectiveJobTitleName(linkedUser));
   const userOfficeCode = normalizeOfficeCode(resolveLinkedOfficeCode(linkedUser) ?? "");
   const userOfficeName = normalizeLooseMatchText(resolveLinkedOfficeName(linkedUser));
   const matchingOfficeIds = new Set<number>(
