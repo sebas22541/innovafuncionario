@@ -1325,7 +1325,7 @@ class _ApplicantSummaryCard extends StatelessWidget {
             const SizedBox(height: 14),
             _SummaryRow(label: 'Nombre', value: currentUser.fullName),
             _SummaryRow(label: 'Numero de item', value: currentUser.numeroItem),
-            _SummaryRow(label: 'Cargo', value: currentUser.cargo),
+            _SummaryRow(label: 'Cargo', value: currentUser.effectiveCargo),
             _SummaryRow(
               label: 'Oficina',
               value: currentUser.officeName ?? currentUser.unidad,
@@ -1527,7 +1527,7 @@ String _approvedPermitHint(ExitPermitRecord record) {
 }
 
 bool _isDirectorUser(AppUser user) {
-  final cargo = user.cargo
+  final cargo = user.effectiveCargo
       .toLowerCase()
       .replaceAll('ÃƒÂ¡', 'a')
       .replaceAll('ÃƒÂ©', 'e')

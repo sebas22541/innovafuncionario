@@ -276,6 +276,35 @@ class AppUser {
 
   bool get canUseEventScanner => isAdmin || isControl;
 
+  String? get effectiveCargoCode {
+    final effective = cargoEfectivoCodigo?.trim();
+    if (effective != null && effective.isNotEmpty) {
+      return effective;
+    }
+
+    final sub = subcargoCodigo?.trim();
+    if (sub != null && sub.isNotEmpty) {
+      return sub;
+    }
+
+    final base = cargoCodigo?.trim();
+    return base == null || base.isEmpty ? null : base;
+  }
+
+  String get effectiveCargo {
+    final effective = cargoEfectivo.trim();
+    if (effective.isNotEmpty) {
+      return effective;
+    }
+
+    final sub = subcargo.trim();
+    if (sub.isNotEmpty) {
+      return sub;
+    }
+
+    return cargo;
+  }
+
   bool get hasPhoto => fotoUrl?.trim().isNotEmpty == true;
 
   bool get hasQr =>
