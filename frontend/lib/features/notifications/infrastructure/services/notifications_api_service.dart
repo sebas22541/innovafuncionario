@@ -40,6 +40,18 @@ class NotificationsApiService {
     await _apiClient.putJson('/api/notificaciones/$id/leida', const {});
   }
 
+  Future<SentNotificationHistoryPage> fetchSentNotificationHistory({
+    required int page,
+  }) async {
+    final payload = await _apiClient.getJson(
+      '/api/notificaciones/enviadas?page=$page',
+    );
+
+    return SentNotificationHistoryPage.fromJson(
+      _readMap(payload['data'], 'historial'),
+    );
+  }
+
   Future<NotificationSendResult> sendNotification({
     required String title,
     required String body,
@@ -61,6 +73,85 @@ class NotificationsApiService {
 
     return NotificationSendResult.fromJson(
       _readMap(payload['data'], 'notificacion'),
+    );
+  }
+}
+
+class SentNotificationHistoryPage {
+  const SentNotificationHistoryPage({
+    required this.page,
+    required this.pageSize,
+    required this.total,
+    required this.totalPages,
+    required this.items,
+  });
+
+  final int page;
+  final int pageSize;
+  final int total;
+  final int totalPages;
+  final List<SentNotificationHistoryItem> items;
+
+  factory SentNotificationHistoryPage.fromJson(Map<String, dynamic> source) {
+    final rows = _readList(source['items'], 'items');
+
+    return SentNotificationHistoryPage(
+      page: _readInt(source['page'], 'page'),
+      pageSize: _readInt(source['pageSize'], 'pageSize'),
+      total: _readInt(source['total'], 'total'),
+      totalPages: _readInt(source['totalPages'], 'totalPages'),
+      items: rows
+          .map(
+            (row) => SentNotificationHistoryItem.fromJson(
+              _readMap(row, 'envio'),
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+}
+
+class SentNotificationHistoryItem {
+  const SentNotificationHistoryItem({
+    required this.id,
+    required this.senderUserId,
+    required this.title,
+    required this.body,
+    required this.filters,
+    required this.requested,
+    required this.sent,
+    required this.failed,
+    required this.removedInvalidTokens,
+    required this.createdAt,
+    this.message,
+  });
+
+  final int id;
+  final int senderUserId;
+  final String title;
+  final String body;
+  final Map<String, dynamic> filters;
+  final int requested;
+  final int sent;
+  final int failed;
+  final int removedInvalidTokens;
+  final String? message;
+  final DateTime createdAt;
+
+  factory SentNotificationHistoryItem.fromJson(Map<String, dynamic> source) {
+    return SentNotificationHistoryItem(
+      id: _readInt(source['id'], 'id'),
+      senderUserId: _readInt(source['enviadoPorId'], 'enviadoPorId'),
+      title: _readString(source['titulo'], 'titulo'),
+      body: _readString(source['cuerpo'], 'cuerpo'),
+      filters: _readMap(source['filtros'], 'filtros'),
+      requested: _readInt(source['requested'], 'requested'),
+      sent: _readInt(source['sent'], 'sent'),
+      failed: _readInt(source['failed'], 'failed'),
+      removedInvalidTokens:
+          _readNullableInt(source['removedInvalidTokens']) ?? 0,
+      message: source['message'] as String?,
+      createdAt: DateTime.parse(_readString(source['createdAt'], 'createdAt')),
     );
   }
 }

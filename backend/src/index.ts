@@ -1078,13 +1078,27 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/notificaciones/enviadas") {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede consultar notificaciones enviadas.",
+      );
+      const page = readOptionalQueryInt(url, "page") ?? 1;
+      const history = await loadSentNotificationHistory(page);
+
+      sendJson(response, 200, {
+        data: history,
+      });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/notificaciones/enviar") {
       await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede enviar notificaciones.",
       );
       const input = parseSendNotificationInput(await readJsonBody(request));
-      const result = await sendFirebaseNotification(input);
+      const result = await sendFirebaseNotification(input, authenticatedUser.id);
 
       sendJson(response, 200, {
         data: result,
@@ -2480,6 +2494,20 @@ type ReceivedNotificationRecord = {
   created_at: Date;
 };
 
+type SentNotificationRecord = {
+  id: number;
+  enviado_por_id: number;
+  titulo: string;
+  cuerpo: string;
+  filtros: any;
+  destinatarios_solicitados: number;
+  enviados: number;
+  fallidos: number;
+  tokens_invalidos_removidos: number;
+  mensaje_resultado: string | null;
+  created_at: Date;
+};
+
 type RegisterUserInput = {
   email: string;
   password: string;
@@ -3269,6 +3297,30 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_notificaciones_usuario_leida"
       ON "notificaciones" ("usuario_id", "leida_en")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "notificacion_envios" (
+      "id" SERIAL PRIMARY KEY,
+      "enviado_por_id" INTEGER NOT NULL,
+      "titulo" VARCHAR(120) NOT NULL,
+      "cuerpo" TEXT NOT NULL,
+      "filtros" JSONB NOT NULL DEFAULT '{}'::jsonb,
+      "destinatarios_solicitados" INTEGER NOT NULL DEFAULT 0,
+      "enviados" INTEGER NOT NULL DEFAULT 0,
+      "fallidos" INTEGER NOT NULL DEFAULT 0,
+      "tokens_invalidos_removidos" INTEGER NOT NULL DEFAULT 0,
+      "mensaje_resultado" TEXT,
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "notificacion_envios_enviado_por_id_fkey"
+        FOREIGN KEY ("enviado_por_id") REFERENCES "usuarios" ("id")
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_notificacion_envios_created"
+      ON "notificacion_envios" ("created_at" DESC, "id" DESC)
   `);
 
   await pool.query(`
@@ -7772,16 +7824,121 @@ function serializeReceivedNotification(notification: ReceivedNotificationRecord)
   };
 }
 
-async function sendFirebaseNotification(input: SendNotificationInput) {
-  const tokens = await loadNotificationTargetTokens(input);
+const SENT_NOTIFICATION_HISTORY_PAGE_SIZE = 20;
 
-  return sendFirebaseMulticastNotification(tokens, {
+async function loadSentNotificationHistory(page: number) {
+  const offset = (page - 1) * SENT_NOTIFICATION_HISTORY_PAGE_SIZE;
+  const [itemsResult, countResult] = await Promise.all([
+    pool.query<SentNotificationRecord>(
+      `
+        SELECT
+          "id",
+          "enviado_por_id",
+          "titulo",
+          "cuerpo",
+          "filtros",
+          "destinatarios_solicitados",
+          "enviados",
+          "fallidos",
+          "tokens_invalidos_removidos",
+          "mensaje_resultado",
+          "created_at"
+        FROM "notificacion_envios"
+        ORDER BY "created_at" DESC, "id" DESC
+        LIMIT $1 OFFSET $2
+      `,
+      [SENT_NOTIFICATION_HISTORY_PAGE_SIZE, offset],
+    ),
+    pool.query<{ total: string }>(
+      `SELECT COUNT(*)::text AS "total" FROM "notificacion_envios"`,
+    ),
+  ]);
+  const total = Number.parseInt(countResult.rows[0]?.total ?? "0", 10);
+
+  return {
+    page,
+    pageSize: SENT_NOTIFICATION_HISTORY_PAGE_SIZE,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / SENT_NOTIFICATION_HISTORY_PAGE_SIZE)),
+    items: itemsResult.rows.map(serializeSentNotification),
+  };
+}
+
+function serializeSentNotification(notification: SentNotificationRecord) {
+  return {
+    id: notification.id,
+    enviadoPorId: notification.enviado_por_id,
+    titulo: notification.titulo,
+    cuerpo: notification.cuerpo,
+    filtros: notification.filtros ?? {},
+    requested: notification.destinatarios_solicitados,
+    sent: notification.enviados,
+    failed: notification.fallidos,
+    removedInvalidTokens: notification.tokens_invalidos_removidos,
+    message: notification.mensaje_resultado,
+    createdAt: notification.created_at.toISOString(),
+  };
+}
+
+async function sendFirebaseNotification(input: SendNotificationInput, senderUserId: number) {
+  const tokens = await loadNotificationTargetTokens(input);
+  const result = await sendFirebaseMulticastNotification(tokens, {
     title: input.title,
     body: input.body,
     data: {
       source: "innovafuncionario",
     },
   });
+
+  await saveSentNotification(input, senderUserId, result);
+
+  return result;
+}
+
+async function saveSentNotification(
+  input: SendNotificationInput,
+  senderUserId: number,
+  result: {
+    requested: number;
+    sent: number;
+    failed: number;
+    removedInvalidTokens?: number;
+    message?: string;
+  },
+) {
+  await pool.query(
+    `
+      INSERT INTO "notificacion_envios" (
+        "enviado_por_id",
+        "titulo",
+        "cuerpo",
+        "filtros",
+        "destinatarios_solicitados",
+        "enviados",
+        "fallidos",
+        "tokens_invalidos_removidos",
+        "mensaje_resultado"
+      )
+      VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9)
+    `,
+    [
+      senderUserId,
+      input.title,
+      input.body,
+      JSON.stringify({
+        sendToAll: input.sendToAll,
+        cargoCodigos: input.cargoCodigos,
+        oficinaIds: input.oficinaIds,
+        cis: input.cis,
+        tiposVinculo: input.tiposVinculo,
+      }),
+      result.requested,
+      result.sent,
+      result.failed,
+      result.removedInvalidTokens ?? 0,
+      result.message ?? null,
+    ],
+  );
 }
 
 async function sendFirebaseMulticastNotification(
