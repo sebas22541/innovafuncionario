@@ -6,6 +6,7 @@ import '../../../../shared/infrastructure/backend_api_client.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../../auth/domain/entities/cargo_option.dart';
 import '../../../auth/domain/entities/office_option.dart';
+import '../../infrastructure/services/notifications_api_service.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -23,14 +24,20 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Set<int> _selectedOfficeIds = {};
   Set<String> _selectedCargoCodes = {};
   Set<String> _selectedTipos = {};
+  List<SentNotificationHistoryItem> _history = const [];
+  int _historyPage = 1;
+  int _historyTotal = 0;
+  int _historyTotalPages = 1;
   bool _sendToAll = true;
   bool _isLoading = true;
   bool _isSending = false;
+  bool _isLoadingHistory = true;
 
   @override
   void initState() {
     super.initState();
     _loadReferences();
+    _loadHistory();
   }
 
   @override
@@ -66,6 +73,38 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         _isLoading = false;
       });
       AppAlert.showError(context, 'No fue posible cargar oficinas y cargos.');
+    }
+  }
+
+  Future<void> _loadHistory({int page = 1}) async {
+    setState(() {
+      _isLoadingHistory = true;
+    });
+
+    try {
+      final history = await dependencies.notificationsApiService
+          .fetchSentNotificationHistory(page: page);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _history = history.items;
+        _historyPage = history.page;
+        _historyTotal = history.total;
+        _historyTotalPages = history.totalPages;
+        _isLoadingHistory = false;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isLoadingHistory = false;
+      });
+      AppAlert.showError(context, 'No fue posible cargar el historial.');
     }
   }
 
@@ -195,6 +234,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           result.message ??
           'Enviadas: ${result.sent}. Fallidas: ${result.failed}. Destinatarios: ${result.requested}.';
       AppAlert.showSuccess(context, message);
+      await _loadHistory();
     } on BackendApiException catch (error) {
       if (mounted) {
         AppAlert.showError(context, error.message);
@@ -313,8 +353,194 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     label: Text(_isSending ? 'Enviando...' : 'Enviar'),
                   ),
                 ),
+                const SizedBox(height: 28),
+                _SentHistorySection(
+                  items: _history,
+                  page: _historyPage,
+                  total: _historyTotal,
+                  totalPages: _historyTotalPages,
+                  isLoading: _isLoadingHistory,
+                  onPrevious: _historyPage <= 1 || _isLoadingHistory
+                      ? null
+                      : () => _loadHistory(page: _historyPage - 1),
+                  onNext: _historyPage >= _historyTotalPages ||
+                          _isLoadingHistory
+                      ? null
+                      : () => _loadHistory(page: _historyPage + 1),
+                ),
               ],
             ),
+    );
+  }
+}
+
+class _SentHistorySection extends StatelessWidget {
+  const _SentHistorySection({
+    required this.items,
+    required this.page,
+    required this.total,
+    required this.totalPages,
+    required this.isLoading,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final List<SentNotificationHistoryItem> items;
+  final int page;
+  final int total;
+  final int totalPages;
+  final bool isLoading;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text('Historial de envios', style: textTheme.titleLarge),
+            ),
+            Text(
+              '$total registros',
+              style: textTheme.bodySmall?.copyWith(color: AppPalette.muted),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (isLoading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 28),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (items.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              border: Border.all(color: AppPalette.line),
+              borderRadius: BorderRadius.circular(18),
+              color: Colors.white,
+            ),
+            child: const Text('Todavia no hay notificaciones enviadas.'),
+          )
+        else ...[
+          for (final item in items) ...[
+            _SentHistoryCard(item: item),
+            const SizedBox(height: 10),
+          ],
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: onPrevious,
+                icon: const Icon(Icons.chevron_left_rounded),
+                label: const Text('Anterior'),
+              ),
+              const Spacer(),
+              Text(
+                'Pagina $page de $totalPages',
+                style: textTheme.bodyMedium?.copyWith(
+                  color: AppPalette.muted,
+                ),
+              ),
+              const Spacer(),
+              OutlinedButton.icon(
+                onPressed: onNext,
+                icon: const Icon(Icons.chevron_right_rounded),
+                label: const Text('Siguiente'),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _SentHistoryCard extends StatelessWidget {
+  const _SentHistoryCard({required this.item});
+
+  final SentNotificationHistoryItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  item.title,
+                  style: textTheme.titleMedium?.copyWith(
+                    color: AppPalette.ink,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                _formatHistoryDate(item.createdAt),
+                style: textTheme.bodySmall?.copyWith(color: AppPalette.muted),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(item.body, style: textTheme.bodyMedium),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _HistoryChip(label: 'Destinatarios', value: '${item.requested}'),
+              _HistoryChip(label: 'Enviadas', value: '${item.sent}'),
+              _HistoryChip(label: 'Fallidas', value: '${item.failed}'),
+              _HistoryChip(label: 'Filtros', value: _formatFilters(item)),
+            ],
+          ),
+          if ((item.message ?? '').trim().isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              item.message!,
+              style: textTheme.bodySmall?.copyWith(color: AppPalette.muted),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryChip extends StatelessWidget {
+  const _HistoryChip({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppPalette.line),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text('$label: $value'),
     );
   }
 }
@@ -530,4 +756,55 @@ String _tipoLabel(String value) {
     default:
       return value;
   }
+}
+
+String _formatHistoryDate(DateTime value) {
+  final local = value.toLocal();
+  final day = local.day.toString().padLeft(2, '0');
+  final month = local.month.toString().padLeft(2, '0');
+  final year = local.year.toString();
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+
+  return '$day/$month/$year $hour:$minute';
+}
+
+String _formatFilters(SentNotificationHistoryItem item) {
+  final filters = item.filters;
+
+  if (filters['sendToAll'] == true) {
+    return 'Todos';
+  }
+
+  final parts = <String>[];
+  final offices = _readFilterList(filters['oficinaIds']);
+  final cargos = _readFilterList(filters['cargoCodigos']);
+  final cis = _readFilterList(filters['cis']);
+  final tipos = _readFilterList(filters['tiposVinculo']);
+
+  if (offices.isNotEmpty) {
+    parts.add('${offices.length} oficinas');
+  }
+
+  if (cargos.isNotEmpty) {
+    parts.add('${cargos.length} cargos');
+  }
+
+  if (cis.isNotEmpty) {
+    parts.add('${cis.length} CI');
+  }
+
+  if (tipos.isNotEmpty) {
+    parts.add(tipos.map((tipo) => _tipoLabel(tipo)).join(', '));
+  }
+
+  return parts.isEmpty ? 'Sin filtros' : parts.join(' | ');
+}
+
+List<String> _readFilterList(dynamic value) {
+  if (value is! List) {
+    return const [];
+  }
+
+  return value.map((item) => item.toString()).toList(growable: false);
 }
