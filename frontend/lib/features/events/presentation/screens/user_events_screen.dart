@@ -259,9 +259,9 @@ class _UserEventsScreenState extends State<UserEventsScreen> {
                               if (!_isAttendedView)
                                 _MiniStatCard(
                                   label: 'Cargo',
-                                  value: widget.currentUser.cargo.trim().isEmpty
+                                  value: widget.currentUser.effectiveCargo.trim().isEmpty
                                       ? 'Sin cargo'
-                                      : widget.currentUser.cargo,
+                                      : widget.currentUser.effectiveCargo,
                                   icon: Icons.badge_rounded,
                                   width: 390,
                                 ),
@@ -903,8 +903,8 @@ class _EmptyUserEventsState extends StatelessWidget {
 
 bool _hasEventReference(AppUser currentUser) {
   return _hasOfficeReference(currentUser) ||
-      (currentUser.cargoCodigo ?? '').trim().isNotEmpty ||
-      currentUser.cargo.trim().isNotEmpty;
+      (currentUser.effectiveCargoCode ?? '').trim().isNotEmpty ||
+      currentUser.effectiveCargo.trim().isNotEmpty;
 }
 
 bool _hasOfficeReference(AppUser currentUser) {
@@ -940,8 +940,8 @@ List<EventRecord> _filterEventsForCurrentUser(
         ? currentUser.commissionOfficeName ?? ''
         : _resolvedOfficeName(currentUser),
   );
-  final cargoCodigo = (currentUser.cargoCodigo ?? '').trim().toUpperCase();
-  final cargoName = _normalizeOfficeSearchText(currentUser.cargo);
+  final cargoCodigo = (currentUser.effectiveCargoCode ?? '').trim().toUpperCase();
+  final cargoName = _normalizeOfficeSearchText(currentUser.effectiveCargo);
 
   return events
       .where((event) {

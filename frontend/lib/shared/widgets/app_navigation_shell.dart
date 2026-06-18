@@ -71,8 +71,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
   void didUpdateWidget(covariant AppNavigationShell oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    if (oldWidget.currentUser.id != widget.currentUser.id ||
-        oldWidget.currentUser.email != widget.currentUser.email) {
+    if (_userAccessSignature(oldWidget.currentUser) !=
+        _userAccessSignature(widget.currentUser)) {
       _currentUser = widget.currentUser;
 
       if (!_visibleSectionsForUser(_currentUser).contains(_selectedSection)) {
@@ -1884,6 +1884,21 @@ class _BrandLogo extends StatelessWidget {
   }
 }
 
+String _userAccessSignature(AppUser user) {
+  return [
+    user.id,
+    user.email,
+    user.role.apiValue,
+    user.activo,
+    user.officeId,
+    user.officeCode,
+    user.commissionOfficeId,
+    user.hasCommission,
+    user.effectiveCargoCode,
+    user.effectiveCargo,
+  ].join('|');
+}
+
 class _UserAvatar extends StatelessWidget {
   const _UserAvatar({required this.currentUser, required this.size});
 
@@ -2196,8 +2211,8 @@ bool _isExitPermitApproverUser(AppUser user) {
     'CA011',
     'CA010',
   };
-  final cargoCodigo = user.cargoCodigo?.trim().toUpperCase();
-  final cargo = user.cargo
+  final cargoCodigo = user.effectiveCargoCode?.trim().toUpperCase();
+  final cargo = user.effectiveCargo
       .toLowerCase()
       .replaceAll('Ã¡', 'a')
       .replaceAll('Ã©', 'e')
@@ -2216,7 +2231,7 @@ bool _isDirectorExitPermitUser(AppUser user) {
 }
 
 bool _isDirectorJobTitle(AppUser user) {
-  final cargo = user.cargo
+  final cargo = user.effectiveCargo
       .toLowerCase()
       .replaceAll('ÃƒÂ¡', 'a')
       .replaceAll('ÃƒÂ©', 'e')

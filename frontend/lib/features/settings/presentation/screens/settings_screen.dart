@@ -597,7 +597,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                   const SizedBox(height: 14),
                   _UserDataRow(
                     label: 'Cargo',
-                    value: currentUser.cargo,
+                    value: currentUser.effectiveCargo,
                     icon: Icons.work_outline_rounded,
                   ),
                   const SizedBox(height: 14),

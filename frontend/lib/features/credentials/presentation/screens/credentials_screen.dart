@@ -1774,14 +1774,14 @@ bool _matchesOffice(AppUser user, OfficeOption office) {
 
 bool _matchesCargo(AppUser user, CargoOption cargo) {
   final selectedCargoCode = cargo.code.trim().toUpperCase();
-  final userCargoCode = (user.cargoCodigo ?? '').trim().toUpperCase();
+  final userCargoCode = (user.effectiveCargoCode ?? '').trim().toUpperCase();
 
   if (selectedCargoCode.isNotEmpty && userCargoCode == selectedCargoCode) {
     return true;
   }
 
   final selectedCargoName = _normalizeSearchText(cargo.name);
-  final userCargoName = _normalizeSearchText(user.cargo);
+  final userCargoName = _normalizeSearchText(user.effectiveCargo);
 
   return selectedCargoName.isNotEmpty && userCargoName == selectedCargoName;
 }
@@ -1871,7 +1871,7 @@ String _normalizeExactOfficeValue(String value) {
 }
 
 String _resolvedJobTitle(AppUser user) {
-  final jobTitle = user.cargo.trim();
+  final jobTitle = user.effectiveCargo.trim();
   return jobTitle.isEmpty ? 'Sin cargo' : jobTitle;
 }
 
