@@ -1,10 +1,12 @@
-enum AppUserRole { admin, control, credentials, lunch, external }
+enum AppUserRole { admin, adminHealth, control, credentials, lunch, external }
 
 extension AppUserRoleX on AppUserRole {
   String get apiValue {
     switch (this) {
       case AppUserRole.admin:
         return 'ADMIN';
+      case AppUserRole.adminHealth:
+        return 'ADMIN_SALUD';
       case AppUserRole.control:
         return 'CONTROL';
       case AppUserRole.credentials:
@@ -20,6 +22,8 @@ extension AppUserRoleX on AppUserRole {
     switch (this) {
       case AppUserRole.admin:
         return 'Administrador';
+      case AppUserRole.adminHealth:
+        return 'Admin (salud)';
       case AppUserRole.control:
         return 'Control';
       case AppUserRole.credentials:
@@ -260,7 +264,10 @@ class AppUser {
 
   String get roleLabel => role.label;
 
-  bool get isAdmin => role == AppUserRole.admin;
+  bool get isAdmin =>
+      role == AppUserRole.admin || role == AppUserRole.adminHealth;
+
+  bool get isAdminHealth => role == AppUserRole.adminHealth;
 
   bool get isControl => role == AppUserRole.control;
 
@@ -332,6 +339,10 @@ String _readString(dynamic value, String fieldName) {
 AppUserRole _readRole(dynamic value) {
   if (value == 'ADMIN') {
     return AppUserRole.admin;
+  }
+
+  if (value == 'ADMIN_SALUD') {
+    return AppUserRole.adminHealth;
   }
 
   if (value == 'CONTROL') {

@@ -1421,6 +1421,7 @@ class _RoleChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final accentColor = switch (role) {
       AppUserRole.admin => AppPalette.orange,
+      AppUserRole.adminHealth => AppPalette.orange,
       AppUserRole.control => AppPalette.night,
       AppUserRole.credentials => AppPalette.orange,
       AppUserRole.lunch => Colors.green.shade700,
@@ -1428,6 +1429,7 @@ class _RoleChip extends StatelessWidget {
     };
     final backgroundColor = switch (role) {
       AppUserRole.admin => AppPalette.orangeSoft,
+      AppUserRole.adminHealth => AppPalette.orangeSoft,
       AppUserRole.control => AppPalette.blueSoftStrong,
       AppUserRole.credentials => AppPalette.orangeSoft,
       AppUserRole.lunch => Colors.green.shade50,
@@ -2150,6 +2152,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                           DropdownMenuItem(
                             value: AppUserRole.admin,
                             child: Text('Administrador'),
+                          ),
+                          DropdownMenuItem(
+                            value: AppUserRole.adminHealth,
+                            child: Text('Admin (salud)'),
                           ),
                           DropdownMenuItem(
                             value: AppUserRole.credentials,
@@ -3234,14 +3240,16 @@ int _userRoleOrder(AppUserRole role) {
   switch (role) {
     case AppUserRole.admin:
       return 0;
-    case AppUserRole.control:
+    case AppUserRole.adminHealth:
       return 1;
-    case AppUserRole.credentials:
+    case AppUserRole.control:
       return 2;
-    case AppUserRole.lunch:
+    case AppUserRole.credentials:
       return 3;
-    case AppUserRole.external:
+    case AppUserRole.lunch:
       return 4;
+    case AppUserRole.external:
+      return 5;
   }
 }
 
