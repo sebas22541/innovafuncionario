@@ -236,6 +236,8 @@ model usuarios {
   salidas_salida        salidas[]              @relation("SalidaSalidaRegistrador")
   salidas_llegada       salidas[]              @relation("SalidaLlegadaRegistrador")
   notificacion_tokens   notificacion_tokens[]
+  celulares_asistencia  celulares_asistencia[] @relation("CelularUsuario")
+  celulares_logout      celulares_asistencia[] @relation("CelularLogoutSolicitante")
 
   @@index([cargo_codigo], map: "idx_usuarios_cargo_codigo")
   @@index([subcargo_codigo], map: "idx_usuarios_subcargo_codigo")
@@ -253,6 +255,30 @@ model notificacion_tokens {
   usuarios   usuarios @relation(fields: [usuario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([usuario_id], map: "idx_notificacion_tokens_usuario_id")
+}
+
+model celulares_asistencia {
+  id                    Int       @id @default(autoincrement())
+  device_id             String    @unique @db.VarChar(120)
+  usuario_id            Int
+  platform              String    @db.VarChar(30)
+  manufacturer          String?   @db.VarChar(120)
+  model                 String?   @db.VarChar(160)
+  android_sdk           Int?
+  battery_level         Int?
+  is_charging           Boolean?
+  brightness            Int?
+  kiosk_enabled         Boolean   @default(false)
+  last_seen_at          DateTime  @default(now()) @db.Timestamptz(6)
+  logout_requested_at   DateTime? @db.Timestamptz(6)
+  logout_requested_by_id Int?
+  created_at            DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime  @default(now()) @db.Timestamptz(6)
+  usuario               usuarios  @relation("CelularUsuario", fields: [usuario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  logout_solicitado_por usuarios? @relation("CelularLogoutSolicitante", fields: [logout_requested_by_id], references: [id], onUpdate: NoAction)
+
+  @@index([usuario_id], map: "idx_celulares_asistencia_usuario_id")
+  @@index([last_seen_at], map: "idx_celulares_asistencia_last_seen")
 }
 
 enum estado_asistencia {

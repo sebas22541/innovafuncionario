@@ -31,15 +31,16 @@ class QrWebApp extends StatefulWidget {
 class _QrWebAppState extends State<QrWebApp> {
   AppUser? _currentUser;
   AppSection? _initialSection;
-  int _sectionRequestToken = 0;
+  final int _sectionRequestToken = 0;
   int _notificationsRefreshToken = 0;
+  int _notificationsOpenToken = 0;
   bool _isRestoringSession = true;
 
   @override
   void initState() {
     super.initState();
     FirebaseNotificationsService.configureNavigation(
-      onOpenExitPermitRequests: _openExitPermitRequestsFromNotification,
+      onOpenNotifications: _openNotificationsFromNotification,
       onNotificationsChanged: _handleNotificationsChanged,
     );
     _requestStartupPermissions();
@@ -125,24 +126,23 @@ class _QrWebAppState extends State<QrWebApp> {
     });
   }
 
-  void _openExitPermitRequestsFromNotification() {
-    if (!mounted) {
-      return;
-    }
-
-    setState(() {
-      _initialSection = AppSection.exitPermitRequests;
-      _sectionRequestToken++;
-    });
-    SessionStore.saveSection(AppSection.exitPermitRequests);
-  }
-
   void _handleNotificationsChanged() {
     if (!mounted) {
       return;
     }
 
     setState(() {
+      _notificationsRefreshToken++;
+    });
+  }
+
+  void _openNotificationsFromNotification() {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _notificationsOpenToken++;
       _notificationsRefreshToken++;
     });
   }
@@ -181,6 +181,7 @@ class _QrWebAppState extends State<QrWebApp> {
                       initialSection: _initialSection,
                       sectionRequestToken: _sectionRequestToken,
                       notificationsRefreshToken: _notificationsRefreshToken,
+                      notificationsOpenToken: _notificationsOpenToken,
                       onCurrentUserChanged: _handleCurrentUserChanged,
                       onSectionChanged: SessionStore.saveSection,
                       onLogout: _handleLogout,

@@ -531,6 +531,51 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/celulares/heartbeat") {
+      assertAuthenticatedRequester(authenticatedUser);
+      const input = parseDeviceHeartbeatInput(await readJsonBody(request));
+      const result = await registerDeviceHeartbeat(authenticatedUser.id, input);
+
+      sendJson(response, 200, {
+        data: result,
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/celulares") {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede consultar celulares.",
+      );
+
+      sendJson(response, 200, {
+        data: await loadManagedDevices(),
+      });
+      return;
+    }
+
+    const deviceLogoutMatch = /^\/api\/celulares\/([^/]+)\/cerrar-sesion$/.exec(
+      url.pathname,
+    );
+    if (request.method === "POST" && deviceLogoutMatch) {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede cerrar sesiones de celulares.",
+      );
+      const deviceId = decodeURIComponent(deviceLogoutMatch[1] ?? "").trim();
+
+      if (deviceId.length < 8 || deviceId.length > 120) {
+        throw new HttpError(400, "El celular seleccionado no es valido.");
+      }
+
+      await requestDeviceLogout(deviceId, authenticatedUser.id);
+
+      sendJson(response, 200, {
+        data: { requested: true },
+      });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/auth/me") {
       const user = await prisma.usuarios.findUnique({
         where: { id: authenticatedUser.id },
@@ -2532,6 +2577,18 @@ type RegisterNotificationTokenInput = {
   platform: string;
 };
 
+type DeviceHeartbeatInput = {
+  deviceId: string;
+  platform: string;
+  manufacturer: string | null;
+  model: string | null;
+  androidSdk: number | null;
+  batteryLevel: number | null;
+  isCharging: boolean | null;
+  brightness: number | null;
+  kioskEnabled: boolean;
+};
+
 type SendNotificationInput = {
   title: string;
   body: string;
@@ -3333,6 +3390,44 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_notificacion_tokens_usuario_id"
       ON "notificacion_tokens" ("usuario_id")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "celulares_asistencia" (
+      "id" SERIAL PRIMARY KEY,
+      "device_id" VARCHAR(120) NOT NULL UNIQUE,
+      "usuario_id" INTEGER NOT NULL,
+      "platform" VARCHAR(30) NOT NULL,
+      "manufacturer" VARCHAR(120),
+      "model" VARCHAR(160),
+      "android_sdk" INTEGER,
+      "battery_level" INTEGER,
+      "is_charging" BOOLEAN,
+      "brightness" INTEGER,
+      "kiosk_enabled" BOOLEAN NOT NULL DEFAULT FALSE,
+      "last_seen_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "logout_requested_at" TIMESTAMPTZ(6),
+      "logout_requested_by_id" INTEGER,
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "celulares_asistencia_usuario_id_fkey"
+        FOREIGN KEY ("usuario_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "celulares_asistencia_logout_requested_by_id_fkey"
+        FOREIGN KEY ("logout_requested_by_id") REFERENCES "usuarios" ("id")
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_celulares_asistencia_usuario_id"
+      ON "celulares_asistencia" ("usuario_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_celulares_asistencia_last_seen"
+      ON "celulares_asistencia" ("last_seen_at" DESC)
   `);
 
   await pool.query(`
@@ -4733,6 +4828,23 @@ function parseLunchScanInput(payload: unknown): LunchScanInput {
   };
 }
 
+function parseDeviceHeartbeatInput(payload: unknown): DeviceHeartbeatInput {
+  const body = expectRecord(payload);
+
+  return {
+    deviceId: readRequiredString(body, "deviceId", 8, 120),
+    platform:
+      readOptionalString(body, "platform", 1, 30)?.toUpperCase() ?? "UNKNOWN",
+    manufacturer: readOptionalString(body, "manufacturer", 0, 120),
+    model: readOptionalString(body, "model", 0, 160),
+    androidSdk: readOptionalIntInRange(body, "androidSdk", 1, 10_000),
+    batteryLevel: readOptionalIntInRange(body, "batteryLevel", 0, 100),
+    isCharging: readOptionalBoolean(body, "isCharging"),
+    brightness: readOptionalIntInRange(body, "brightness", 0, 100),
+    kioskEnabled: readOptionalBoolean(body, "kioskEnabled") ?? false,
+  };
+}
+
 function parseLunchReportQuery(url: URL): LunchReportQuery {
   const rawStatus = url.searchParams.get("estado")?.trim().toUpperCase() ?? null;
   let status: LunchReportQuery["status"] = null;
@@ -5216,6 +5328,32 @@ function readOptionalInt(source: JsonRecord, key: string) {
 
   if (!Number.isInteger(numericValue) || numericValue <= 0) {
     throw new HttpError(400, `El campo ${key} debe ser un numero valido.`);
+  }
+
+  return numericValue;
+}
+
+function readOptionalIntInRange(
+  source: JsonRecord,
+  key: string,
+  min: number,
+  max: number,
+) {
+  const value = source[key];
+
+  if (value == null || value === "") {
+    return null;
+  }
+
+  const numericValue =
+    typeof value === "number"
+      ? Math.round(value)
+      : typeof value === "string"
+        ? Number.parseInt(value, 10)
+        : Number.NaN;
+
+  if (!Number.isInteger(numericValue) || numericValue < min || numericValue > max) {
+    return null;
   }
 
   return numericValue;
@@ -8065,6 +8203,174 @@ async function loadDashboardSummary(requester?: AuthenticatedUser) {
   return summary;
 }
 
+async function registerDeviceHeartbeat(
+  userId: number,
+  input: DeviceHeartbeatInput,
+) {
+  const result = await pool.query<{ force_logout: boolean }>(
+    `
+      INSERT INTO "celulares_asistencia" (
+        "device_id",
+        "usuario_id",
+        "platform",
+        "manufacturer",
+        "model",
+        "android_sdk",
+        "battery_level",
+        "is_charging",
+        "brightness",
+        "kiosk_enabled",
+        "last_seen_at",
+        "updated_at"
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT ("device_id") DO UPDATE SET
+        "usuario_id" = EXCLUDED."usuario_id",
+        "platform" = EXCLUDED."platform",
+        "manufacturer" = EXCLUDED."manufacturer",
+        "model" = EXCLUDED."model",
+        "android_sdk" = EXCLUDED."android_sdk",
+        "battery_level" = EXCLUDED."battery_level",
+        "is_charging" = EXCLUDED."is_charging",
+        "brightness" = EXCLUDED."brightness",
+        "kiosk_enabled" = EXCLUDED."kiosk_enabled",
+        "last_seen_at" = CURRENT_TIMESTAMP,
+        "updated_at" = CURRENT_TIMESTAMP
+      RETURNING "logout_requested_at" IS NOT NULL AS "force_logout"
+    `,
+    [
+      input.deviceId,
+      userId,
+      input.platform,
+      input.manufacturer,
+      input.model,
+      input.androidSdk,
+      input.batteryLevel,
+      input.isCharging,
+      input.brightness,
+      input.kioskEnabled,
+    ],
+  );
+  const forceLogout = result.rows[0]?.force_logout === true;
+
+  if (forceLogout) {
+    await pool.query(
+      `
+        UPDATE "celulares_asistencia"
+        SET "logout_requested_at" = NULL,
+            "logout_requested_by_id" = NULL,
+            "updated_at" = CURRENT_TIMESTAMP
+        WHERE "device_id" = $1
+      `,
+      [input.deviceId],
+    );
+  }
+
+  return {
+    forceLogout,
+  };
+}
+
+async function loadManagedDevices() {
+  const result = await pool.query(
+    `
+      SELECT
+        c."device_id",
+        c."usuario_id",
+        c."platform",
+        c."manufacturer",
+        c."model",
+        c."android_sdk",
+        c."battery_level",
+        c."is_charging",
+        c."brightness",
+        c."kiosk_enabled",
+        c."last_seen_at",
+        c."logout_requested_at",
+        u."nombre_completo",
+        u."nombres",
+        u."primer_apellido",
+        u."segundo_apellido",
+        u."tercer_apellido",
+        u."ci"
+      FROM "celulares_asistencia" c
+      INNER JOIN "usuarios" u ON u."id" = c."usuario_id"
+      WHERE u."rol" = 'ALMUERZO'
+      ORDER BY c."last_seen_at" DESC, c."id" DESC
+    `,
+  );
+
+  return result.rows.map(serializeManagedDevice);
+}
+
+async function requestDeviceLogout(deviceId: string, requesterUserId: number) {
+  const result = await pool.query(
+    `
+      UPDATE "celulares_asistencia"
+      SET "logout_requested_at" = CURRENT_TIMESTAMP,
+          "logout_requested_by_id" = $2,
+          "updated_at" = CURRENT_TIMESTAMP
+      WHERE "device_id" = $1
+      RETURNING "device_id"
+    `,
+    [deviceId, requesterUserId],
+  );
+
+  if (result.rowCount === 0) {
+    throw new HttpError(404, "No se encontro el celular seleccionado.");
+  }
+}
+
+function serializeManagedDevice(device: any) {
+  const lastSeenAt = device.last_seen_at instanceof Date
+    ? device.last_seen_at
+    : new Date(device.last_seen_at);
+  const offlineAfterMs = 90 * 1000;
+  const userName = buildUserDisplayName({
+    nombre_completo: device.nombre_completo,
+    nombres: device.nombres,
+    primer_apellido: device.primer_apellido,
+    segundo_apellido: device.segundo_apellido,
+    tercer_apellido: device.tercer_apellido,
+  });
+
+  return {
+    deviceId: device.device_id ?? "",
+    userId: Number(device.usuario_id ?? 0),
+    userName,
+    userCi: device.ci ?? "",
+    platform: device.platform ?? "",
+    manufacturer: device.manufacturer ?? "",
+    model: device.model ?? "",
+    androidSdk: nullableNumber(device.android_sdk),
+    batteryLevel: nullableNumber(device.battery_level),
+    isCharging: typeof device.is_charging === "boolean" ? device.is_charging : null,
+    brightness: nullableNumber(device.brightness),
+    kioskEnabled: device.kiosk_enabled === true,
+    isOnline: Date.now() - lastSeenAt.getTime() <= offlineAfterMs,
+    lastSeenAt: lastSeenAt.toISOString(),
+    logoutRequestedAt:
+      device.logout_requested_at instanceof Date
+        ? device.logout_requested_at.toISOString()
+        : device.logout_requested_at == null
+          ? null
+          : new Date(device.logout_requested_at).toISOString(),
+  };
+}
+
+function nullableNumber(value: unknown) {
+  if (typeof value === "number") {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsedValue = Number(value);
+    return Number.isFinite(parsedValue) ? parsedValue : null;
+  }
+
+  return null;
+}
+
 async function registerNotificationToken(
   userId: number,
   input: RegisterNotificationTokenInput,
@@ -8198,12 +8504,21 @@ function serializeSentNotification(notification: SentNotificationRecord) {
 }
 
 async function sendFirebaseNotification(input: SendNotificationInput, senderUserId: number) {
-  const tokens = await loadNotificationTargetTokens(input);
-  const result = await sendFirebaseMulticastNotification(tokens, {
+  const targets = await loadNotificationTargets(input);
+  await createReceivedNotifications(targets.userIds, {
+    type: "general",
+    title: input.title,
+    body: input.body,
+    targetSection: "notifications",
+    salidaId: null,
+  });
+  const result = await sendFirebaseMulticastNotification(targets.tokens, {
     title: input.title,
     body: input.body,
     data: {
       source: "innovafuncionario",
+      type: "general",
+      targetSection: "notifications",
     },
   });
 
@@ -8410,7 +8725,7 @@ async function createReceivedNotifications(
     title: string;
     body: string;
     targetSection: string;
-    salidaId: number;
+    salidaId: number | null;
   },
 ) {
   const uniqueUserIds = [...new Set(userIds.filter((userId) => userId > 0))];
@@ -8524,7 +8839,7 @@ function canReviewExitPermit(approver: any, salida: any, applicant: any) {
   );
 }
 
-async function loadNotificationTargetTokens(input: SendNotificationInput) {
+async function loadNotificationTargets(input: SendNotificationInput) {
   const clauses = [
     `u."activo" = TRUE`,
     `nt."platform" IN ('ANDROID', 'IOS')`,
@@ -8561,9 +8876,9 @@ async function loadNotificationTargetTokens(input: SendNotificationInput) {
     }
   }
 
-  const result = await pool.query<{ token: string }>(
+  const result = await pool.query<{ usuario_id: number; token: string }>(
     `
-      SELECT DISTINCT nt."token"
+      SELECT DISTINCT nt."usuario_id", nt."token"
       FROM "notificacion_tokens" nt
       INNER JOIN "usuarios" u ON u."id" = nt."usuario_id"
       WHERE ${clauses.join(" AND ")}
@@ -8571,7 +8886,10 @@ async function loadNotificationTargetTokens(input: SendNotificationInput) {
     params,
   );
 
-  return result.rows.map((row) => row.token);
+  return {
+    userIds: [...new Set(result.rows.map((row) => row.usuario_id))],
+    tokens: result.rows.map((row) => row.token),
+  };
 }
 
 async function removeNotificationTokens(tokens: string[]) {

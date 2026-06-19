@@ -23,22 +23,22 @@ class FirebaseNotificationsService {
   static StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
   static String? _registeredToken;
   static String? _registeredPlatform;
-  static VoidCallback? _openExitPermitRequests;
+  static VoidCallback? _openNotifications;
   static VoidCallback? _notificationsChanged;
   static bool _initialized = false;
   static bool _initialMessageChecked = false;
-  static bool _pendingExitPermitRequestsOpen = false;
+  static bool _pendingNotificationsOpen = false;
 
   static void configureNavigation({
-    required VoidCallback onOpenExitPermitRequests,
+    required VoidCallback onOpenNotifications,
     required VoidCallback onNotificationsChanged,
   }) {
-    _openExitPermitRequests = onOpenExitPermitRequests;
+    _openNotifications = onOpenNotifications;
     _notificationsChanged = onNotificationsChanged;
 
-    if (_pendingExitPermitRequestsOpen) {
-      _pendingExitPermitRequestsOpen = false;
-      onOpenExitPermitRequests();
+    if (_pendingNotificationsOpen) {
+      _pendingNotificationsOpen = false;
+      onOpenNotifications();
     }
 
     if (_initialized) {
@@ -156,19 +156,19 @@ class FirebaseNotificationsService {
   }
 
   static void _handleNotificationTap(RemoteMessage message) {
-    if (message.data['targetSection'] != 'exitPermitRequests') {
+    if (message.data['source'] != 'innovafuncionario') {
       return;
     }
 
     _notificationsChanged?.call();
-    final callback = _openExitPermitRequests;
+    final notificationCallback = _openNotifications;
 
-    if (callback == null) {
-      _pendingExitPermitRequestsOpen = true;
+    if (notificationCallback == null) {
+      _pendingNotificationsOpen = true;
       return;
     }
 
-    callback();
+    notificationCallback();
   }
 }
 

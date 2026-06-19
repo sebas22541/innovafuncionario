@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_palette.dart';
 import '../../features/events/domain/entities/event_record.dart';
+import '../../features/devices/presentation/screens/devices_screen.dart';
 import '../../features/events/presentation/screens/events_screen.dart';
 import '../../features/events/presentation/screens/user_events_screen.dart';
 import '../../features/credentials/presentation/screens/credentials_screen.dart';
@@ -18,6 +20,8 @@ import '../../features/reports/presentation/screens/reports_screen.dart';
 import '../../features/settings/presentation/screens/settings_screen.dart';
 import '../../features/users/presentation/screens/users_screen.dart';
 import '../../injection_container.dart';
+import '../infrastructure/device_status_service.dart';
+import '../infrastructure/kiosk_mode_service.dart';
 import '../models/app_section.dart';
 import '../models/app_user.dart';
 import 'app_alert.dart';
@@ -31,6 +35,7 @@ class AppNavigationShell extends StatefulWidget {
     this.initialSection,
     this.sectionRequestToken = 0,
     this.notificationsRefreshToken = 0,
+    this.notificationsOpenToken = 0,
     this.onCurrentUserChanged,
     this.onSectionChanged,
     required this.onLogout,
@@ -40,6 +45,7 @@ class AppNavigationShell extends StatefulWidget {
   final AppSection? initialSection;
   final int sectionRequestToken;
   final int notificationsRefreshToken;
+  final int notificationsOpenToken;
   final ValueChanged<AppUser>? onCurrentUserChanged;
   final ValueChanged<AppSection>? onSectionChanged;
   final VoidCallback onLogout;
@@ -53,8 +59,10 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
   EventRecord? _scannerEvent;
   late AppUser _currentUser;
   bool _lunchScannerModeActive = false;
+  bool _isRemoteLogoutHandling = false;
   int _lunchScannerBackToken = 0;
   int _unreadNotifications = 0;
+  Timer? _deviceHeartbeatTimer;
 
   @override
   void initState() {
@@ -65,6 +73,14 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       widget.initialSection,
     );
     _loadUnreadNotifications();
+    _syncLunchKioskMode();
+    _syncDeviceHeartbeat();
+  }
+
+  @override
+  void dispose() {
+    _deviceHeartbeatTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -79,6 +95,9 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
         _selectedSection = _defaultSectionForUser(_currentUser);
         widget.onSectionChanged?.call(_selectedSection);
       }
+
+      _syncLunchKioskMode();
+      _syncDeviceHeartbeat();
     }
 
     if ((oldWidget.initialSection != widget.initialSection ||
@@ -92,6 +111,14 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
     if (oldWidget.notificationsRefreshToken !=
         widget.notificationsRefreshToken) {
       _loadUnreadNotifications();
+    }
+
+    if (oldWidget.notificationsOpenToken != widget.notificationsOpenToken) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _openNotificationsPanel(openLatest: true);
+        }
+      });
     }
   }
 
@@ -151,7 +178,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
     }
   }
 
-  Future<void> _openNotificationsPanel() async {
+  Future<void> _openNotificationsPanel({bool openLatest = false}) async {
     FocusManager.instance.primaryFocus?.unfocus();
     final selected = await showGeneralDialog<ReceivedNotification>(
       context: context,
@@ -163,6 +190,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
         return Align(
           alignment: Alignment.centerRight,
           child: _ReceivedNotificationsPanel(
+            openLatest: openLatest,
             onClose: () => Navigator.of(context).pop(),
           ),
         );
@@ -183,9 +211,25 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       return;
     }
 
+    await _openNotificationDetail(selected);
+
+    if (!mounted) {
+      return;
+    }
+
     if (selected.targetSection == AppSection.exitPermitRequests.storageKey) {
       _handleSectionSelection(AppSection.exitPermitRequests);
     }
+  }
+
+  Future<void> _openNotificationDetail(
+    ReceivedNotification notification,
+  ) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) =>
+          _ReceivedNotificationDetailDialog(notification: notification),
+    );
   }
 
   Future<void> _openMyQrDialog() async {
@@ -227,7 +271,61 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
     setState(() {
       _currentUser = user;
     });
+    _syncLunchKioskMode();
+    _syncDeviceHeartbeat();
     widget.onCurrentUserChanged?.call(user);
+  }
+
+  void _syncLunchKioskMode() {
+    KioskModeService.setLunchKioskEnabled(_currentUser.isLunchControl);
+  }
+
+  void _syncDeviceHeartbeat() {
+    _deviceHeartbeatTimer?.cancel();
+    _deviceHeartbeatTimer = null;
+
+    if (!_currentUser.isLunchControl) {
+      return;
+    }
+
+    _sendDeviceHeartbeat();
+    _deviceHeartbeatTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _sendDeviceHeartbeat(),
+    );
+  }
+
+  Future<void> _sendDeviceHeartbeat() async {
+    if (_isRemoteLogoutHandling || !_currentUser.isLunchControl) {
+      return;
+    }
+
+    try {
+      final status = await DeviceStatusService.readStatus();
+      final response = await dependencies.devicesApiService.sendHeartbeat({
+        ...status,
+        'kioskEnabled': _currentUser.isLunchControl,
+      });
+
+      if (!mounted || !response.forceLogout) {
+        return;
+      }
+
+      _isRemoteLogoutHandling = true;
+      _handleLogout();
+    } catch (_) {
+      // El monitoreo no debe bloquear el escaner si el backend no responde.
+    }
+  }
+
+  void _handleLogout() {
+    _deviceHeartbeatTimer?.cancel();
+    _deviceHeartbeatTimer = null;
+    KioskModeService.disableLunchKiosk().whenComplete(() {
+      if (mounted) {
+        widget.onLogout();
+      }
+    });
   }
 
   void _handleSystemBack() {
@@ -313,6 +411,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
               );
       case AppSection.permissionExits:
         return ExitPermitsScreen(currentUser: _currentUser);
+      case AppSection.cellPhones:
+        return const DevicesScreen();
       case AppSection.myExitPermits:
         return MyExitPermitsScreen(currentUser: _currentUser);
       case AppSection.exitPermitRequests:
@@ -402,7 +502,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 onBack: _handleSystemBack,
                 onNotifications: _openNotificationsPanel,
                 unreadNotifications: _unreadNotifications,
-                onLogout: widget.onLogout,
+                lunchModeActive: _lunchScannerModeActive,
+                onLogout: _handleLogout,
                 child: animatedContent,
               )
             : isDesktop
@@ -411,7 +512,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 selectedSection: _selectedSection,
                 visibleSections: visibleSections,
                 onSelected: _handleSectionSelection,
-                onLogout: widget.onLogout,
+                onLogout: _handleLogout,
                 child: animatedContent,
               )
             : _MobileAppFrame(
@@ -422,7 +523,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 unreadNotifications: _unreadNotifications,
                 onSelected: _handleSectionSelection,
                 onNotifications: _openNotificationsPanel,
-                onLogout: widget.onLogout,
+                onLogout: _handleLogout,
                 child: animatedContent,
               );
         final framedShellWidth = usePortalShell
@@ -774,8 +875,12 @@ class _NotificationIconButton extends StatelessWidget {
 }
 
 class _ReceivedNotificationsPanel extends StatefulWidget {
-  const _ReceivedNotificationsPanel({required this.onClose});
+  const _ReceivedNotificationsPanel({
+    required this.openLatest,
+    required this.onClose,
+  });
 
+  final bool openLatest;
   final VoidCallback onClose;
 
   @override
@@ -786,6 +891,7 @@ class _ReceivedNotificationsPanel extends StatefulWidget {
 class _ReceivedNotificationsPanelState
     extends State<_ReceivedNotificationsPanel> {
   late Future<List<ReceivedNotification>> _notificationsFuture;
+  bool _didOpenLatest = false;
 
   @override
   void initState() {
@@ -872,6 +978,17 @@ class _ReceivedNotificationsPanelState
                   }
 
                   final notifications = snapshot.data ?? const [];
+
+                  if (widget.openLatest &&
+                      !_didOpenLatest &&
+                      notifications.isNotEmpty) {
+                    _didOpenLatest = true;
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) {
+                        _handleNotificationTap(notifications.first);
+                      }
+                    });
+                  }
 
                   if (notifications.isEmpty) {
                     return Center(
@@ -1059,6 +1176,95 @@ class _ReceivedNotificationCard extends StatelessWidget {
         ),
         if (unread) const Positioned(top: -8, right: -4, child: _UnreadDot()),
       ],
+    );
+  }
+}
+
+class _ReceivedNotificationDetailDialog extends StatelessWidget {
+  const _ReceivedNotificationDetailDialog({required this.notification});
+
+  final ReceivedNotification notification;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final width = math.min(size.width - 28, 560.0);
+    final height = math.min(size.height - 80, 680.0);
+    final textTheme = Theme.of(context).textTheme;
+
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 40),
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(22, 18, 12, 16),
+              decoration: const BoxDecoration(
+                color: AppPalette.night,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _notificationCategory(notification),
+                          style: textTheme.titleSmall?.copyWith(
+                            color: const Color(0xFF7DE3EF),
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          notification.title,
+                          style: textTheme.titleLarge?.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '${_formatDateLabel(notification.createdAt.toLocal())} ${_formatTimeLabel(notification.createdAt)}',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: Colors.white70,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    tooltip: 'Cerrar',
+                    icon: const Icon(Icons.close_rounded, color: Colors.white),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(22, 22, 22, 26),
+                child: SelectableText(
+                  notification.body,
+                  style: textTheme.bodyLarge?.copyWith(
+                    color: AppPalette.ink,
+                    height: 1.45,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1927,6 +2133,7 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
       AppSection.notifications,
       AppSection.credentials,
       AppSection.permissionExits,
+      AppSection.cellPhones,
       AppSection.lunches,
       AppSection.settings,
     ];
@@ -1977,6 +2184,7 @@ bool _isAttendanceSection(AppSection section) {
     case AppSection.home:
     case AppSection.availableEvents:
     case AppSection.permissionExits:
+    case AppSection.cellPhones:
     case AppSection.myExitPermits:
     case AppSection.exitPermitRequests:
     case AppSection.lunches:
@@ -1993,6 +2201,7 @@ bool _isAttendanceSection(AppSection section) {
 bool _isPermissionSection(AppSection section) {
   switch (section) {
     case AppSection.permissionExits:
+    case AppSection.cellPhones:
     case AppSection.myExitPermits:
     case AppSection.exitPermitRequests:
     case AppSection.lunches:
