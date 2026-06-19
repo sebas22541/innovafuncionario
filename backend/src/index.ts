@@ -3272,6 +3272,10 @@ async function ensureRuntimeSchema() {
   `);
 
   await pool.query(`
+    ALTER TYPE "rol_usuario" ADD VALUE IF NOT EXISTS 'ADMIN_SALUD'
+  `);
+
+  await pool.query(`
     DO $$
     BEGIN
       IF NOT EXISTS (
