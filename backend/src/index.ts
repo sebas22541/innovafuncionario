@@ -132,6 +132,7 @@ const pool = new Pool({
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 const requestIdHeader = "X-Request-Id";
+const HEALTH_OFFICE_LEVEL = 11;
 
 type AuthenticatedUser = {
   id: number;
@@ -354,7 +355,7 @@ const server = http.createServer(async (request, response) => {
     // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
 
     if (request.method === "POST" && url.pathname === "/api/auth/register") {
-      await assertAdminRequester(
+      const requester = await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede crear usuarios.",
       );
@@ -378,6 +379,7 @@ const server = http.createServer(async (request, response) => {
       if (input.oficinaId != null && !selectedOffice) {
         throw new HttpError(400, "La unidad seleccionada no existe.");
       }
+      assertHealthAdminCanUseOffice(requester, selectedOffice);
 
       const selectedCommissionOffice =
         input.oficinaComisionId == null
@@ -389,6 +391,7 @@ const server = http.createServer(async (request, response) => {
       if (input.oficinaComisionId != null && !selectedCommissionOffice) {
         throw new HttpError(400, "La oficina de comision seleccionada no existe.");
       }
+      assertHealthAdminCanUseOffice(requester, selectedCommissionOffice);
 
       const selectedCargo =
         input.cargoCodigo == null
@@ -557,7 +560,7 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(404, "No se encontro el usuario seleccionado.");
       }
 
-      if (existingUser.rol !== rol_usuario.ADMIN) {
+      if (!isAdminRole(existingUser.rol)) {
         throw new HttpError(
           403,
           "Solo un administrador puede editar su perfil.",
@@ -1010,7 +1013,7 @@ const server = http.createServer(async (request, response) => {
       assertAuthenticatedRequester(authenticatedUser);
 
       sendJson(response, 200, {
-        data: await loadSerializedOffices(),
+        data: await loadSerializedOffices(authenticatedUser),
       });
       return;
     }
@@ -1107,15 +1110,20 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/usuarios") {
-      await assertCredentialsRequester(
+      const requester = await assertCredentialsRequester(
         authenticatedUser.email,
         "Solo un administrador o usuario de credenciales puede consultar credenciales.",
       );
       const usuarios = await prisma.usuarios.findMany({
         where: {
-          email: {
-            not: SEED_ADMIN_EMAIL,
-          },
+          AND: [
+            {
+              email: {
+                not: SEED_ADMIN_EMAIL,
+              },
+            },
+            ...healthWhereArray(healthUserWhereForRequester(requester)),
+          ],
         },
         orderBy: [
           { rol: "asc" },
@@ -1133,7 +1141,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/usuarios") {
-      await assertAdminRequester(
+      const requester = await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede gestionar usuarios.",
       );
@@ -1149,6 +1157,9 @@ const server = http.createServer(async (request, response) => {
       if (input.oficinaId != null && !selectedOffice) {
         throw new HttpError(400, "La unidad seleccionada no existe.");
       }
+      assertManagedUserRoleAllowedForRequester(requester, input.rol);
+      assertManagedUserRoleOffice(input.rol, selectedOffice);
+      assertHealthAdminCanUseOffice(requester, selectedOffice);
 
       const selectedCommissionOffice =
         input.oficinaComisionId == null
@@ -1160,6 +1171,7 @@ const server = http.createServer(async (request, response) => {
       if (input.oficinaComisionId != null && !selectedCommissionOffice) {
         throw new HttpError(400, "La oficina de comision seleccionada no existe.");
       }
+      assertHealthAdminCanUseOffice(requester, selectedCommissionOffice);
 
       const selectedCargo =
         input.cargoCodigo == null
@@ -1261,7 +1273,7 @@ const server = http.createServer(async (request, response) => {
     const userId = readResourceId(url.pathname, "/api/usuarios/");
 
     if (request.method === "PUT" && userId != null) {
-      await assertAdminRequester(
+      const requester = await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede gestionar usuarios.",
       );
@@ -1279,6 +1291,7 @@ const server = http.createServer(async (request, response) => {
         if (!existingUser) {
           throw new HttpError(404, "No se encontro el usuario seleccionado.");
         }
+        assertHealthAdminCanManageUser(requester, existingUser);
 
         if ("email" in input) {
           const managedInput = input as UpdateManagedUserInput;
@@ -1292,6 +1305,9 @@ const server = http.createServer(async (request, response) => {
           if (managedInput.oficinaId != null && !selectedOffice) {
             throw new HttpError(400, "La unidad seleccionada no existe.");
           }
+          assertManagedUserRoleAllowedForRequester(requester, managedInput.rol);
+          assertManagedUserRoleOffice(managedInput.rol, selectedOffice);
+          assertHealthAdminCanUseOffice(requester, selectedOffice);
 
           const selectedCommissionOffice =
             managedInput.oficinaComisionId == null
@@ -1309,6 +1325,7 @@ const server = http.createServer(async (request, response) => {
               "La oficina de comision seleccionada no existe.",
             );
           }
+          assertHealthAdminCanUseOffice(requester, selectedCommissionOffice);
 
           const selectedCargo =
             managedInput.cargoCodigo == null
@@ -1443,7 +1460,7 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/inicio/resumen") {
       sendJson(response, 200, {
-        data: await loadDashboardSummary(),
+        data: await loadDashboardSummary(authenticatedUser),
       });
       return;
     }
@@ -1454,8 +1471,9 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, {
         data:
           view === "summary"
-            ? await loadSerializedEventSummaries()
+            ? await loadSerializedEventSummaries(authenticatedUser)
             : (await prisma.eventos.findMany({
+                where: healthEventWhereForRequester(authenticatedUser),
                 orderBy: [{ fecha_evento: "desc" }, { id: "desc" }],
                 include: eventInclude,
               })).map(serializeEvent),
@@ -1489,6 +1507,10 @@ const server = http.createServer(async (request, response) => {
           input.oficinaIds,
           input.oficinaIdsExcluidos,
           input.oficinaIdsFinales,
+        );
+        assertHealthAdminCanUseEventOffices(
+          operador,
+          resolvedOfficeSelection.expandedOffices,
         );
 
         if (resolvedOfficeSelection.expandedOffices.length > 0) {
@@ -1544,6 +1566,7 @@ const server = http.createServer(async (request, response) => {
       if (!evento) {
         throw new HttpError(404, "No se encontro el evento seleccionado.");
       }
+      assertHealthAdminCanManageEvent(authenticatedUser, evento);
 
       sendJson(response, 200, {
         data: await serializeEventWithAbsentees(evento),
@@ -1553,7 +1576,7 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "PUT" && eventId != null) {
       const input = parseUpdateEventInput(await readJsonBody(request));
-      await assertAdminRequester(
+      const operador = await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede editar eventos.",
       );
@@ -1561,11 +1584,17 @@ const server = http.createServer(async (request, response) => {
       const evento = await prisma.$transaction(async (tx) => {
         const existingEvent = await tx.eventos.findUnique({
           where: { id: eventId },
+          include: {
+            evento_oficinas: {
+              include: { oficinas: true },
+            },
+          },
         });
 
         if (!existingEvent) {
           throw new HttpError(404, "No se encontro el evento seleccionado.");
         }
+        assertHealthAdminCanManageEvent(operador, existingEvent);
 
         await tx.eventos.update({
           where: { id: eventId },
@@ -1593,6 +1622,10 @@ const server = http.createServer(async (request, response) => {
           input.oficinaIds,
           input.oficinaIdsExcluidos,
           input.oficinaIdsFinales,
+        );
+        assertHealthAdminCanUseEventOffices(
+          operador,
+          resolvedOfficeSelection.expandedOffices,
         );
 
         if (resolvedOfficeSelection.expandedOffices.length > 0) {
@@ -1637,18 +1670,24 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "DELETE" && eventId != null) {
-      await assertAdminRequester(
+      const operador = await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede borrar eventos.",
       );
 
       const existingEvent = await prisma.eventos.findUnique({
         where: { id: eventId },
+        include: {
+          evento_oficinas: {
+            include: { oficinas: true },
+          },
+        },
       });
 
       if (!existingEvent) {
         throw new HttpError(404, "No se encontro el evento seleccionado.");
       }
+      assertHealthAdminCanManageEvent(operador, existingEvent);
 
       await prisma.eventos.delete({
         where: { id: eventId },
@@ -1711,6 +1750,19 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(404, "No se encontro una persona con ese CI.");
       }
 
+      if (isHealthAdminUser(authenticatedUser)) {
+        const hasHealthMatch =
+          (user != null && isUserInHealthScope(user)) ||
+          people.some((person) => isUserInHealthScope(person.usuario));
+
+        if (!hasHealthMatch) {
+          throw new HttpError(
+            403,
+            "El administrador de salud solo puede consultar reportes de oficinas nivel 11.",
+          );
+        }
+      }
+
       const primaryPerson = people[0] ?? null;
       const records = people
         .flatMap((person) =>
@@ -1742,7 +1794,7 @@ const server = http.createServer(async (request, response) => {
       request.method === "GET" &&
       url.pathname === "/api/reportes/qr-generaciones"
     ) {
-      await assertAdminRequester(
+      const requester = await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede consultar el mapa de QR.",
       );
@@ -1755,6 +1807,7 @@ const server = http.createServer(async (request, response) => {
       const generatedFrom = readOptionalQueryIsoDate(url, "generatedFrom");
       const generatedTo = readOptionalQueryIsoDate(url, "generatedTo");
       const hasDateFilter = generatedFrom != null || generatedTo != null;
+      const healthPersonWhere = healthPersonWhereForRequester(requester);
 
       if (
         generatedFrom != null &&
@@ -1809,6 +1862,7 @@ const server = http.createServer(async (request, response) => {
                           evento_id: eventId,
                         }),
                   personas: {
+                    ...healthPersonWhere,
                     ...(query.length === 0
                         ? {}
                         : {
@@ -1876,9 +1930,14 @@ const server = http.createServer(async (request, response) => {
               )
           : (await prisma.personas.findMany({
               where: {
-                usuario_id: {
-                  not: null,
-                },
+                AND: [
+                  {
+                    usuario_id: {
+                      not: null,
+                    },
+                  },
+                  ...healthWhereArray(healthPersonWhere),
+                ],
               },
               include: personIdentityInclude,
               orderBy: [{ updated_at: "desc" }, { id: "desc" }],
@@ -2100,13 +2159,14 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/personas") {
-      await assertAdminRequester(
+      const requester = await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede listar personas.",
       );
       const limit = clampInt(url.searchParams.get("limit"), 20, 1, 100);
       const personas = await prisma.personas.findMany({
         take: limit,
+        where: healthPersonWhereForRequester(requester),
         orderBy: { id: "desc" },
         include: personIdentityInclude,
       });
@@ -4516,6 +4576,13 @@ async function resolveCredentialTargetUser(
     );
   }
 
+  if (isHealthAdminUser(authenticatedUser) && !isUserInHealthScope(user)) {
+    throw new HttpError(
+      403,
+      "El administrador de salud solo puede gestionar credenciales de oficinas nivel 11.",
+    );
+  }
+
   return user;
 }
 
@@ -4854,6 +4921,7 @@ function parseManagedUserInput(payload: unknown): ManagedUserInput {
   const baseInput = parseRegisterUserInput(payload);
   const requestedRole = readRequiredUppercaseChoice(body, "rol", [
     rol_usuario.ADMIN,
+    rol_usuario.ADMIN_SALUD,
     rol_usuario.CONTROL,
     rol_usuario.CREDENCIALES,
     rol_usuario.ALMUERZO,
@@ -4894,6 +4962,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
   const lugar = readOptionalString(body, "lugar", 0, 120);
   const requestedRole = readRequiredUppercaseChoice(body, "rol", [
     rol_usuario.ADMIN,
+    rol_usuario.ADMIN_SALUD,
     rol_usuario.CONTROL,
     rol_usuario.CREDENCIALES,
     rol_usuario.ALMUERZO,
@@ -5540,6 +5609,185 @@ function isAdminEmail(email: string) {
   return email.trim().toLowerCase().includes("@admin");
 }
 
+function isAdminRole(role: (typeof rol_usuario)[keyof typeof rol_usuario]) {
+  return role === rol_usuario.ADMIN || role === rol_usuario.ADMIN_SALUD;
+}
+
+function isHealthAdminUser(user: { rol?: string | null } | null | undefined) {
+  return user?.rol === rol_usuario.ADMIN_SALUD;
+}
+
+function isHealthOffice(office: { nivel?: number | null } | null | undefined) {
+  return office?.nivel === HEALTH_OFFICE_LEVEL;
+}
+
+function isUserInHealthScope(user: any) {
+  return isHealthOffice(user?.oficinas) || isHealthOffice(user?.oficina_comision);
+}
+
+function healthUserWhereForRequester(requester: any) {
+  if (!isHealthAdminUser(requester)) {
+    return undefined;
+  }
+
+  return {
+    OR: [
+      { oficinas: { is: { nivel: HEALTH_OFFICE_LEVEL } } },
+      { oficina_comision: { is: { nivel: HEALTH_OFFICE_LEVEL } } },
+    ],
+  };
+}
+
+function healthPersonWhereForRequester(requester: any) {
+  const userWhere = healthUserWhereForRequester(requester);
+
+  if (userWhere == null) {
+    return undefined;
+  }
+
+  return {
+    usuario: {
+      is: userWhere,
+    },
+  };
+}
+
+function healthExitPermitWhereForRequester(requester: any) {
+  const userWhere = healthUserWhereForRequester(requester);
+
+  if (userWhere == null) {
+    return undefined;
+  }
+
+  return {
+    usuarios: {
+      is: userWhere,
+    },
+  };
+}
+
+function healthEventWhereForRequester(requester: any) {
+  if (!isHealthAdminUser(requester)) {
+    return undefined;
+  }
+
+  return {
+    AND: [
+      {
+        evento_oficinas: {
+          some: {
+            oficinas: {
+              nivel: HEALTH_OFFICE_LEVEL,
+            },
+          },
+        },
+      },
+      {
+        evento_oficinas: {
+          every: {
+            oficinas: {
+              nivel: HEALTH_OFFICE_LEVEL,
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
+function healthWhereArray(where: any) {
+  return where == null ? [] : [where];
+}
+
+function assertHealthAdminCanUseOffice(
+  requester: any,
+  office: { nivel?: number | null } | null | undefined,
+) {
+  if (!isHealthAdminUser(requester) || office == null) {
+    return;
+  }
+
+  if (!isHealthOffice(office)) {
+    throw new HttpError(
+      403,
+      "El administrador de salud solo puede gestionar oficinas de nivel 11.",
+    );
+  }
+}
+
+function assertHealthAdminCanManageUser(requester: any, user: any) {
+  if (!isHealthAdminUser(requester)) {
+    return;
+  }
+
+  if (!isUserInHealthScope(user)) {
+    throw new HttpError(
+      403,
+      "El administrador de salud solo puede gestionar usuarios de oficinas nivel 11.",
+    );
+  }
+}
+
+function assertManagedUserRoleAllowedForRequester(
+  requester: any,
+  role: (typeof rol_usuario)[keyof typeof rol_usuario],
+) {
+  if (!isHealthAdminUser(requester)) {
+    return;
+  }
+
+  if (role === rol_usuario.ADMIN) {
+    throw new HttpError(
+      403,
+      "El administrador de salud no puede crear administradores generales.",
+    );
+  }
+}
+
+function assertManagedUserRoleOffice(
+  role: (typeof rol_usuario)[keyof typeof rol_usuario],
+  office: { nivel?: number | null } | null | undefined,
+) {
+  if (role !== rol_usuario.ADMIN_SALUD) {
+    return;
+  }
+
+  if (!isHealthOffice(office)) {
+    throw new HttpError(
+      400,
+      "El rol admin (salud) debe estar asociado a una oficina de nivel 11.",
+    );
+  }
+}
+
+function assertHealthAdminCanUseEventOffices(requester: any, offices: any[]) {
+  if (!isHealthAdminUser(requester)) {
+    return;
+  }
+
+  if (offices.length === 0 || offices.some((office) => !isHealthOffice(office))) {
+    throw new HttpError(
+      403,
+      "El administrador de salud solo puede crear eventos para oficinas nivel 11.",
+    );
+  }
+}
+
+function assertHealthAdminCanManageEvent(requester: any, event: any) {
+  if (!isHealthAdminUser(requester)) {
+    return;
+  }
+
+  const offices = event?.evento_oficinas?.map((item: any) => item.oficinas) ?? [];
+
+  if (offices.length === 0 || offices.some((office: any) => !isHealthOffice(office))) {
+    throw new HttpError(
+      403,
+      "El administrador de salud solo puede gestionar eventos de oficinas nivel 11.",
+    );
+  }
+}
+
 async function assertAdminRequester(
   email: string,
   message = "Solo un administrador puede realizar esta accion.",
@@ -5548,7 +5796,7 @@ async function assertAdminRequester(
     where: { email: email.toLowerCase() },
   });
 
-  if (!user || user.rol !== rol_usuario.ADMIN || user.activo !== true) {
+  if (!user || !isAdminRole(user.rol) || user.activo !== true) {
     throw new HttpError(403, message);
   }
 
@@ -5565,7 +5813,7 @@ async function assertCredentialsRequester(
 
   if (
     !user ||
-    (user.rol !== rol_usuario.ADMIN && user.rol !== rol_usuario.CREDENCIALES) ||
+    (!isAdminRole(user.rol) && user.rol !== rol_usuario.CREDENCIALES) ||
     user.activo !== true
   ) {
     throw new HttpError(403, message);
@@ -5575,11 +5823,11 @@ async function assertCredentialsRequester(
 }
 
 function isAdminUser(user: AuthenticatedUser) {
-  return user.rol === rol_usuario.ADMIN;
+  return isAdminRole(user.rol);
 }
 
 function canScanQrData(user: AuthenticatedUser) {
-  return user.rol === rol_usuario.ADMIN || user.rol === rol_usuario.CONTROL;
+  return isAdminRole(user.rol) || user.rol === rol_usuario.CONTROL;
 }
 
 function assertLunchScannerRequester(user: AuthenticatedUser) {
@@ -5598,7 +5846,7 @@ function assertExitPermitScannerRequester(user: AuthenticatedUser) {
 }
 
 function assertLunchReportRequester(user: AuthenticatedUser) {
-  if (user.id <= 0 || user.activo !== true || user.rol !== rol_usuario.ADMIN) {
+  if (user.id <= 0 || user.activo !== true || !isAdminRole(user.rol)) {
     throw new HttpError(403, "Solo un administrador puede consultar almuerzos.");
   }
 }
@@ -5720,10 +5968,11 @@ function buildExitPermitListWhere(
 
   if (isAdminUser(authenticatedUser)) {
     return {
-      ...(fechaPermiso == null ? {} : { fecha_permiso: fechaPermiso }),
-      ...(searchText == null
-        ? {}
-        : buildExitPermitSearchWhere(searchText)),
+      AND: [
+        ...(fechaPermiso == null ? [] : [{ fecha_permiso: fechaPermiso }]),
+        ...(searchText == null ? [] : [buildExitPermitSearchWhere(searchText)]),
+        ...healthWhereArray(healthExitPermitWhereForRequester(authenticatedUser)),
+      ],
     };
   }
 
@@ -6082,7 +6331,7 @@ async function assertEventOperator(userId: number) {
   if (
     !user ||
     user.activo !== true ||
-    (user.rol !== rol_usuario.ADMIN && user.rol !== rol_usuario.CONTROL)
+    (!isAdminRole(user.rol) && user.rol !== rol_usuario.CONTROL)
   ) {
     throw new HttpError(
       403,
@@ -7730,7 +7979,16 @@ function buildAttendanceQrSnapshot(
   };
 }
 
-async function loadSerializedOffices() {
+async function loadSerializedOffices(requester?: AuthenticatedUser) {
+  if (requester != null && isHealthAdminUser(requester)) {
+    const oficinas = await prisma.oficinas.findMany({
+      where: { nivel: HEALTH_OFFICE_LEVEL },
+    });
+    oficinas.sort(compareOfficeHierarchy);
+
+    return oficinas.map(serializeOffice);
+  }
+
   const cachedOffices = readCacheValue(officesCache);
 
   if (cachedOffices != null) {
@@ -7761,7 +8019,27 @@ async function loadSerializedJobTitles() {
   return serializedJobTitles;
 }
 
-async function loadDashboardSummary() {
+async function loadDashboardSummary(requester?: AuthenticatedUser) {
+  if (requester != null && isHealthAdminUser(requester)) {
+    const [usuariosRegistrados, oficinas, eventos] = await Promise.all([
+      prisma.usuarios.count({
+        where: healthUserWhereForRequester(requester),
+      }),
+      prisma.oficinas.count({
+        where: { nivel: HEALTH_OFFICE_LEVEL },
+      }),
+      prisma.eventos.count({
+        where: healthEventWhereForRequester(requester),
+      }),
+    ]);
+
+    return {
+      usuariosRegistrados,
+      oficinas,
+      eventos,
+    };
+  }
+
   const cachedSummary = readCacheValue(dashboardSummaryCache);
 
   if (cachedSummary != null) {
@@ -8378,7 +8656,24 @@ function chunkArray<T>(values: T[], size: number) {
   return chunks;
 }
 
-async function loadSerializedEventSummaries() {
+async function loadSerializedEventSummaries(requester?: AuthenticatedUser) {
+  const eventWhere = healthEventWhereForRequester(requester);
+
+  if (eventWhere != null) {
+    const events = await prisma.eventos.findMany({
+      where: eventWhere,
+      orderBy: [{ fecha_evento: "desc" }, { id: "desc" }],
+      include: eventSummaryInclude,
+    });
+    const attendanceCountMap = await loadEventAttendanceCountMap(
+      events.map((event) => event.id),
+    );
+
+    return events.map((event) =>
+      serializeEventSummary(event, attendanceCountMap.get(event.id)),
+    );
+  }
+
   const cachedEvents = readCacheValue(eventSummaryCache);
 
   if (cachedEvents != null) {
