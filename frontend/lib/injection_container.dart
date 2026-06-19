@@ -1,4 +1,5 @@
 import 'features/auth/infrastructure/services/auth_api_service.dart';
+import 'features/devices/infrastructure/services/devices_api_service.dart';
 import 'features/events/infrastructure/services/events_api_service.dart';
 import 'features/lunches/infrastructure/services/lunches_api_service.dart';
 import 'features/notifications/infrastructure/services/notifications_api_service.dart';
@@ -21,12 +22,14 @@ Future<void> initDependencies() async {
   final exitPermitsApiService = ExitPermitsApiService(backendApiClient);
   final lunchesApiService = LunchesApiService(backendApiClient);
   final authApiService = AuthApiService(backendApiClient);
+  final devicesApiService = DevicesApiService(backendApiClient);
   final notificationsApiService = NotificationsApiService(backendApiClient);
   final reportsApiService = ReportsApiService(backendApiClient);
 
   dependencies = AppDependencies._(
     authApiService: authApiService,
     backendApiClient: backendApiClient,
+    devicesApiService: devicesApiService,
     eventsApiService: eventsApiService,
     exitPermitsApiService: exitPermitsApiService,
     lunchesApiService: lunchesApiService,
@@ -42,6 +45,7 @@ class AppDependencies {
   const AppDependencies._({
     required this.authApiService,
     required this.backendApiClient,
+    required this.devicesApiService,
     required this.eventsApiService,
     required this.exitPermitsApiService,
     required this.lunchesApiService,
@@ -54,6 +58,7 @@ class AppDependencies {
 
   final AuthApiService authApiService;
   final BackendApiClient backendApiClient;
+  final DevicesApiService devicesApiService;
   final EventsApiService eventsApiService;
   final ExitPermitsApiService exitPermitsApiService;
   final LunchesApiService lunchesApiService;

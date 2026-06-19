@@ -10,6 +10,7 @@ enum AppSection {
   notifications,
   credentials,
   permissionExits,
+  cellPhones,
   myExitPermits,
   exitPermitRequests,
   lunches,
@@ -42,6 +43,8 @@ extension AppSectionX on AppSection {
         return 'Credenciales';
       case AppSection.permissionExits:
         return 'Salidas';
+      case AppSection.cellPhones:
+        return 'Celulares';
       case AppSection.myExitPermits:
         return 'Mis solicitudes';
       case AppSection.exitPermitRequests:
@@ -79,6 +82,8 @@ extension AppSectionX on AppSection {
         return 'Credenciales';
       case AppSection.permissionExits:
         return 'Permisos';
+      case AppSection.cellPhones:
+        return 'Celulares';
       case AppSection.myExitPermits:
         return 'Mis solicitudes';
       case AppSection.exitPermitRequests:
@@ -116,6 +121,8 @@ extension AppSectionX on AppSection {
         return Icons.badge_outlined;
       case AppSection.permissionExits:
         return Icons.exit_to_app_rounded;
+      case AppSection.cellPhones:
+        return Icons.phone_android_rounded;
       case AppSection.myExitPermits:
         return Icons.assignment_outlined;
       case AppSection.exitPermitRequests:
