@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.BatteryManager
 import android.provider.Settings
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -55,6 +56,10 @@ class MainActivity : FlutterActivity() {
         val admin = ComponentName(this, KioskDeviceAdminReceiver::class.java)
         devicePolicyManager.setLockTaskPackages(admin, arrayOf(packageName))
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            devicePolicyManager.setKeyguardDisabled(admin, true)
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             devicePolicyManager.setLockTaskFeatures(
                 admin,
@@ -62,6 +67,7 @@ class MainActivity : FlutterActivity() {
             )
         }
 
+        applyLunchKioskDisplayPolicy()
         startLockTask()
         return true
     }
@@ -70,7 +76,41 @@ class MainActivity : FlutterActivity() {
         try {
             stopLockTask()
         } catch (_: IllegalStateException) {
+            // La app puede no estar en lock task si Android aun no lo inicio.
+        }
+        clearLunchKioskDevicePolicy()
+        clearLunchKioskDisplayPolicy()
+    }
+
+    private fun clearLunchKioskDevicePolicy() {
+        val devicePolicyManager =
+            getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+
+        if (!devicePolicyManager.isDeviceOwnerApp(packageName)) {
             return
+        }
+
+        val admin = ComponentName(this, KioskDeviceAdminReceiver::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            devicePolicyManager.setKeyguardDisabled(admin, false)
+        }
+    }
+
+    private fun applyLunchKioskDisplayPolicy() {
+        runOnUiThread {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            val attributes = window.attributes
+            attributes.screenBrightness = 0.8f
+            window.attributes = attributes
+        }
+    }
+
+    private fun clearLunchKioskDisplayPolicy() {
+        runOnUiThread {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            val attributes = window.attributes
+            attributes.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            window.attributes = attributes
         }
     }
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -29,6 +31,8 @@ class LunchScannerScreen extends StatefulWidget {
 }
 
 class _LunchScannerScreenState extends State<LunchScannerScreen> {
+  static const Duration _scannerIdleTimeout = Duration(minutes: 5);
+
   final MobileScannerController _controller = MobileScannerController(
     autoStart: true,
     facing: CameraFacing.front,
@@ -42,9 +46,11 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
   ExitPermitScanResponse? _lastExitPermitResponse;
   String? _lastError;
   bool _isHandlingDetection = false;
+  Timer? _idleTimer;
 
   @override
   void dispose() {
+    _idleTimer?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -69,6 +75,8 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
     if (scan.value.isEmpty) {
       return;
     }
+
+    _resetIdleTimer();
 
     setState(() {
       _isHandlingDetection = true;
@@ -152,35 +160,59 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
           });
           widget.onModeActiveChanged?.call(true);
           _controller.start();
+          _startIdleTimer();
         },
       );
     }
 
     final selectedMode = _selectedMode!;
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isWide = constraints.maxWidth >= 900;
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => _resetIdleTimer(),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isWide = constraints.maxWidth >= 900;
 
-        return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
-          child: isWide
-              ? Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      flex: 7,
-                      child: _LunchScannerViewport(
+          return SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+            child: isWide
+                ? Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        flex: 7,
+                        child: _LunchScannerViewport(
+                          controller: _controller,
+                          isScannerActive: !_isHandlingDetection,
+                          onDetect: _handleDetect,
+                          mode: selectedMode,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        flex: 5,
+                        child: _LunchScanResultCard(
+                          mode: selectedMode,
+                          lunchResponse: _lastLunchResponse,
+                          exitPermitResponse: _lastExitPermitResponse,
+                          errorMessage: _lastError,
+                          isScanning: !_isHandlingDetection,
+                          onChangeMode: _changeMode,
+                        ),
+                      ),
+                    ],
+                  )
+                : Column(
+                    children: [
+                      _LunchScannerViewport(
                         controller: _controller,
                         isScannerActive: !_isHandlingDetection,
                         onDetect: _handleDetect,
                         mode: selectedMode,
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      flex: 5,
-                      child: _LunchScanResultCard(
+                      const SizedBox(height: 12),
+                      _LunchScanResultCard(
                         mode: selectedMode,
                         lunchResponse: _lastLunchResponse,
                         exitPermitResponse: _lastExitPermitResponse,
@@ -188,34 +220,16 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
                         isScanning: !_isHandlingDetection,
                         onChangeMode: _changeMode,
                       ),
-                    ),
-                  ],
-                )
-              : Column(
-                  children: [
-                    _LunchScannerViewport(
-                      controller: _controller,
-                      isScannerActive: !_isHandlingDetection,
-                      onDetect: _handleDetect,
-                      mode: selectedMode,
-                    ),
-                    const SizedBox(height: 12),
-                    _LunchScanResultCard(
-                      mode: selectedMode,
-                      lunchResponse: _lastLunchResponse,
-                      exitPermitResponse: _lastExitPermitResponse,
-                      errorMessage: _lastError,
-                      isScanning: !_isHandlingDetection,
-                      onChangeMode: _changeMode,
-                    ),
-                  ],
-                ),
-        );
-      },
+                    ],
+                  ),
+          );
+        },
+      ),
     );
   }
 
   Future<void> _changeMode() async {
+    _cancelIdleTimer();
     await _controller.stop();
     if (!mounted) {
       return;
@@ -232,6 +246,7 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
   }
 
   void _returnToModeSelection() {
+    _cancelIdleTimer();
     _controller.stop();
 
     setState(() {
@@ -242,6 +257,32 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
       _isHandlingDetection = false;
     });
     widget.onModeActiveChanged?.call(false);
+  }
+
+  void _startIdleTimer() {
+    _idleTimer?.cancel();
+    if (_selectedMode == null) {
+      return;
+    }
+
+    _idleTimer = Timer(_scannerIdleTimeout, () {
+      if (!mounted || _selectedMode == null) {
+        return;
+      }
+      _returnToModeSelection();
+    });
+  }
+
+  void _resetIdleTimer() {
+    if (_selectedMode == null) {
+      return;
+    }
+    _startIdleTimer();
+  }
+
+  void _cancelIdleTimer() {
+    _idleTimer?.cancel();
+    _idleTimer = null;
   }
 }
 
@@ -269,51 +310,52 @@ class _ScannerModeSelection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Selecciona el tipo de registro',
-            style: Theme.of(context).textTheme.titleLarge,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth >= 720;
+        final minHeight = constraints.hasBoundedHeight
+            ? (constraints.maxHeight - 56).clamp(0.0, double.infinity)
+            : 0.0;
+        final buttons = [
+          _ScannerModeButton(
+            mode: _ScannerMode.lunch,
+            onTap: () => onSelected(_ScannerMode.lunch),
           ),
-          const SizedBox(height: 14),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final isWide = constraints.maxWidth >= 720;
-              final buttons = [
-                _ScannerModeButton(
-                  mode: _ScannerMode.lunch,
-                  onTap: () => onSelected(_ScannerMode.lunch),
-                ),
-                _ScannerModeButton(
-                  mode: _ScannerMode.exitPermit,
-                  onTap: () => onSelected(_ScannerMode.exitPermit),
-                ),
-              ];
-
-              if (isWide) {
-                return Row(
-                  children: [
-                    Expanded(child: buttons.first),
-                    const SizedBox(width: 14),
-                    Expanded(child: buttons.last),
-                  ],
-                );
-              }
-
-              return Column(
+          _ScannerModeButton(
+            mode: _ScannerMode.exitPermit,
+            onTap: () => onSelected(_ScannerMode.exitPermit),
+          ),
+        ];
+        final content = isWide
+            ? Row(
+                children: [
+                  Expanded(child: buttons.first),
+                  const SizedBox(width: 14),
+                  Expanded(child: buttons.last),
+                ],
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   buttons.first,
                   const SizedBox(height: 12),
                   buttons.last,
                 ],
               );
-            },
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 28, 20, 28),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: minHeight),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: isWide ? 760 : 420),
+                child: content,
+              ),
+            ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -674,9 +716,7 @@ class _LunchScannerViewport extends StatelessWidget {
                       right: 16,
                       top: 16,
                       child: _ScannerBadge(
-                        text: isScannerActive
-                            ? mode.label
-                            : 'Registrando',
+                        text: isScannerActive ? mode.label : 'Registrando',
                       ),
                     ),
                     Positioned(
@@ -799,10 +839,7 @@ class _LunchScanResultCard extends StatelessWidget {
                 value: exitPermitRecord.applicantFullName,
               ),
               _ResultRow(label: 'CI', value: exitPermitRecord.applicantCi),
-              _ResultRow(
-                label: 'Destino',
-                value: exitPermitRecord.destination,
-              ),
+              _ResultRow(label: 'Destino', value: exitPermitRecord.destination),
               _ResultRow(label: 'Salida', value: exitPermitRecord.startTime),
               _ResultRow(
                 label: 'Llegada',
