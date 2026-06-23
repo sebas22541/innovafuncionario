@@ -1167,7 +1167,7 @@ const server = http.createServer(async (request, response) => {
                 not: SEED_ADMIN_EMAIL,
               },
             },
-            ...healthWhereArray(healthUserWhereForRequester(requester)),
+            ...healthWhereArray(userDirectoryWhereForRequester(requester)),
           ],
         },
         orderBy: [
@@ -5777,6 +5777,23 @@ function healthUserWhereForRequester(requester: any) {
       { oficinas: { is: { nivel: HEALTH_OFFICE_LEVEL } } },
       { oficina_comision: { is: { nivel: HEALTH_OFFICE_LEVEL } } },
     ],
+  };
+}
+
+function userDirectoryWhereForRequester(requester: any) {
+  const healthWhere = healthUserWhereForRequester(requester);
+
+  if (healthWhere != null) {
+    return healthWhere;
+  }
+
+  return {
+    NOT: {
+      OR: [
+        { oficinas: { is: { nivel: HEALTH_OFFICE_LEVEL } } },
+        { oficina_comision: { is: { nivel: HEALTH_OFFICE_LEVEL } } },
+      ],
+    },
   };
 }
 

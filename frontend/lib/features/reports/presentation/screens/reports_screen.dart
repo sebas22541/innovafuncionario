@@ -6,6 +6,7 @@ import 'package:printing/printing.dart';
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/excel_exporter.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../../../shared/widgets/base64_avatar.dart';
@@ -44,6 +45,8 @@ const Map<int, pw.TableColumnWidth> _personnelPdfColumnWidths = {
 };
 const _personnelTipoOptions = ['ITEM', 'EVENTUAL', 'CONSULTOR'];
 
+enum _PersonnelExcelExportMode { normal, byItem }
+
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key, required this.currentUser});
 
@@ -76,6 +79,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   bool _isExporting = false;
   bool _isExportingEventPdf = false;
   bool _isExportingPersonnelPdf = false;
+  bool _isExportingPersonnelExcel = false;
   String? _errorMessage;
   String? _eventErrorMessage;
   String? _personnelErrorMessage;
@@ -839,6 +843,106 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
+  Future<void> _selectPersonnelExcelExportMode() async {
+    if (_isExportingPersonnelExcel) {
+      return;
+    }
+
+    final mode = await showModalBottomSheet<_PersonnelExcelExportMode>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.table_view_rounded),
+                  title: const Text('Reporte normal'),
+                  onTap: () => Navigator.of(
+                    context,
+                  ).pop(_PersonnelExcelExportMode.normal),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.format_list_numbered_rounded),
+                  title: const Text('Reporte por item'),
+                  onTap: () => Navigator.of(
+                    context,
+                  ).pop(_PersonnelExcelExportMode.byItem),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (mode == null) {
+      return;
+    }
+
+    await _exportPersonnelExcel(mode);
+  }
+
+  Future<void> _exportPersonnelExcel(_PersonnelExcelExportMode mode) async {
+    await _ensurePersonnelReferences();
+
+    if (!mounted) {
+      return;
+    }
+
+    final users = switch (mode) {
+      _PersonnelExcelExportMode.normal => [..._filteredPersonnelUsers],
+      _PersonnelExcelExportMode.byItem => _sortPersonnelUsersByItem(
+        _filteredPersonnelUsers,
+      ),
+    };
+
+    if (users.isEmpty) {
+      AppAlert.showWarning(
+        context,
+        'No hay usuarios para exportar con esos filtros.',
+      );
+      return;
+    }
+
+    setState(() {
+      _isExportingPersonnelExcel = true;
+    });
+
+    try {
+      final suffix = mode == _PersonnelExcelExportMode.byItem
+          ? 'por_item'
+          : 'general';
+
+      await exportExcelWorkbook(
+        fileName:
+            'reporte-personal-$suffix-${_formatFilenameDate(DateTime.now())}.xlsx',
+        sheetName: mode == _PersonnelExcelExportMode.byItem
+            ? 'Personal por item'
+            : 'Personal',
+        headers: _personnelExcelHeaders(mode),
+        rows: _buildPersonnelExcelRows(users, mode),
+      );
+
+      if (mounted) {
+        AppAlert.showSuccess(context, 'Excel de personal generado.');
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible exportar personal.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExportingPersonnelExcel = false;
+        });
+      }
+    }
+  }
+
   Future<void> _exportPersonnelPdf() async {
     await _ensurePersonnelReferences();
 
@@ -1062,6 +1166,26 @@ class _ReportsScreenState extends State<ReportsScreen> {
                               : _refreshPersonnelReferences,
                           icon: const Icon(Icons.refresh_rounded),
                           label: const Text('Actualizar'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed:
+                              _isLoadingPersonnel || _isExportingPersonnelExcel
+                              ? null
+                              : _selectPersonnelExcelExportMode,
+                          icon: _isExportingPersonnelExcel
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.file_download_outlined),
+                          label: Text(
+                            _isExportingPersonnelExcel
+                                ? 'Exportando...'
+                                : 'Exportar Excel',
+                          ),
                         ),
                         ElevatedButton.icon(
                           onPressed:
@@ -2574,6 +2698,77 @@ List<List<String>> _buildPersonnelPdfRows(List<AppUser> users) {
       .toList(growable: false);
 }
 
+List<String> _personnelExcelHeaders(_PersonnelExcelExportMode mode) {
+  if (mode == _PersonnelExcelExportMode.byItem) {
+    return const [
+      'Item',
+      'CI',
+      'Nombre completo',
+      'Unidad',
+      'Cargo',
+      'Comision',
+    ];
+  }
+
+  return const [
+    'Nro',
+    'Item',
+    'CI',
+    'Nombre completo',
+    'Celular',
+    'Usuario',
+    'Rol',
+    'Tipo',
+    'Cargo',
+    'Subcargo',
+    'Unidad',
+    'Comision',
+    'Lugar',
+    'Estado',
+  ];
+}
+
+List<List<Object?>> _buildPersonnelExcelRows(
+  List<AppUser> users,
+  _PersonnelExcelExportMode mode,
+) {
+  if (mode == _PersonnelExcelExportMode.byItem) {
+    return [
+      for (final user in users)
+        [
+          user.numeroItem,
+          user.ci,
+          user.fullName,
+          user.primaryOfficeName ?? user.officeName ?? user.unidad,
+          user.effectiveCargo,
+          user.commissionOfficeName ?? '',
+        ],
+    ];
+  }
+
+  return [
+    for (var index = 0; index < users.length; index++)
+      [
+        index + 1,
+        users[index].numeroItem,
+        users[index].ci,
+        users[index].fullName,
+        users[index].celular,
+        users[index].email,
+        users[index].roleLabel,
+        _tipoVinculoLabel(users[index].tipoVinculo),
+        users[index].effectiveCargo,
+        users[index].subcargo,
+        users[index].primaryOfficeName ??
+            users[index].officeName ??
+            users[index].unidad,
+        users[index].commissionOfficeName ?? '',
+        users[index].lugar,
+        users[index].estadoLabel,
+      ],
+  ];
+}
+
 List<AppUser> _sortPersonnelUsers(List<AppUser> users) {
   final sortedUsers = [...users];
 
@@ -2605,6 +2800,43 @@ List<AppUser> _sortPersonnelUsers(List<AppUser> users) {
   });
 
   return sortedUsers;
+}
+
+List<AppUser> _sortPersonnelUsersByItem(List<AppUser> users) {
+  final sortedUsers = [...users];
+
+  sortedUsers.sort((left, right) {
+    final leftItem = _personnelItemSortValue(left.numeroItem);
+    final rightItem = _personnelItemSortValue(right.numeroItem);
+    final itemComparison = leftItem.compareTo(rightItem);
+
+    if (itemComparison != 0) {
+      return itemComparison;
+    }
+
+    return left.fullName.toLowerCase().compareTo(right.fullName.toLowerCase());
+  });
+
+  return sortedUsers;
+}
+
+String _personnelItemSortValue(String value) {
+  final normalized = value.trim();
+
+  if (normalized.isEmpty) {
+    return '1|';
+  }
+
+  final numberMatch = RegExp(r'\d+').firstMatch(normalized);
+  final number = numberMatch == null
+      ? null
+      : int.tryParse(numberMatch.group(0)!);
+
+  if (number == null) {
+    return '1|${normalized.toLowerCase()}';
+  }
+
+  return '0|${number.toString().padLeft(12, '0')}|${normalized.toLowerCase()}';
 }
 
 bool _userMatchesAnyOffice(AppUser user, Set<int> officeIds) {
