@@ -1,10 +1,21 @@
 import 'dart:typed_data';
 
+import 'package:share_plus/share_plus.dart';
+
 Future<void> downloadExcelFile({
   required String fileName,
   required Uint8List bytes,
 }) async {
-  throw UnsupportedError(
-    'La descarga de Excel solo esta disponible en la version web.',
+  await SharePlus.instance.share(
+    ShareParams(
+      files: [
+        XFile.fromData(
+          bytes,
+          name: fileName,
+          mimeType:
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ),
+      ],
+    ),
   );
 }

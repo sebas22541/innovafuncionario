@@ -7,10 +7,7 @@ import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
 import '../../../../shared/infrastructure/excel_exporter.dart';
-<<<<<<< HEAD
-=======
 import '../../../../shared/models/app_user.dart';
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
 import '../../../../shared/widgets/app_alert.dart';
 import '../../../../shared/widgets/base64_avatar.dart';
 import '../../../auth/domain/entities/cargo_option.dart';
@@ -82,11 +79,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
   bool _isExporting = false;
   bool _isExportingEventPdf = false;
   bool _isExportingEventExcel = false;
-<<<<<<< HEAD
-=======
   bool _isExportingPersonnelPdf = false;
   bool _isExportingPersonnelExcel = false;
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
   String? _errorMessage;
   String? _eventErrorMessage;
   String? _personnelErrorMessage;
@@ -857,7 +851,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
       return;
     }
 
-<<<<<<< HEAD
     final rows = _buildEventExcelRows(event);
 
     if (rows.isEmpty) {
@@ -868,8 +861,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
       return;
     }
 
-=======
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
     setState(() {
       _isExportingEventExcel = true;
     });
@@ -879,11 +870,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         fileName: _buildEventExcelFilename(event),
         sheetName: 'Reporte evento',
         headers: _buildEventExcelHeaders(event),
-<<<<<<< HEAD
         rows: rows,
-=======
-        rows: _buildEventExcelRows(event),
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
       );
 
       if (mounted) {
@@ -902,8 +889,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
-<<<<<<< HEAD
-=======
   Future<void> _selectPersonnelExcelExportMode() async {
     if (_isExportingPersonnelExcel) {
       return;
@@ -1091,7 +1076,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
   @override
   Widget build(BuildContext context) {
     final report = _report;
@@ -2744,8 +2728,6 @@ List<List<String>> _buildEventPdfRows(List<EventRosterEntry> entries) {
       .toList(growable: false);
 }
 
-<<<<<<< HEAD
-=======
 List<List<String>> _buildEventAbsenteePdfRows(
   List<EventAbsenteeEntry> entries,
 ) {
@@ -2770,7 +2752,6 @@ List<List<String>> _buildEventAbsenteePdfRows(
       .toList(growable: false);
 }
 
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
 List<String> _buildEventExcelHeaders(EventRecord event) {
   return [
     'Fecha',
@@ -2785,20 +2766,6 @@ List<String> _buildEventExcelHeaders(EventRecord event) {
 
 List<List<Object?>> _buildEventExcelRows(EventRecord event) {
   final controls = _sortedEventControls(event.controls);
-<<<<<<< HEAD
-  final entries = [
-    ..._sortEventRosterEntries(event.attended),
-    ..._sortEventRosterEntries(event.observed),
-  ].where((entry) => entry.controls.isNotEmpty);
-
-  return [
-    for (final entry in entries)
-      _buildEventExcelRow(event: event, entry: entry, controls: controls),
-  ];
-}
-
-List<Object?> _buildEventExcelRow({
-=======
   final rows = <List<Object?>>[];
 
   for (final entry in _sortEventRosterEntries(event.attended)) {
@@ -2837,7 +2804,6 @@ List<Object?> _buildEventExcelRow({
 }
 
 List<Object?> _buildEventAttendanceExcelRow({
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
   required EventRecord event,
   required EventRosterEntry entry,
   required List<EventControl> controls,
@@ -2875,8 +2841,6 @@ List<EventControl> _sortedEventControls(List<EventControl> controls) {
   return sortedControls;
 }
 
-<<<<<<< HEAD
-=======
 List<List<String>> _buildPersonnelPdfRows(List<AppUser> users) {
   return users
       .map(
@@ -3088,7 +3052,6 @@ String _normalizeSearch(String value) {
       .trim();
 }
 
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
 List<EventRosterEntry> _sortEventRosterEntries(List<EventRosterEntry> entries) {
   final sortedEntries = [...entries];
 
@@ -3170,8 +3133,6 @@ String _buildEventExcelFilename(EventRecord event) {
   return 'reporte-evento-${event.id}-$safeName.xlsx';
 }
 
-<<<<<<< HEAD
-=======
 String _formatFilenameDate(DateTime value) {
   final year = value.year.toString();
   final month = value.month.toString().padLeft(2, '0');
@@ -3182,7 +3143,6 @@ String _formatFilenameDate(DateTime value) {
   return '$year$month$day-$hour$minute';
 }
 
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
 String _eventSearchLabel(EventRecord event) {
   return '${event.name} | ${_formatDateTime(event.date)}';
 }

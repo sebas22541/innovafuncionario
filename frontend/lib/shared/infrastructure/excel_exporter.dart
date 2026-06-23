@@ -1,12 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:excel/excel.dart';
-<<<<<<< HEAD
-import 'package:share_plus/share_plus.dart';
-=======
 
 import 'excel_file_downloader.dart';
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
 
 Future<void> exportExcelWorkbook({
   required String fileName,
@@ -38,24 +34,7 @@ Future<void> exportExcelWorkbook({
     throw StateError('No fue posible generar el archivo Excel.');
   }
 
-<<<<<<< HEAD
-  await SharePlus.instance.share(
-    ShareParams(
-      files: [
-        XFile.fromData(
-          Uint8List.fromList(bytes),
-          name: fileName,
-          mimeType:
-              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        ),
-      ],
-    ),
-=======
-  await downloadExcelFile(
-    fileName: fileName,
-    bytes: Uint8List.fromList(bytes),
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
-  );
+  await downloadExcelFile(fileName: fileName, bytes: Uint8List.fromList(bytes));
 }
 
 CellValue _cellValue(Object? value) {

@@ -4791,7 +4791,6 @@ String _normalizeOfficeCode(String code) {
   return code.trim().replaceAll(RegExp(r'\.+$'), '');
 }
 
-<<<<<<< HEAD
 const Map<String, Set<String>> _submayoraltyEventBranchCodes = {
   '10.2.2': {'10.4.3.1', '10.4.3.2', '10.4.3.3', '10.4.3.4'},
   '10.2.3': {'10.4.4.1', '10.4.4.2', '10.4.4.3', '10.4.4.4'},
@@ -4800,7 +4799,7 @@ const Map<String, Set<String>> _submayoraltyEventBranchCodes = {
   '10.2.6': {'10.4.6.1', '10.4.6.2', '10.4.6.3', '10.4.6.4'},
   '10.2.7': {'10.4.8.1', '10.4.8.2', '10.4.8.3', '10.4.8.4'},
 };
-=======
+
 String _normalizeOfficeSearchText(String value) {
   return _stripTextAccents(value.trim().toLowerCase())
       .replaceAll(RegExp(r'\bcomision\b'), ' ')
@@ -4873,7 +4872,6 @@ Set<String> _officeSearchTokens(String value) {
       )
       .toSet();
 }
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
 
 String _formatDate(DateTime date) {
   const months = [

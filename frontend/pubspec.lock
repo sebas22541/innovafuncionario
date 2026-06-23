@@ -861,7 +861,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.6.0"
-<<<<<<< HEAD
+  rxdart:
+    dependency: transitive
+    description:
+      name: rxdart
+      sha256: "5c3004a4a8dbb94bd4bf5412a4def4acdaa12e12f269737a5751369e12d1a962"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.28.0"
   share_plus:
     dependency: "direct main"
     description:
@@ -878,15 +885,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "7.1.0"
-=======
-  rxdart:
-    dependency: transitive
-    description:
-      name: rxdart
-      sha256: "5c3004a4a8dbb94bd4bf5412a4def4acdaa12e12f269737a5751369e12d1a962"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.28.0"
   shared_preferences:
     dependency: "direct main"
     description:
@@ -943,7 +941,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.4.1"
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
   sky_engine:
     dependency: transitive
     description: flutter
@@ -1061,7 +1058,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.3.1"
-<<<<<<< HEAD
   url_launcher_linux:
     dependency: transitive
     description:
@@ -1094,8 +1090,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.1.5"
-=======
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
   uuid:
     dependency: transitive
     description:

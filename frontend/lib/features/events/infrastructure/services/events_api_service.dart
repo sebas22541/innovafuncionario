@@ -240,13 +240,10 @@ class EventsApiService {
           _readNullableInt(source['asistieronCount']) ?? attended.length,
       observedCount:
           _readNullableInt(source['observaronCount']) ?? observed.length,
-<<<<<<< HEAD
-=======
       absenteeCount:
           _readNullableInt(source['faltaronCount']) ?? absentees.length,
       officeCountOverride: _readNullableInt(source['oficinasCount']),
       jobTitleCountOverride: _readNullableInt(source['cargosCount']),
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
       hasDetailedAttendanceData: source['detalleCompleto'] as bool? ?? true,
     );
   }

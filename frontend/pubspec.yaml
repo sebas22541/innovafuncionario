@@ -46,18 +46,14 @@ dependencies:
   qr: ^3.0.2
   qr_flutter: ^4.1.0
   geolocator: ^14.0.2
-<<<<<<< HEAD
   excel: ^4.0.6
   share_plus: ^13.1.0
-=======
   shared_preferences: ^2.5.3
   cached_network_image: ^3.4.1
   cryptography: ^2.9.0
-  excel: ^4.0.6
   web: ^1.1.1
   firebase_core: ^4.10.0
   firebase_messaging: ^16.3.0
->>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
 
 dev_dependencies:
   flutter_test:
