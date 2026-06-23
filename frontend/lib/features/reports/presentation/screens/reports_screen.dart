@@ -923,43 +923,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         sheetName: mode == _PersonnelExcelExportMode.byItem
             ? 'Personal por item'
             : 'Personal',
-        headers: const [
-          'Nro',
-          'Item',
-          'CI',
-          'Nombre completo',
-          'Celular',
-          'Usuario',
-          'Rol',
-          'Tipo',
-          'Cargo',
-          'Subcargo',
-          'Unidad',
-          'Comision',
-          'Lugar',
-          'Estado',
-        ],
-        rows: [
-          for (var index = 0; index < users.length; index++)
-            [
-              index + 1,
-              users[index].numeroItem,
-              users[index].ci,
-              users[index].fullName,
-              users[index].celular,
-              users[index].email,
-              users[index].roleLabel,
-              _tipoVinculoLabel(users[index].tipoVinculo),
-              users[index].effectiveCargo,
-              users[index].subcargo,
-              users[index].primaryOfficeName ??
-                  users[index].officeName ??
-                  users[index].unidad,
-              users[index].commissionOfficeName ?? '',
-              users[index].lugar,
-              users[index].estadoLabel,
-            ],
-        ],
+        headers: _personnelExcelHeaders(mode),
+        rows: _buildPersonnelExcelRows(users, mode),
       );
 
       if (mounted) {
@@ -2731,6 +2696,77 @@ List<List<String>> _buildPersonnelPdfRows(List<AppUser> users) {
         ],
       )
       .toList(growable: false);
+}
+
+List<String> _personnelExcelHeaders(_PersonnelExcelExportMode mode) {
+  if (mode == _PersonnelExcelExportMode.byItem) {
+    return const [
+      'Item',
+      'CI',
+      'Nombre completo',
+      'Unidad',
+      'Cargo',
+      'Comision',
+    ];
+  }
+
+  return const [
+    'Nro',
+    'Item',
+    'CI',
+    'Nombre completo',
+    'Celular',
+    'Usuario',
+    'Rol',
+    'Tipo',
+    'Cargo',
+    'Subcargo',
+    'Unidad',
+    'Comision',
+    'Lugar',
+    'Estado',
+  ];
+}
+
+List<List<Object?>> _buildPersonnelExcelRows(
+  List<AppUser> users,
+  _PersonnelExcelExportMode mode,
+) {
+  if (mode == _PersonnelExcelExportMode.byItem) {
+    return [
+      for (final user in users)
+        [
+          user.numeroItem,
+          user.ci,
+          user.fullName,
+          user.primaryOfficeName ?? user.officeName ?? user.unidad,
+          user.effectiveCargo,
+          user.commissionOfficeName ?? '',
+        ],
+    ];
+  }
+
+  return [
+    for (var index = 0; index < users.length; index++)
+      [
+        index + 1,
+        users[index].numeroItem,
+        users[index].ci,
+        users[index].fullName,
+        users[index].celular,
+        users[index].email,
+        users[index].roleLabel,
+        _tipoVinculoLabel(users[index].tipoVinculo),
+        users[index].effectiveCargo,
+        users[index].subcargo,
+        users[index].primaryOfficeName ??
+            users[index].officeName ??
+            users[index].unidad,
+        users[index].commissionOfficeName ?? '',
+        users[index].lugar,
+        users[index].estadoLabel,
+      ],
+  ];
 }
 
 List<AppUser> _sortPersonnelUsers(List<AppUser> users) {
