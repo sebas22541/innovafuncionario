@@ -383,8 +383,8 @@ class _ScannerModeTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = mode == _ScannerMode.lunch
-        ? 'QR de almuerzo'
-        : 'QR de permiso de salida';
+        ? 'ESCANEO DE QR ALMUERZO'
+        : 'ESCANEO DE QR PERMISO DE SALIDA';
 
     return Text(
       text,

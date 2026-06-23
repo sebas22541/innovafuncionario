@@ -78,6 +78,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   bool _isLoadingEventReport = false;
   bool _isExporting = false;
   bool _isExportingEventPdf = false;
+  bool _isExportingEventExcel = false;
   bool _isExportingPersonnelPdf = false;
   bool _isExportingPersonnelExcel = false;
   String? _errorMessage;
@@ -843,6 +844,41 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
+  Future<void> _exportEventExcel() async {
+    final event = _eventReport;
+
+    if (event == null) {
+      return;
+    }
+
+    setState(() {
+      _isExportingEventExcel = true;
+    });
+
+    try {
+      await exportExcelWorkbook(
+        fileName: _buildEventExcelFilename(event),
+        sheetName: 'Reporte evento',
+        headers: _buildEventExcelHeaders(event),
+        rows: _buildEventExcelRows(event),
+      );
+
+      if (mounted) {
+        AppAlert.showSuccess(context, 'Excel del evento generado.');
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible exportar el evento.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExportingEventExcel = false;
+        });
+      }
+    }
+  }
+
   Future<void> _selectPersonnelExcelExportMode() async {
     if (_isExportingPersonnelExcel) {
       return;
@@ -1372,6 +1408,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           onPressed:
                               eventReport == null ||
                                   _isExportingEventPdf ||
+                                  _isExportingEventExcel ||
                                   _isLoadingEventReport
                               ? null
                               : _exportEventPdf,
@@ -1388,6 +1425,29 @@ class _ReportsScreenState extends State<ReportsScreen> {
                             _isLoadingEventReport
                                 ? 'Generando reporte...'
                                 : 'Descargar PDF',
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed:
+                              eventReport == null ||
+                                  _isExportingEventPdf ||
+                                  _isExportingEventExcel ||
+                                  _isLoadingEventReport
+                              ? null
+                              : _exportEventExcel,
+                          icon: _isExportingEventExcel
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.file_download_outlined),
+                          label: Text(
+                            _isExportingEventExcel
+                                ? 'Exportando...'
+                                : 'Descargar Excel',
                           ),
                         ),
                       ],
@@ -2675,6 +2735,133 @@ List<List<String>> _buildEventAbsenteePdfRows(
       .toList(growable: false);
 }
 
+List<String> _buildEventExcelHeaders(EventRecord event) {
+  return [
+    'Nro',
+    'Evento',
+    'Fecha evento',
+    'CI',
+    'Nombre',
+    'Tipo',
+    'Oficina',
+    'Estado general',
+    'Hora registro',
+    'Observacion',
+    for (final control in _sortedEventControls(event.controls)) ...[
+      '${control.name} estado',
+      '${control.name} hora',
+    ],
+  ];
+}
+
+List<List<Object?>> _buildEventExcelRows(EventRecord event) {
+  final controls = _sortedEventControls(event.controls);
+  final rows = <List<Object?>>[];
+  var index = 1;
+
+  for (final entry in _sortEventRosterEntries(event.attended)) {
+    rows.add(
+      _buildEventAttendanceExcelRow(
+        index: index,
+        event: event,
+        entry: entry,
+        generalStatus: 'Asistio',
+        controls: controls,
+      ),
+    );
+    index++;
+  }
+
+  for (final entry in _sortEventRosterEntries(event.observed)) {
+    rows.add(
+      _buildEventAttendanceExcelRow(
+        index: index,
+        event: event,
+        entry: entry,
+        generalStatus: 'Observado',
+        controls: controls,
+      ),
+    );
+    index++;
+  }
+
+  for (final entry in _sortEventAbsenteeEntries(event.absentees)) {
+    rows.add([
+      index,
+      event.name,
+      _formatDateTime(event.date),
+      entry.ci?.trim().isNotEmpty == true ? entry.ci!.trim() : '',
+      entry.fullName,
+      _eventRosterTipoLabel(entry.tipoVinculo),
+      entry.officeName ?? '',
+      'Falto',
+      '',
+      entry.requirementReason ?? '',
+      for (final _ in controls) ...['', ''],
+    ]);
+    index++;
+  }
+
+  return rows;
+}
+
+List<Object?> _buildEventAttendanceExcelRow({
+  required int index,
+  required EventRecord event,
+  required EventRosterEntry entry,
+  required String generalStatus,
+  required List<EventControl> controls,
+}) {
+  final controlsById = {
+    for (final control in entry.controls) control.controlId: control,
+  };
+
+  return [
+    index,
+    event.name,
+    _formatDateTime(event.date),
+    entry.ci?.trim().isNotEmpty == true ? entry.ci!.trim() : '',
+    entry.fullName,
+    _eventRosterTipoLabel(entry.tipoVinculo),
+    entry.officeName ?? '',
+    generalStatus,
+    _formatDateTime(entry.registeredAt),
+    entry.note,
+    for (final control in controls) ...[
+      _controlStatusLabel(controlsById[control.id]?.status),
+      controlsById[control.id] == null
+          ? ''
+          : _formatDateTime(controlsById[control.id]!.registeredAt),
+    ],
+  ];
+}
+
+List<EventControl> _sortedEventControls(List<EventControl> controls) {
+  final sortedControls = [...controls];
+  sortedControls.sort((left, right) {
+    final orderComparison = left.order.compareTo(right.order);
+
+    if (orderComparison != 0) {
+      return orderComparison;
+    }
+
+    return left.name.toLowerCase().compareTo(right.name.toLowerCase());
+  });
+
+  return sortedControls;
+}
+
+String _controlStatusLabel(String? status) {
+  switch (status) {
+    case 'ASISTIO':
+      return 'Asistio';
+    case 'OBSERVADO':
+      return 'Observado';
+    default:
+      return '';
+  }
+}
+
 List<List<String>> _buildPersonnelPdfRows(List<AppUser> users) {
   return users
       .map(
@@ -2954,6 +3141,17 @@ String _buildEventReportFilename(EventRecord event) {
 
   final safeName = normalizedName.isEmpty ? 'evento' : normalizedName;
   return 'reporte-evento-${event.id}-$safeName.pdf';
+}
+
+String _buildEventExcelFilename(EventRecord event) {
+  final normalizedName = event.name
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+
+  final safeName = normalizedName.isEmpty ? 'evento' : normalizedName;
+  return 'reporte-evento-${event.id}-$safeName.xlsx';
 }
 
 String _formatFilenameDate(DateTime value) {
