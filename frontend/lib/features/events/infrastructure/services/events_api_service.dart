@@ -8,7 +8,9 @@ class EventsApiService {
   static const Duration _referenceCacheTtl = Duration(minutes: 5);
   static const Duration _eventSummaryCacheTtl = Duration(seconds: 20);
   List<EventOffice>? _officesCache;
+  List<EventJobTitle>? _jobTitlesCache;
   DateTime? _officesCacheAt;
+  DateTime? _jobTitlesCacheAt;
   List<EventRecord>? _eventSummaryCache;
   DateTime? _eventSummaryCacheAt;
 
@@ -24,6 +26,22 @@ class EventsApiService {
     _officesCacheAt = DateTime.now();
 
     return offices;
+  }
+
+  Future<List<EventJobTitle>> fetchJobTitles({
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh && _isCacheFresh(_jobTitlesCacheAt, _referenceCacheTtl)) {
+      return _jobTitlesCache ?? const [];
+    }
+
+    final payload = await _apiClient.getJson('/api/cargos');
+    final items = _readList(payload['data'], 'cargos');
+    final jobTitles = items.map(_parseJobTitle).toList(growable: false);
+    _jobTitlesCache = jobTitles;
+    _jobTitlesCacheAt = DateTime.now();
+
+    return jobTitles;
   }
 
   Future<List<EventRecord>> fetchEvents({
@@ -67,7 +85,12 @@ class EventsApiService {
       'latitud': draft.latitude,
       'longitud': draft.longitude,
       'oficinaIds': draft.officeIds,
+      'oficinaIdsFinales': draft.finalOfficeIds,
       'oficinaIdsExcluidos': draft.excludedOfficeIds,
+      'cargoCodigos': draft.jobTitleCodes,
+      'cargoCodigosPorOficina': _serializeOfficeJobTitleSelections(
+        draft.officeJobTitleSelections,
+      ),
       'controles': draft.controls
           .map(
             (control) => {
@@ -96,7 +119,12 @@ class EventsApiService {
       'latitud': draft.latitude,
       'longitud': draft.longitude,
       'oficinaIds': draft.officeIds,
+      'oficinaIdsFinales': draft.finalOfficeIds,
       'oficinaIdsExcluidos': draft.excludedOfficeIds,
+      'cargoCodigos': draft.jobTitleCodes,
+      'cargoCodigosPorOficina': _serializeOfficeJobTitleSelections(
+        draft.officeJobTitleSelections,
+      ),
       'requesterEmail': requesterEmail,
       'controles': draft.controls
           .map(
@@ -127,8 +155,6 @@ class EventsApiService {
     required int eventId,
     required int controlId,
     required EventListType listType,
-    required String operatorEmail,
-    required String operatorFullName,
     required double latitude,
     required double longitude,
     String? qrValue,
@@ -151,8 +177,6 @@ class EventsApiService {
       'accuracy': accuracy,
       'observacion': observation,
       'payloadFields': payloadFields,
-      'operatorEmail': operatorEmail,
-      'operatorFullName': operatorFullName,
     });
     _clearEventSummaryCache();
   }
@@ -160,6 +184,7 @@ class EventsApiService {
   EventRecord _parseEvent(Map<String, dynamic> source) {
     final createdBy = _readMap(source['creadoPor'], 'creadoPor');
     final offices = _parseEventOffices(source);
+    final jobTitles = _parseEventJobTitles(source);
     final attended = _readList(
       source['asistieron'] ?? const [],
       'asistieron',
@@ -168,6 +193,10 @@ class EventsApiService {
       source['observaron'] ?? const [],
       'observaron',
     ).map(_parseRosterEntry).toList(growable: false);
+    final absentees = _readList(
+      source['faltaron'] ?? const [],
+      'faltaron',
+    ).map(_parseAbsenteeEntry).toList(growable: false);
 
     return EventRecord(
       id: _readInt(source['id'], 'id'),
@@ -190,6 +219,12 @@ class EventsApiService {
         'controles',
       ).map(_parseEventControl).toList(growable: false),
       offices: offices,
+      jobTitles: jobTitles,
+      selectedJobTitleCodes: _readStringList(
+        source['cargoCodigosSeleccionados'],
+        'cargoCodigosSeleccionados',
+      ),
+      officeJobTitleSelections: _parseOfficeJobTitleSelections(source),
       selectedOfficeIds: _resolveSelectedOfficeIds(
         offices,
         source['oficinaIdsSeleccionados'],
@@ -200,12 +235,55 @@ class EventsApiService {
       ),
       attended: attended,
       observed: observed,
+      absentees: absentees,
       attendedCount:
           _readNullableInt(source['asistieronCount']) ?? attended.length,
       observedCount:
           _readNullableInt(source['observaronCount']) ?? observed.length,
+<<<<<<< HEAD
+=======
+      absenteeCount:
+          _readNullableInt(source['faltaronCount']) ?? absentees.length,
+      officeCountOverride: _readNullableInt(source['oficinasCount']),
+      jobTitleCountOverride: _readNullableInt(source['cargosCount']),
+>>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
       hasDetailedAttendanceData: source['detalleCompleto'] as bool? ?? true,
     );
+  }
+
+  List<EventJobTitle> _parseEventJobTitles(Map<String, dynamic> source) {
+    final jobTitlesSource = source['cargos'];
+
+    if (jobTitlesSource is List && jobTitlesSource.isNotEmpty) {
+      return _readList(
+        jobTitlesSource,
+        'cargos',
+      ).map(_parseJobTitle).toList(growable: false);
+    }
+
+    return const [];
+  }
+
+  List<EventOfficeJobTitleSelection> _parseOfficeJobTitleSelections(
+    Map<String, dynamic> source,
+  ) {
+    final sourceItems = source['cargoCodigosPorOficina'];
+
+    if (sourceItems == null) {
+      return const [];
+    }
+
+    return _readList(sourceItems, 'cargoCodigosPorOficina')
+        .map(
+          (item) => EventOfficeJobTitleSelection(
+            officeId: _readInt(item['oficinaId'], 'oficinaId'),
+            jobTitleCodes: _readStringList(
+              item['cargoCodigos'],
+              'cargoCodigos',
+            ),
+          ),
+        )
+        .toList(growable: false);
   }
 
   bool _isCacheFresh(DateTime? cachedAt, Duration ttl) {
@@ -285,6 +363,13 @@ class EventsApiService {
     );
   }
 
+  EventJobTitle _parseJobTitle(Map<String, dynamic> source) {
+    return EventJobTitle(
+      code: _readString(source['codigo'], 'cargo.codigo'),
+      name: _readString(source['cargo'], 'cargo.cargo'),
+    );
+  }
+
   EventOffice _parseLegacyDepartmentAsOffice(Map<String, dynamic> source) {
     return EventOffice(
       id: _readInt(source['id'], 'departamento.id'),
@@ -328,6 +413,24 @@ class EventsApiService {
       tipoVinculo: _readNullableString(source['tipoVinculo']),
       jobTitle: _readNullableString(source['cargo']),
       qrValue: _readNullableString(source['qrLeido']),
+    );
+  }
+
+  EventAbsenteeEntry _parseAbsenteeEntry(Map<String, dynamic> source) {
+    return EventAbsenteeEntry(
+      personId: _readInt(source['personaId'], 'faltante.personaId'),
+      ci: _readNullableString(source['ci']),
+      fullName: _readString(
+        source['nombreCompleto'],
+        'faltante.nombreCompleto',
+      ),
+      officeName:
+          _readNullableString(source['oficina']) ??
+          _readNullableString(source['unidad']) ??
+          _readNullableString(source['departamento']),
+      tipoVinculo: _readNullableString(source['tipoVinculo']),
+      jobTitle: _readNullableString(source['cargo']),
+      requirementReason: _readNullableString(source['motivoFalta']),
     );
   }
 
@@ -448,8 +551,35 @@ List<int> _readIntList(dynamic source, String fieldName) {
       .toList(growable: false);
 }
 
+List<String> _readStringList(dynamic source, String fieldName) {
+  if (source == null) {
+    return const [];
+  }
+
+  if (source is! List) {
+    throw StateError('El campo $fieldName no tiene un formato valido.');
+  }
+
+  return source
+      .map((item) => _readString(item, fieldName))
+      .toList(growable: false);
+}
+
 String _formatDateForApi(DateTime date) {
   return date.toIso8601String();
+}
+
+List<Map<String, dynamic>> _serializeOfficeJobTitleSelections(
+  List<EventOfficeJobTitleSelection> selections,
+) {
+  return selections
+      .map(
+        (selection) => {
+          'oficinaId': selection.officeId,
+          'cargoCodigos': selection.jobTitleCodes,
+        },
+      )
+      .toList(growable: false);
 }
 
 String _normalizeOfficeCode(String code) {

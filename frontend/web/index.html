@@ -75,6 +75,82 @@
       });
     })();
   </script>
-  <script src="flutter_bootstrap.js" async></script>
+  <script>
+    (function () {
+      var versionUrl = 'app-version.json';
+      var versionKey = 'qr_asistencia_app_version';
+      var reloadKey = 'qr_asistencia_app_version_reload';
+
+      function loadFlutter() {
+        var script = document.createElement('script');
+        script.src = 'flutter_bootstrap.js';
+        script.async = true;
+        document.body.appendChild(script);
+      }
+
+      async function clearOldAppCache() {
+        if ('serviceWorker' in navigator) {
+          var registrations = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(registrations.map(function (registration) {
+            return registration.unregister();
+          }));
+        }
+
+        if ('caches' in window) {
+          var cacheNames = await caches.keys();
+          await Promise.all(cacheNames.map(function (cacheName) {
+            return caches.delete(cacheName);
+          }));
+        }
+      }
+
+      async function checkAppVersion() {
+        try {
+          var response = await fetch(versionUrl + '?t=' + Date.now(), {
+            cache: 'no-store',
+          });
+
+          if (!response.ok) {
+            loadFlutter();
+            return;
+          }
+
+          var data = await response.json();
+          var nextVersion = data && data.version ? String(data.version) : '';
+          var currentVersion = window.localStorage.getItem(versionKey);
+
+          if (!nextVersion) {
+            loadFlutter();
+            return;
+          }
+
+          if (currentVersion && currentVersion !== nextVersion) {
+            if (window.sessionStorage.getItem(reloadKey) !== nextVersion) {
+              window.sessionStorage.setItem(reloadKey, nextVersion);
+              window.localStorage.setItem(versionKey, nextVersion);
+              await clearOldAppCache();
+              window.location.replace(
+                window.location.pathname +
+                  window.location.search +
+                  (window.location.search ? '&' : '?') +
+                  'v=' +
+                  encodeURIComponent(nextVersion) +
+                  window.location.hash
+              );
+              return;
+            }
+          }
+
+          window.localStorage.setItem(versionKey, nextVersion);
+          window.sessionStorage.removeItem(reloadKey);
+          loadFlutter();
+        } catch (_) {
+          loadFlutter();
+        }
+      }
+
+      checkAppVersion();
+    })();
+  </script>
 </body>
 </html>

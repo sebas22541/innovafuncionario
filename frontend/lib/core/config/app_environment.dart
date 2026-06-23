@@ -5,7 +5,10 @@ class AppEnvironment {
 
   static const production = bool.fromEnvironment('dart.vm.product');
   static const productionBackendBaseUrl =
-      'https://innovafuncionarioapidev.cochabamba.bo';
+      'https://innovafuncionarioapi.cochabamba.bo';
+  static const payloadEncryptionKey = String.fromEnvironment(
+    'PAYLOAD_ENCRYPTION_KEY',
+  );
 
   static String resolveBackendBaseUrl() {
     const configuredBaseUrl = String.fromEnvironment('BACKEND_BASE_URL');
@@ -20,16 +23,16 @@ class AppEnvironment {
 
     if (!kIsWeb) {
       if (defaultTargetPlatform == TargetPlatform.android) {
-        return 'http://10.0.2.2:3000';
+        return 'http://10.0.2.2:4000';
       }
 
-      return 'http://localhost:3000';
+      return 'http://localhost:4000';
     }
 
     final currentUri = Uri.base;
     final host = currentUri.host.isEmpty ? 'localhost' : currentUri.host;
     final scheme = currentUri.scheme == 'https' ? 'https' : 'http';
 
-    return '$scheme://$host:3000';
+    return '$scheme://$host:4000';
   }
 }

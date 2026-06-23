@@ -72,6 +72,12 @@ class ReportsApiService {
                 _readString(source['registradoEn'], 'record.registradoEn'),
               ).toLocal(),
               status: _readString(source['estado'], 'record.estado'),
+              registeredControlsCount:
+                  _readNullableInt(source['controlesRegistrados']) ?? 0,
+              attendedControlsCount:
+                  _readNullableInt(source['controlesAsistidos']) ?? 0,
+              observedControlsCount:
+                  _readNullableInt(source['controlesObservados']) ?? 0,
               eventAddress: _readNullableString(source['eventoDireccion']),
               note: _readNullableString(source['observacion']),
             ),

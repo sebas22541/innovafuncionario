@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/location_permission_settings.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../domain/entities/event_record.dart';
@@ -35,6 +36,7 @@ class _EventsScreenState extends State<EventsScreen> {
   final TextEditingController _eventSearchController = TextEditingController();
   List<EventRecord> _events = const [];
   List<EventOffice> _offices = const [];
+  List<EventJobTitle> _jobTitles = const [];
   bool _isLoading = true;
   bool _isReloading = false;
   bool _isLoadingSelectedEvent = false;
@@ -69,17 +71,9 @@ class _EventsScreenState extends State<EventsScreen> {
     });
 
     try {
-      final results = await Future.wait([
-        dependencies.eventsApiService.fetchOffices(
-          forceRefresh: showRefreshState,
-        ),
-        dependencies.eventsApiService.fetchEvents(
-          forceRefresh: showRefreshState,
-        ),
-      ]);
-
-      final offices = results[0] as List<EventOffice>;
-      final events = results[1] as List<EventRecord>;
+      final events = await dependencies.eventsApiService.fetchEvents(
+        forceRefresh: showRefreshState,
+      );
       final selectedEventId = _selectedEvent?.id;
       EventRecord? refreshedSelectedEvent;
 
@@ -93,7 +87,6 @@ class _EventsScreenState extends State<EventsScreen> {
       }
 
       setState(() {
-        _offices = offices;
         _events = events;
         _selectedEvent = refreshedSelectedEvent;
         if (_selectedEvent == null && _page != _EventsPage.overview) {
@@ -123,7 +116,13 @@ class _EventsScreenState extends State<EventsScreen> {
       return;
     }
 
-    if (_offices.isEmpty) {
+    final referencesLoaded = await _ensureEventReferencesLoaded();
+
+    if (!mounted) {
+      return;
+    }
+
+    if (!referencesLoaded) {
       AppAlert.showWarning(
         context,
         'No hay oficinas disponibles en la base de datos.',
@@ -133,7 +132,8 @@ class _EventsScreenState extends State<EventsScreen> {
 
     final draft = await showDialog<EventRecordDraft>(
       context: context,
-      builder: (context) => _CreateEventDialog(offices: _offices),
+      builder: (context) =>
+          _CreateEventDialog(offices: _offices, jobTitles: _jobTitles),
     );
 
     if (draft == null) {
@@ -188,7 +188,13 @@ class _EventsScreenState extends State<EventsScreen> {
       return;
     }
 
-    if (_offices.isEmpty) {
+    final referencesLoaded = await _ensureEventReferencesLoaded();
+
+    if (!mounted) {
+      return;
+    }
+
+    if (!referencesLoaded) {
       AppAlert.showWarning(
         context,
         'No hay oficinas disponibles en la base de datos.',
@@ -196,10 +202,25 @@ class _EventsScreenState extends State<EventsScreen> {
       return;
     }
 
+    final detailedEvent = event.hasDetailedAttendanceData
+        ? event
+        : await _fetchEventDetailForEditing(event.id);
+
+    if (detailedEvent == null) {
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+
     final draft = await showDialog<EventRecordDraft>(
       context: context,
-      builder: (context) =>
-          _CreateEventDialog(offices: _offices, initialEvent: event),
+      builder: (context) => _CreateEventDialog(
+        offices: _offices,
+        jobTitles: _jobTitles,
+        initialEvent: detailedEvent,
+      ),
     );
 
     if (draft == null) {
@@ -251,6 +272,53 @@ class _EventsScreenState extends State<EventsScreen> {
         });
       }
     }
+  }
+
+  Future<bool> _ensureEventReferencesLoaded() async {
+    if (_offices.isNotEmpty) {
+      return true;
+    }
+
+    setState(() {
+      _isReloading = true;
+    });
+
+    try {
+      final results = await Future.wait([
+        dependencies.eventsApiService.fetchOffices(),
+        dependencies.eventsApiService.fetchJobTitles(),
+      ]);
+
+      if (!mounted) {
+        return false;
+      }
+
+      final offices = results[0] as List<EventOffice>;
+      final jobTitles = results[1] as List<EventJobTitle>;
+
+      setState(() {
+        _offices = offices;
+        _jobTitles = jobTitles;
+      });
+
+      return offices.isNotEmpty;
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        AppAlert.showError(context, error.message);
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar oficinas y cargos.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isReloading = false;
+        });
+      }
+    }
+
+    return false;
   }
 
   Future<void> _deleteEvent(EventRecord event) async {
@@ -321,6 +389,49 @@ class _EventsScreenState extends State<EventsScreen> {
       _selectedEvent = event;
       _page = _EventsPage.detail;
     });
+
+    if (!event.hasDetailedAttendanceData) {
+      _loadSelectedEventDetail(event.id);
+    }
+  }
+
+  Future<EventRecord?> _fetchEventDetailForEditing(int eventId) async {
+    setState(() {
+      _isLoadingSelectedEvent = true;
+    });
+
+    try {
+      final detailedEvent = await dependencies.eventsApiService.fetchEventById(
+        eventId,
+      );
+
+      if (mounted) {
+        setState(() {
+          _events = _upsertEvent(_events, detailedEvent);
+          if (_selectedEvent?.id == detailedEvent.id) {
+            _selectedEvent = detailedEvent;
+          }
+        });
+      }
+
+      return detailedEvent;
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        AppAlert.showError(context, error.message);
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar el evento.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingSelectedEvent = false;
+        });
+      }
+    }
+
+    return null;
   }
 
   Future<void> _openLists(EventRecord event) async {
@@ -427,7 +538,7 @@ class _EventsScreenState extends State<EventsScreen> {
   }
 
   List<EventRecord> get _filteredEvents {
-    final normalizedQuery = _eventSearchQuery.trim().toLowerCase();
+    final normalizedQuery = _normalizeOfficeSearchText(_eventSearchQuery);
 
     if (normalizedQuery.isEmpty) {
       return _events;
@@ -440,12 +551,16 @@ class _EventsScreenState extends State<EventsScreen> {
             event.address ?? '',
             event.createdBy,
             event.officeNames,
+            event.jobTitles.map((jobTitle) => jobTitle.name).join(', '),
             _formatDate(event.date),
             _formatDateTime(event.date),
           ];
 
           return searchValues.any(
-            (value) => value.toLowerCase().contains(normalizedQuery),
+            (value) => _officeTextLooksSimilar(
+              _normalizeOfficeSearchText(value),
+              normalizedQuery,
+            ),
           );
         })
         .toList(growable: false);
@@ -523,6 +638,7 @@ class _EventsScreenState extends State<EventsScreen> {
         return _EventDetailView(
           event: event,
           canManageEvents: widget.currentUser.canManageEvents,
+          canOpenScanner: widget.currentUser.canUseEventScanner,
           onBack: _goBack,
           onEdit: () => _showEditEventDialog(event),
           onDelete: () => _deleteEvent(event),
@@ -560,6 +676,7 @@ class _EventsScreenState extends State<EventsScreen> {
           event: event,
           selectedListType: _selectedListType,
           isLoadingEventDetails: _isLoadingSelectedEvent,
+          canOpenScanner: widget.currentUser.canUseEventScanner,
           onBack: _goBack,
           onListTypeChanged: (type) {
             setState(() {
@@ -778,6 +895,7 @@ class _EventDetailView extends StatelessWidget {
   const _EventDetailView({
     required this.event,
     required this.canManageEvents,
+    required this.canOpenScanner,
     required this.onBack,
     required this.onEdit,
     required this.onDelete,
@@ -788,6 +906,7 @@ class _EventDetailView extends StatelessWidget {
 
   final EventRecord event;
   final bool canManageEvents;
+  final bool canOpenScanner;
   final VoidCallback onBack;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -916,18 +1035,19 @@ class _EventDetailView extends StatelessWidget {
                       onTap: onOpenLists,
                     ),
                   ),
-                  SizedBox(
-                    width: cardWidth,
-                    child: _ActionOptionCard(
-                      title: 'Escanear QR',
-                      description:
-                          'Abre el lector QR y registra el resultado sobre este evento en la base de datos.',
-                      icon: Icons.qr_code_scanner_rounded,
-                      buttonLabel: 'Ir al escaner',
-                      accentColor: AppPalette.night,
-                      onTap: onOpenScanner,
+                  if (canOpenScanner)
+                    SizedBox(
+                      width: cardWidth,
+                      child: _ActionOptionCard(
+                        title: 'Escanear QR',
+                        description:
+                            'Abre el lector QR y registra el resultado sobre este evento en la base de datos.',
+                        icon: Icons.qr_code_scanner_rounded,
+                        buttonLabel: 'Ir al escaner',
+                        accentColor: AppPalette.night,
+                        onTap: onOpenScanner,
+                      ),
                     ),
-                  ),
                 ],
               );
             },
@@ -975,6 +1095,7 @@ class _EventListsView extends StatelessWidget {
     required this.event,
     required this.selectedListType,
     required this.isLoadingEventDetails,
+    required this.canOpenScanner,
     required this.onBack,
     required this.onListTypeChanged,
     required this.onOpenScanner,
@@ -983,6 +1104,7 @@ class _EventListsView extends StatelessWidget {
   final EventRecord event;
   final EventListType selectedListType;
   final bool isLoadingEventDetails;
+  final bool canOpenScanner;
   final VoidCallback onBack;
   final ValueChanged<EventListType> onListTypeChanged;
   final VoidCallback onOpenScanner;
@@ -1018,6 +1140,11 @@ class _EventListsView extends StatelessWidget {
                   const SizedBox(height: 8),
                   Text(
                     'Oficinas asociadas: ${event.officeCountLabel}',
+                    style: textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Cargos asociados: ${event.jobTitleCountLabel}',
                     style: textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 8),
@@ -1066,11 +1193,12 @@ class _EventListsView extends StatelessWidget {
                         icon: Icons.visibility_outlined,
                         onTap: () => onListTypeChanged(EventListType.observed),
                       ),
-                      OutlinedButton.icon(
-                        onPressed: onOpenScanner,
-                        icon: const Icon(Icons.qr_code_scanner_rounded),
-                        label: const Text('Escanear QR'),
-                      ),
+                      if (canOpenScanner)
+                        OutlinedButton.icon(
+                          onPressed: onOpenScanner,
+                          icon: const Icon(Icons.qr_code_scanner_rounded),
+                          label: const Text('Escanear QR'),
+                        ),
                     ],
                   ),
                 ],
@@ -1108,13 +1236,13 @@ class _EventListsView extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             if (currentList.isEmpty)
-            _EmptyListState(selectedListType: selectedListType)
+              _EmptyListState(selectedListType: selectedListType)
             else
-            _EventRosterTable(
-              eventControls: event.controls,
-              entries: currentList,
-              selectedListType: selectedListType,
-            ),
+              _EventRosterTable(
+                eventControls: event.controls,
+                entries: currentList,
+                selectedListType: selectedListType,
+              ),
           ],
         ],
       ),
@@ -1123,9 +1251,14 @@ class _EventListsView extends StatelessWidget {
 }
 
 class _CreateEventDialog extends StatefulWidget {
-  const _CreateEventDialog({required this.offices, this.initialEvent});
+  const _CreateEventDialog({
+    required this.offices,
+    required this.jobTitles,
+    this.initialEvent,
+  });
 
   final List<EventOffice> offices;
+  final List<EventJobTitle> jobTitles;
   final EventRecord? initialEvent;
 
   @override
@@ -1149,6 +1282,12 @@ class _EventOfficeSelectionResult {
   final List<int> excludedOfficeIds;
 }
 
+class _EventJobTitleSelectionResult {
+  const _EventJobTitleSelectionResult({required this.selectedJobTitleCodes});
+
+  final List<String> selectedJobTitleCodes;
+}
+
 class _CreateEventDialogState extends State<_CreateEventDialog> {
   late final TextEditingController _nameController;
   late final TextEditingController _addressController;
@@ -1165,14 +1304,15 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
   String? _locationErrorMessage;
   late final Set<int> _selectedOfficeIds;
   late final Set<int> _excludedOfficeIds;
+  late final Set<String> _selectedJobTitleCodes;
+  late final Map<int, Set<String>> _officeJobTitleCodes;
   bool _showValidation = false;
 
-  Set<int> get _expandedOfficeIds =>
-      _expandOfficeSelection(
-        _selectedOfficeIds,
-        widget.offices,
-        excludedOfficeIds: _excludedOfficeIds,
-      );
+  Set<int> get _expandedOfficeIds => _expandOfficeSelection(
+    _selectedOfficeIds,
+    widget.offices,
+    excludedOfficeIds: _excludedOfficeIds,
+  );
 
   @override
   void initState() {
@@ -1215,6 +1355,14 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
     _excludedOfficeIds
       ..clear()
       ..addAll(normalizedExcludedOfficeIds);
+    _selectedJobTitleCodes = {
+      ...widget.initialEvent?.selectedJobTitleCodes ?? const [],
+    };
+    _officeJobTitleCodes = {
+      for (final selection
+          in widget.initialEvent?.officeJobTitleSelections ?? const [])
+        selection.officeId: selection.jobTitleCodes.toSet(),
+    };
     final initialControls = widget.initialEvent?.controls ?? const [];
     _controls = initialControls.isEmpty
         ? [
@@ -1292,15 +1440,15 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
   Future<void> _pickOffices() async {
     final selectionResult =
         await showModalBottomSheet<_EventOfficeSelectionResult>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => _EventOfficeSelectionSheet(
-        offices: widget.offices,
-        selectedOfficeIds: _selectedOfficeIds,
-        excludedOfficeIds: _excludedOfficeIds,
-      ),
-    );
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (context) => _EventOfficeSelectionSheet(
+            offices: widget.offices,
+            selectedOfficeIds: _selectedOfficeIds,
+            excludedOfficeIds: _excludedOfficeIds,
+          ),
+        );
 
     if (!mounted || selectionResult == null) {
       return;
@@ -1313,6 +1461,7 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
       _excludedOfficeIds
         ..clear()
         ..addAll(selectionResult.excludedOfficeIds);
+      _syncOfficeJobTitleSelections();
     });
   }
 
@@ -1332,6 +1481,66 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
     );
   }
 
+  void _syncOfficeJobTitleSelections() {
+    final expandedOfficeIds = _expandedOfficeIds;
+
+    _officeJobTitleCodes.removeWhere(
+      (officeId, _) => !expandedOfficeIds.contains(officeId),
+    );
+  }
+
+  Future<void> _pickGlobalJobTitles() async {
+    final selectionResult =
+        await showModalBottomSheet<_EventJobTitleSelectionResult>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (context) => _EventJobTitleSelectionSheet(
+            jobTitles: widget.jobTitles,
+            selectedJobTitleCodes: _selectedJobTitleCodes,
+            title: 'Cargos globales del evento',
+            allowAllJobTitles: false,
+            helperText:
+                'Selecciona los cargos que asistiran sin importar la unidad.',
+          ),
+        );
+
+    if (!mounted || selectionResult == null) {
+      return;
+    }
+
+    setState(() {
+      _selectedJobTitleCodes
+        ..clear()
+        ..addAll(selectionResult.selectedJobTitleCodes);
+    });
+  }
+
+  Future<void> _pickOfficeJobTitles(EventOffice office) async {
+    final selectedCodes = _officeJobTitleCodes[office.id] ?? const <String>{};
+    final selectionResult =
+        await showModalBottomSheet<_EventJobTitleSelectionResult>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (context) => _EventJobTitleSelectionSheet(
+            jobTitles: widget.jobTitles,
+            selectedJobTitleCodes: selectedCodes,
+            title: 'Cargos para ${office.name}',
+          ),
+        );
+
+    if (!mounted || selectionResult == null) {
+      return;
+    }
+
+    setState(() {
+      _officeJobTitleCodes[office.id] = {
+        ...selectionResult.selectedJobTitleCodes,
+      };
+    });
+  }
+
   void _removeSelectedOffice(int officeId) {
     setState(() {
       _selectedOfficeIds.remove(officeId);
@@ -1343,6 +1552,7 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
       _excludedOfficeIds
         ..clear()
         ..addAll(normalizedExcludedOfficeIds);
+      _syncOfficeJobTitleSelections();
     });
   }
 
@@ -1392,10 +1602,12 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
       _selectedStartTime.hour,
       _selectedStartTime.minute,
     );
+    final hasAudienceSelection =
+        _selectedOfficeIds.isNotEmpty || _selectedJobTitleCodes.isNotEmpty;
 
     if (trimmedName.isEmpty ||
         trimmedAddress.isEmpty ||
-        _selectedOfficeIds.isEmpty ||
+        !hasAudienceSelection ||
         controls.any((control) => control.name.isEmpty) ||
         _selectedLocation == null) {
       setState(() {
@@ -1412,6 +1624,17 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
         latitude: _selectedLocation!.latitude,
         longitude: _selectedLocation!.longitude,
         officeIds: _selectedOfficeIds.toList(growable: false),
+        finalOfficeIds: _expandedOfficeIds.toList(growable: false),
+        jobTitleCodes: _selectedJobTitleCodes.toList(growable: false),
+        officeJobTitleSelections: _expandedOfficeIds
+            .map(
+              (officeId) => EventOfficeJobTitleSelection(
+                officeId: officeId,
+                jobTitleCodes: (_officeJobTitleCodes[officeId] ?? const {})
+                    .toList(growable: false),
+              ),
+            )
+            .toList(growable: false),
         excludedOfficeIds: _excludedOfficeIds.toList(growable: false),
         controls: controls,
       ),
@@ -1431,6 +1654,14 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
     });
 
     try {
+      final isLocationEnabled = await LocationPermissionSettings.isEnabled();
+
+      if (!isLocationEnabled) {
+        throw StateError(
+          'Habilita la ubicacion en Configuracion para usar tu ubicacion actual.',
+        );
+      }
+
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
 
       if (!serviceEnabled) {
@@ -1530,7 +1761,9 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
     final expandedOffices = widget.offices
         .where((office) => expandedOfficeIds.contains(office.id))
         .toList(growable: false);
-
+    final globalSelectedJobTitles = widget.jobTitles
+        .where((jobTitle) => _selectedJobTitleCodes.contains(jobTitle.code))
+        .toList(growable: false);
     return Dialog(
       backgroundColor: Colors.white,
       surfaceTintColor: Colors.white,
@@ -1603,7 +1836,10 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(18),
                           border: Border.all(
-                            color: _showValidation && _selectedOfficeIds.isEmpty
+                            color:
+                                _showValidation &&
+                                    _selectedOfficeIds.isEmpty &&
+                                    _selectedJobTitleCodes.isEmpty
                                 ? const Color(0xFFD94841)
                                 : AppPalette.line,
                           ),
@@ -1675,7 +1911,8 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                                             context,
                                           ).textTheme.bodySmall,
                                         ),
-                                        if (excludedBranchOffices.isNotEmpty) ...[
+                                        if (excludedBranchOffices
+                                            .isNotEmpty) ...[
                                           const SizedBox(height: 4),
                                           Text(
                                             '${excludedBranchOffices.length} ramas quedaran fuera aunque pertenezcan a una oficina padre seleccionada.',
@@ -1862,10 +2099,226 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                               ),
                             ],
                             if (_showValidation &&
-                                _selectedOfficeIds.isEmpty) ...[
+                                _selectedOfficeIds.isEmpty &&
+                                _selectedJobTitleCodes.isEmpty) ...[
                               const SizedBox(height: 10),
                               const Text(
-                                'Selecciona al menos una oficina base.',
+                                'Selecciona al menos una oficina base o un cargo global.',
+                                style: TextStyle(
+                                  color: Color(0xFFD94841),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        'Cargos por oficina',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Define que cargos podran asistir en cada oficina. Si dejas una oficina en Todos, no se filtrara por cargo para esa oficina.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: AppPalette.line),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (expandedOffices.isEmpty)
+                              Text(
+                                'Primero selecciona una oficina.',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              )
+                            else
+                              for (final office in expandedOffices) ...[
+                                Builder(
+                                  builder: (context) {
+                                    final selectedCodes =
+                                        _officeJobTitleCodes[office.id] ??
+                                        const <String>{};
+                                    final selectedTitles = widget.jobTitles
+                                        .where(
+                                          (jobTitle) => selectedCodes.contains(
+                                            jobTitle.code,
+                                          ),
+                                        )
+                                        .toList(growable: false);
+
+                                    return Container(
+                                      margin: const EdgeInsets.only(bottom: 10),
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: AppPalette.surfaceSoft,
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                          color: AppPalette.line,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          const Icon(
+                                            Icons.apartment_rounded,
+                                            color: AppPalette.orange,
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  office.name,
+                                                  style: Theme.of(
+                                                    context,
+                                                  ).textTheme.titleSmall,
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  selectedTitles.isEmpty
+                                                      ? 'Todos los cargos'
+                                                      : '${selectedTitles.length} cargos: ${selectedTitles.map((item) => item.name).join(', ')}',
+                                                  maxLines: 3,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: Theme.of(
+                                                    context,
+                                                  ).textTheme.bodySmall,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          TextButton.icon(
+                                            onPressed: () =>
+                                                _pickOfficeJobTitles(office),
+                                            icon: const Icon(
+                                              Icons.badge_rounded,
+                                            ),
+                                            label: const Text('Cargos'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        'Cargos globales del evento',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Selecciona cargos globales. Todas las personas con esos cargos podran asistir, sin importar su oficina o unidad.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color:
+                                _showValidation &&
+                                    _selectedOfficeIds.isEmpty &&
+                                    _selectedJobTitleCodes.isEmpty
+                                ? const Color(0xFFD94841)
+                                : AppPalette.line,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        globalSelectedJobTitles.length == 1
+                                            ? '1 cargo seleccionado'
+                                            : '${globalSelectedJobTitles.length} cargos seleccionados',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.titleSmall,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        globalSelectedJobTitles.isEmpty
+                                            ? 'Todavia no seleccionaste cargos.'
+                                            : 'Aplicara sin importar la oficina.',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                ElevatedButton.icon(
+                                  onPressed: _pickGlobalJobTitles,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppPalette.orange,
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                  ),
+                                  icon: const Icon(Icons.badge_rounded),
+                                  label: Text(
+                                    globalSelectedJobTitles.isEmpty
+                                        ? 'Seleccionar'
+                                        : 'Cambiar',
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (globalSelectedJobTitles.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  for (final jobTitle
+                                      in globalSelectedJobTitles)
+                                    Chip(
+                                      label: Text(jobTitle.name),
+                                      avatar: const Icon(
+                                        Icons.badge_rounded,
+                                        size: 18,
+                                        color: AppPalette.orange,
+                                      ),
+                                      backgroundColor: AppPalette.orangeSoft,
+                                      side: const BorderSide(
+                                        color: AppPalette.line,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ],
+                            if (_showValidation &&
+                                _selectedOfficeIds.isEmpty &&
+                                _selectedJobTitleCodes.isEmpty) ...[
+                              const SizedBox(height: 10),
+                              const Text(
+                                'Selecciona al menos una oficina o un cargo global.',
                                 style: TextStyle(
                                   color: Color(0xFFD94841),
                                   fontSize: 12,
@@ -2239,15 +2692,14 @@ class _EventOfficeSelectionSheetState
   Set<int> get _rawExpandedOfficeIds =>
       _expandOfficeSelection(_draftSelectedOfficeIds, widget.offices);
 
-  Set<int> get _expandedOfficeIds =>
-      _expandOfficeSelection(
-        _draftSelectedOfficeIds,
-        widget.offices,
-        excludedOfficeIds: _draftExcludedOfficeIds,
-      );
+  Set<int> get _expandedOfficeIds => _expandOfficeSelection(
+    _draftSelectedOfficeIds,
+    widget.offices,
+    excludedOfficeIds: _draftExcludedOfficeIds,
+  );
 
   List<EventOffice> get _filteredOffices {
-    final normalizedQuery = _searchQuery.trim().toLowerCase();
+    final normalizedQuery = _normalizeOfficeSearchText(_searchQuery);
 
     if (normalizedQuery.isEmpty) {
       return widget.offices;
@@ -2255,8 +2707,13 @@ class _EventOfficeSelectionSheetState
 
     return widget.offices
         .where((office) {
-          return office.name.toLowerCase().contains(normalizedQuery) ||
-              office.code.toLowerCase().contains(normalizedQuery) ||
+          return _officeTextLooksSimilar(
+                _normalizeOfficeSearchText(office.name),
+                normalizedQuery,
+              ) ||
+              _normalizeOfficeSearchText(
+                office.code,
+              ).contains(normalizedQuery) ||
               office.level.toString().contains(normalizedQuery);
         })
         .toList(growable: false);
@@ -2270,9 +2727,7 @@ class _EventOfficeSelectionSheetState
     }, widget.offices);
     _draftExcludedOfficeIds = _normalizeExcludedOfficeSelection(
       _draftSelectedOfficeIds,
-      {
-        ...widget.excludedOfficeIds,
-      },
+      {...widget.excludedOfficeIds},
       widget.offices,
     );
   }
@@ -2308,9 +2763,8 @@ class _EventOfficeSelectionSheetState
       final office = widget.offices.firstWhere((item) => item.id == officeId);
 
       if (_draftSelectedOfficeIds.contains(officeId)) {
-        final nextSelectedOfficeIds = {
-          ..._draftSelectedOfficeIds,
-        }..remove(officeId);
+        final nextSelectedOfficeIds = {..._draftSelectedOfficeIds}
+          ..remove(officeId);
         _syncDraftOfficeSelection(nextSelectedOfficeIds);
         return;
       }
@@ -2345,10 +2799,7 @@ class _EventOfficeSelectionSheetState
         return;
       }
 
-      final nextSelectedOfficeIds = {
-        ..._draftSelectedOfficeIds,
-        officeId,
-      };
+      final nextSelectedOfficeIds = {..._draftSelectedOfficeIds, officeId};
       _syncDraftOfficeSelection(nextSelectedOfficeIds);
     });
   }
@@ -2461,7 +2912,7 @@ class _EventOfficeSelectionSheetState
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],
-                          const SizedBox(height: 10),
+                        const SizedBox(height: 10),
                         Text(
                           'Usa la lista inferior para marcar oficinas base o deseleccionar ramas; aqui solo se muestra el resumen.',
                           style: Theme.of(context).textTheme.bodySmall,
@@ -2500,8 +2951,8 @@ class _EventOfficeSelectionSheetState
                                     _draftSelectedOfficeIds.contains(office.id);
                                 final isDirectlyExcluded =
                                     _draftExcludedOfficeIds.contains(office.id);
-                                final isIncludedBySelection = rawExpandedOfficeIds
-                                    .contains(office.id);
+                                final isIncludedBySelection =
+                                    rawExpandedOfficeIds.contains(office.id);
                                 final isIncludedByHierarchy = expandedOfficeIds
                                     .contains(office.id);
                                 final isInheritedOnly =
@@ -2523,7 +2974,7 @@ class _EventOfficeSelectionSheetState
                                     : isDirectlyExcluded
                                     ? const Color(0xFFFFF1F0)
                                     : isInheritedOnly
-                                    ? AppPalette.surfaceSoft
+                                    ? const Color(0xFFF3F9F1)
                                     : isExcludedByParent
                                     ? const Color(0xFFFFF8F7)
                                     : Colors.white;
@@ -2531,7 +2982,9 @@ class _EventOfficeSelectionSheetState
                                     ? AppPalette.orange
                                     : isDirectlyExcluded
                                     ? const Color(0xFFD94841)
-                                    : isInheritedOnly || isExcludedByParent
+                                    : isInheritedOnly
+                                    ? const Color(0xFF2E7D32)
+                                    : isExcludedByParent
                                     ? AppPalette.muted
                                     : AppPalette.line;
                                 final leadingIcon = isDirectlySelected
@@ -2539,7 +2992,7 @@ class _EventOfficeSelectionSheetState
                                     : isDirectlyExcluded
                                     ? Icons.remove_circle_rounded
                                     : isInheritedOnly
-                                    ? Icons.account_tree_rounded
+                                    ? Icons.check_circle_outline_rounded
                                     : isExcludedByParent
                                     ? Icons.block_rounded
                                     : Icons.radio_button_unchecked_rounded;
@@ -2548,7 +3001,7 @@ class _EventOfficeSelectionSheetState
                                     : isDirectlyExcluded
                                     ? const Color(0xFFD94841)
                                     : isInheritedOnly
-                                    ? AppPalette.night
+                                    ? const Color(0xFF2E7D32)
                                     : isExcludedByParent
                                     ? const Color(0xFFD94841)
                                     : AppPalette.muted;
@@ -2561,9 +3014,7 @@ class _EventOfficeSelectionSheetState
                                     decoration: BoxDecoration(
                                       color: cardColor,
                                       borderRadius: BorderRadius.circular(18),
-                                      border: Border.all(
-                                        color: borderColor,
-                                      ),
+                                      border: Border.all(color: borderColor),
                                     ),
                                     child: Row(
                                       crossAxisAlignment:
@@ -2615,7 +3066,7 @@ class _EventOfficeSelectionSheetState
                                               ] else if (isInheritedOnly) ...[
                                                 const SizedBox(height: 4),
                                                 Text(
-                                                  'Quedo incluida automaticamente por una oficina padre. Toca para deseleccionar esta rama del evento.',
+                                                  'Ira al evento porque esta dentro de una oficina padre seleccionada. Toca solo si quieres que esta rama no vaya.',
                                                   style: Theme.of(context)
                                                       .textTheme
                                                       .bodySmall
@@ -2646,6 +3097,311 @@ class _EventOfficeSelectionSheetState
                                                   ).textTheme.bodySmall,
                                                 ),
                                               ],
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Cancelar'),
+                      ),
+                      const Spacer(),
+                      ElevatedButton(
+                        onPressed: _applySelection,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppPalette.orange,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                        ),
+                        child: const Text('Aplicar seleccion'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EventJobTitleSelectionSheet extends StatefulWidget {
+  const _EventJobTitleSelectionSheet({
+    required this.jobTitles,
+    required this.selectedJobTitleCodes,
+    this.title = 'Selecciona cargos',
+    this.allowAllJobTitles = true,
+    this.helperText,
+  });
+
+  final List<EventJobTitle> jobTitles;
+  final Set<String> selectedJobTitleCodes;
+  final String title;
+  final bool allowAllJobTitles;
+  final String? helperText;
+
+  @override
+  State<_EventJobTitleSelectionSheet> createState() =>
+      _EventJobTitleSelectionSheetState();
+}
+
+class _EventJobTitleSelectionSheetState
+    extends State<_EventJobTitleSelectionSheet> {
+  final TextEditingController _searchController = TextEditingController();
+  final ScrollController _resultsScrollController = ScrollController();
+  late final Set<String> _draftSelectedJobTitleCodes;
+  String _searchQuery = '';
+
+  List<EventJobTitle> get _filteredJobTitles {
+    final normalizedQuery = _normalizeOfficeSearchText(_searchQuery);
+
+    if (normalizedQuery.isEmpty) {
+      return widget.jobTitles;
+    }
+
+    return widget.jobTitles
+        .where((jobTitle) {
+          return _normalizeOfficeSearchText(
+                jobTitle.name,
+              ).contains(normalizedQuery) ||
+              _normalizeOfficeSearchText(
+                jobTitle.code,
+              ).contains(normalizedQuery);
+        })
+        .toList(growable: false);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _draftSelectedJobTitleCodes = {...widget.selectedJobTitleCodes};
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _resultsScrollController.dispose();
+    super.dispose();
+  }
+
+  void _toggleJobTitle(String code) {
+    setState(() {
+      if (_draftSelectedJobTitleCodes.contains(code)) {
+        _draftSelectedJobTitleCodes.remove(code);
+      } else {
+        _draftSelectedJobTitleCodes.add(code);
+      }
+    });
+  }
+
+  void _selectAll() {
+    setState(() {
+      _draftSelectedJobTitleCodes.clear();
+    });
+  }
+
+  void _applySelection() {
+    Navigator.of(context).pop(
+      _EventJobTitleSelectionResult(
+        selectedJobTitleCodes: _draftSelectedJobTitleCodes.toList(
+          growable: false,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final filteredJobTitles = _filteredJobTitles;
+    final allSelected =
+        widget.allowAllJobTitles && _draftSelectedJobTitleCodes.isEmpty;
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(12, 20, 12, 12 + bottomInset),
+        child: Material(
+          color: AppPalette.surface,
+          borderRadius: BorderRadius.circular(30),
+          child: FractionallySizedBox(
+            heightFactor: 0.88,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.title,
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              widget.helperText ??
+                                  (widget.allowAllJobTitles
+                                      ? 'Puedes buscar por nombre o codigo. Usa Todos cuando no quieras filtrar por cargo.'
+                                      : 'Selecciona uno o mas cargos.'),
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _searchController,
+                    onChanged: (value) {
+                      setState(() {
+                        _searchQuery = value;
+                      });
+                    },
+                    decoration: const InputDecoration(
+                      labelText: 'Buscar cargo',
+                      hintText: 'Escribe cargo o codigo',
+                      prefixIcon: Icon(Icons.search_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (widget.allowAllJobTitles) ...[
+                    InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: _selectAll,
+                      child: Ink(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: allSelected
+                              ? AppPalette.orangeSoft
+                              : Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: allSelected
+                                ? AppPalette.orange
+                                : AppPalette.line,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              allSelected
+                                  ? Icons.check_circle_rounded
+                                  : Icons.radio_button_unchecked_rounded,
+                              color: allSelected
+                                  ? AppPalette.orange
+                                  : AppPalette.muted,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Todos los cargos',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  Text(
+                    filteredJobTitles.length == 1
+                        ? '1 resultado'
+                        : '${filteredJobTitles.length} resultados',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: filteredJobTitles.isEmpty
+                        ? Center(
+                            child: Text(
+                              'No hay cargos que coincidan con la busqueda.',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                              textAlign: TextAlign.center,
+                            ),
+                          )
+                        : Scrollbar(
+                            controller: _resultsScrollController,
+                            thumbVisibility: true,
+                            child: ListView.separated(
+                              controller: _resultsScrollController,
+                              itemCount: filteredJobTitles.length,
+                              separatorBuilder: (_, _) =>
+                                  const SizedBox(height: 8),
+                              itemBuilder: (context, index) {
+                                final jobTitle = filteredJobTitles[index];
+                                final isSelected = _draftSelectedJobTitleCodes
+                                    .contains(jobTitle.code);
+
+                                return InkWell(
+                                  borderRadius: BorderRadius.circular(18),
+                                  onTap: () => _toggleJobTitle(jobTitle.code),
+                                  child: Ink(
+                                    padding: const EdgeInsets.all(14),
+                                    decoration: BoxDecoration(
+                                      color: isSelected
+                                          ? AppPalette.orangeSoft
+                                          : Colors.white,
+                                      borderRadius: BorderRadius.circular(18),
+                                      border: Border.all(
+                                        color: isSelected
+                                            ? AppPalette.orange
+                                            : AppPalette.line,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Icon(
+                                          isSelected
+                                              ? Icons.check_circle_rounded
+                                              : Icons
+                                                    .radio_button_unchecked_rounded,
+                                          color: isSelected
+                                              ? AppPalette.orange
+                                              : AppPalette.muted,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                jobTitle.name,
+                                                style: Theme.of(
+                                                  context,
+                                                ).textTheme.titleSmall,
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                'Codigo ${jobTitle.code}',
+                                                style: Theme.of(
+                                                  context,
+                                                ).textTheme.bodySmall,
+                                              ),
                                             ],
                                           ),
                                         ),
@@ -2936,6 +3692,10 @@ class _EventListCard extends StatelessWidget {
                     label: event.officeCountLabel,
                   ),
                   _InfoChip(
+                    icon: Icons.badge_rounded,
+                    label: event.jobTitleCountLabel,
+                  ),
+                  _InfoChip(
                     icon: Icons.fact_check_outlined,
                     label: event.controlsLabel,
                   ),
@@ -3068,7 +3828,9 @@ class _ListOptionButton extends StatelessWidget {
   }
 }
 
-class _EventRosterTable extends StatelessWidget {
+const int _eventRosterPageSize = 30;
+
+class _EventRosterTable extends StatefulWidget {
   const _EventRosterTable({
     required this.eventControls,
     required this.entries,
@@ -3080,14 +3842,64 @@ class _EventRosterTable extends StatelessWidget {
   final EventListType selectedListType;
 
   @override
+  State<_EventRosterTable> createState() => _EventRosterTableState();
+}
+
+class _EventRosterTableState extends State<_EventRosterTable> {
+  int _currentPage = 0;
+
+  int get _pageCount {
+    if (widget.entries.isEmpty) {
+      return 1;
+    }
+
+    return ((widget.entries.length - 1) ~/ _eventRosterPageSize) + 1;
+  }
+
+  @override
+  void didUpdateWidget(covariant _EventRosterTable oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.selectedListType != widget.selectedListType) {
+      _currentPage = 0;
+      return;
+    }
+
+    final maxPage = _pageCount - 1;
+    if (_currentPage > maxPage) {
+      _currentPage = maxPage;
+    }
+  }
+
+  void _goToPage(int page) {
+    final maxPage = _pageCount - 1;
+    final nextPage = page.clamp(0, maxPage).toInt();
+
+    if (nextPage == _currentPage) {
+      return;
+    }
+
+    setState(() {
+      _currentPage = nextPage;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final accentColor = selectedListType == EventListType.attended
+    final accentColor = widget.selectedListType == EventListType.attended
         ? AppPalette.orange
         : AppPalette.night;
-    final statusLabel = selectedListType == EventListType.attended
+    final statusLabel = widget.selectedListType == EventListType.attended
         ? 'Asistio'
         : 'Observado';
-    final totalControls = eventControls.length;
+    final totalControls = widget.eventControls.length;
+    final pageStart = _currentPage * _eventRosterPageSize;
+    final rawPageEnd = pageStart + _eventRosterPageSize;
+    final pageEnd = rawPageEnd > widget.entries.length
+        ? widget.entries.length
+        : rawPageEnd;
+    final pageEntries = widget.entries.sublist(pageStart, pageEnd);
+    final hasMultiplePages = widget.entries.length > _eventRosterPageSize;
 
     return Card(
       child: Padding(
@@ -3105,7 +3917,7 @@ class _EventRosterTable extends StatelessWidget {
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Icon(
-                    selectedListType == EventListType.attended
+                    widget.selectedListType == EventListType.attended
                         ? Icons.how_to_reg_rounded
                         : Icons.visibility_outlined,
                     color: accentColor,
@@ -3114,7 +3926,7 @@ class _EventRosterTable extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    selectedListType == EventListType.attended
+                    widget.selectedListType == EventListType.attended
                         ? 'Tabla de asistencia'
                         : 'Tabla de observados',
                     style: Theme.of(context).textTheme.titleLarge,
@@ -3205,7 +4017,7 @@ class _EventRosterTable extends StatelessWidget {
                           ),
                         ],
                         rows: [
-                          for (final entry in entries)
+                          for (final entry in pageEntries)
                             DataRow(
                               cells: [
                                 DataCell(
@@ -3251,7 +4063,7 @@ class _EventRosterTable extends StatelessWidget {
                                   onTap: () => _showAttendanceControlsSheet(
                                     context,
                                     entry: entry,
-                                    eventControls: eventControls,
+                                    eventControls: widget.eventControls,
                                   ),
                                 ),
                                 DataCell(
@@ -3340,13 +4152,94 @@ class _EventRosterTable extends StatelessWidget {
               },
             ),
             const SizedBox(height: 12),
-            Text(
-              'Total: ${entries.length} registros',
-              style: Theme.of(context).textTheme.bodySmall,
+            _RosterPaginationControls(
+              currentPage: _currentPage,
+              pageCount: _pageCount,
+              pageStart: pageStart,
+              pageEnd: pageEnd,
+              totalEntries: widget.entries.length,
+              showControls: hasMultiplePages,
+              onFirst: () => _goToPage(0),
+              onPrevious: () => _goToPage(_currentPage - 1),
+              onNext: () => _goToPage(_currentPage + 1),
+              onLast: () => _goToPage(_pageCount - 1),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _RosterPaginationControls extends StatelessWidget {
+  const _RosterPaginationControls({
+    required this.currentPage,
+    required this.pageCount,
+    required this.pageStart,
+    required this.pageEnd,
+    required this.totalEntries,
+    required this.showControls,
+    required this.onFirst,
+    required this.onPrevious,
+    required this.onNext,
+    required this.onLast,
+  });
+
+  final int currentPage;
+  final int pageCount;
+  final int pageStart;
+  final int pageEnd;
+  final int totalEntries;
+  final bool showControls;
+  final VoidCallback onFirst;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+  final VoidCallback onLast;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final isFirstPage = currentPage == 0;
+    final isLastPage = currentPage >= pageCount - 1;
+    final rangeLabel = totalEntries == 0
+        ? 'Total: 0 registros'
+        : 'Mostrando ${pageStart + 1}-$pageEnd de $totalEntries registros';
+
+    if (!showControls) {
+      return Text(rangeLabel, style: textTheme.bodySmall);
+    }
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text(rangeLabel, style: textTheme.bodySmall),
+        Text(
+          'Pagina ${currentPage + 1} de $pageCount',
+          style: textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        IconButton.filledTonal(
+          onPressed: isFirstPage ? null : onFirst,
+          tooltip: 'Primera pagina',
+          icon: const Icon(Icons.first_page_rounded),
+        ),
+        IconButton.filledTonal(
+          onPressed: isFirstPage ? null : onPrevious,
+          tooltip: 'Pagina anterior',
+          icon: const Icon(Icons.chevron_left_rounded),
+        ),
+        IconButton.filledTonal(
+          onPressed: isLastPage ? null : onNext,
+          tooltip: 'Pagina siguiente',
+          icon: const Icon(Icons.chevron_right_rounded),
+        ),
+        IconButton.filledTonal(
+          onPressed: isLastPage ? null : onLast,
+          tooltip: 'Ultima pagina',
+          icon: const Icon(Icons.last_page_rounded),
+        ),
+      ],
     );
   }
 }
@@ -3841,8 +4734,7 @@ Set<int> _expandOfficeSelection(
   Set<int> directOfficeIds,
   List<EventOffice> offices, {
   Set<int>? excludedOfficeIds,
-}
-) {
+}) {
   if (directOfficeIds.isEmpty) {
     return <int>{};
   }
@@ -3899,6 +4791,7 @@ String _normalizeOfficeCode(String code) {
   return code.trim().replaceAll(RegExp(r'\.+$'), '');
 }
 
+<<<<<<< HEAD
 const Map<String, Set<String>> _submayoraltyEventBranchCodes = {
   '10.2.2': {'10.4.3.1', '10.4.3.2', '10.4.3.3', '10.4.3.4'},
   '10.2.3': {'10.4.4.1', '10.4.4.2', '10.4.4.3', '10.4.4.4'},
@@ -3907,6 +4800,80 @@ const Map<String, Set<String>> _submayoraltyEventBranchCodes = {
   '10.2.6': {'10.4.6.1', '10.4.6.2', '10.4.6.3', '10.4.6.4'},
   '10.2.7': {'10.4.8.1', '10.4.8.2', '10.4.8.3', '10.4.8.4'},
 };
+=======
+String _normalizeOfficeSearchText(String value) {
+  return _stripTextAccents(value.trim().toLowerCase())
+      .replaceAll(RegExp(r'\bcomision\b'), ' ')
+      .replaceAll(RegExp(r'[^a-z0-9.]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+}
+
+String _stripTextAccents(String value) {
+  return value
+      .replaceAll(RegExp(r'[áàäâã]'), 'a')
+      .replaceAll(RegExp(r'[éèëê]'), 'e')
+      .replaceAll(RegExp(r'[íìïî]'), 'i')
+      .replaceAll(RegExp(r'[óòöôõ]'), 'o')
+      .replaceAll(RegExp(r'[úùüû]'), 'u')
+      .replaceAll('ñ', 'n');
+}
+
+bool _officeTextLooksSimilar(String value, String query) {
+  if (value.isEmpty || query.isEmpty) {
+    return false;
+  }
+
+  if (value == query || value.contains(query) || query.contains(value)) {
+    return true;
+  }
+
+  final valueTokens = _officeSearchTokens(value);
+  final queryTokens = _officeSearchTokens(query);
+
+  if (valueTokens.isEmpty || queryTokens.isEmpty) {
+    return false;
+  }
+
+  final matches = queryTokens
+      .where((token) => valueTokens.any((valueToken) => valueToken == token))
+      .length;
+  final requiredMatches = queryTokens.length <= 2 ? queryTokens.length : 2;
+
+  return matches >= requiredMatches;
+}
+
+Set<String> _officeSearchTokens(String value) {
+  const ignoredTokens = {
+    'oficina',
+    'unidad',
+    'direccion',
+    'direcciones',
+    'departamento',
+    'secretaria',
+    'municipal',
+    'gobierno',
+    'autonomo',
+    'de',
+    'del',
+    'la',
+    'las',
+    'los',
+    'el',
+    'y',
+  };
+
+  return value
+      .split(' ')
+      .where(
+        (token) =>
+            token.isNotEmpty &&
+            !ignoredTokens.contains(token) &&
+            (token.length >= 3 || RegExp(r'\d').hasMatch(token)),
+      )
+      .toSet();
+}
+>>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
 
 String _formatDate(DateTime date) {
   const months = [

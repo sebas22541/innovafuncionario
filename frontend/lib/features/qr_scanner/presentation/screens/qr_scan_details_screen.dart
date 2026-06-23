@@ -3,6 +3,7 @@ import 'package:geolocator/geolocator.dart';
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/location_permission_settings.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/base64_avatar.dart';
@@ -18,6 +19,7 @@ class QrScanDetailsScreen extends StatefulWidget {
     this.activeEventId,
     this.activeEventName,
     this.activeEventOffices = const [],
+    this.activeEventJobTitles = const [],
     this.activeEventControls = const [],
     this.manualCi,
     this.prefetchedQrDetails,
@@ -28,6 +30,7 @@ class QrScanDetailsScreen extends StatefulWidget {
   final int? activeEventId;
   final String? activeEventName;
   final List<EventOffice> activeEventOffices;
+  final List<EventJobTitle> activeEventJobTitles;
   final List<EventControl> activeEventControls;
   final String? manualCi;
   final QrDetails? prefetchedQrDetails;
@@ -37,7 +40,11 @@ class QrScanDetailsScreen extends StatefulWidget {
 }
 
 class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
+  static final Map<String, _CachedQrDetails> _qrDetailsCache = {};
+  static const Duration _qrDetailsCacheTtl = Duration(minutes: 2);
+
   late final Future<QrDetails?> _qrDetailsFuture;
+  QrDetails? _currentQrDetails;
   String? _submittingActionKey;
   String? _lookupErrorMessage;
 
@@ -50,7 +57,17 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
   }
 
   Future<QrDetails?> _loadQrDetails() async {
+    final cacheKey = _buildQrDetailsCacheKey();
+    final cachedDetails = _readCachedQrDetails(cacheKey);
+
+    if (cachedDetails != null) {
+      _currentQrDetails = cachedDetails;
+      return cachedDetails;
+    }
+
     if (widget.prefetchedQrDetails != null) {
+      _currentQrDetails = widget.prefetchedQrDetails;
+      _writeCachedQrDetails(cacheKey, widget.prefetchedQrDetails!);
       return widget.prefetchedQrDetails;
     }
 
@@ -60,13 +77,27 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
           widget.manualCi!,
           eventId: widget.activeEventId,
         );
-        return result?.toEntity();
+        final details = result?.toEntity();
+
+        if (details != null) {
+          _currentQrDetails = details;
+          _writeCachedQrDetails(cacheKey, details);
+        }
+
+        return details;
       }
 
-      return await dependencies.getQrDetailsByScan(
+      final details = await dependencies.getQrDetailsByScan(
         widget.scanResult.value,
         eventId: widget.activeEventId,
       );
+
+      if (details != null) {
+        _currentQrDetails = details;
+        _writeCachedQrDetails(cacheKey, details);
+      }
+
+      return details;
     } on BackendApiException catch (error) {
       _lookupErrorMessage = error.message;
 
@@ -82,6 +113,38 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
     }
   }
 
+  String _buildQrDetailsCacheKey() {
+    final eventKey = widget.activeEventId?.toString() ?? 'sin-evento';
+
+    if (widget.manualCi != null) {
+      return '$eventKey|ci:${widget.manualCi!.trim().toUpperCase()}';
+    }
+
+    return '$eventKey|qr:${widget.scanResult.value.trim()}';
+  }
+
+  QrDetails? _readCachedQrDetails(String cacheKey) {
+    final cachedEntry = _qrDetailsCache[cacheKey];
+
+    if (cachedEntry == null) {
+      return null;
+    }
+
+    if (DateTime.now().difference(cachedEntry.cachedAt) > _qrDetailsCacheTtl) {
+      _qrDetailsCache.remove(cacheKey);
+      return null;
+    }
+
+    return cachedEntry.details;
+  }
+
+  void _writeCachedQrDetails(String cacheKey, QrDetails details) {
+    _qrDetailsCache[cacheKey] = _CachedQrDetails(
+      details: details,
+      cachedAt: DateTime.now(),
+    );
+  }
+
   Future<void> _registerAttendance(
     EventListType listType, {
     required EventControl control,
@@ -92,6 +155,17 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
       AppAlert.showWarning(
         context,
         'Primero selecciona un evento desde la seccion Eventos.',
+      );
+      return;
+    }
+
+    final currentDetails = _currentQrDetails;
+
+    if (currentDetails?.canRegisterInActiveEvent == false) {
+      AppAlert.showError(
+        context,
+        currentDetails?.eventRegistrationMessage ??
+            'Este usuario no esta permitido asistir a este evento.',
       );
       return;
     }
@@ -114,14 +188,14 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
 
     try {
       final location = await _resolveCurrentLocation();
+      final registeredAt = DateTime.now();
+
       await dependencies.eventsApiService.registerAttendance(
         eventId: widget.activeEventId!,
         controlId: control.id,
         qrValue: widget.manualCi == null ? widget.scanResult.value : null,
         ci: widget.manualCi,
         listType: listType,
-        operatorEmail: widget.currentUser.email,
-        operatorFullName: widget.currentUser.fullName,
         latitude: location.latitude,
         longitude: location.longitude,
         accuracy: location.accuracy,
@@ -135,6 +209,13 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
       if (!mounted) {
         return;
       }
+
+      _applyLocalControlRegistration(
+        control: control,
+        listType: listType,
+        registeredAt: registeredAt,
+        observation: observation,
+      );
 
       final actionLabel = listType == EventListType.attended
           ? 'Asistencia guardada en ${control.name}'
@@ -172,6 +253,14 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
   }
 
   Future<_AttendanceLocationSnapshot> _resolveCurrentLocation() async {
+    final isLocationEnabled = await LocationPermissionSettings.isEnabled();
+
+    if (!isLocationEnabled) {
+      throw StateError(
+        'Habilita la ubicacion en Configuracion para registrar la asistencia.',
+      );
+    }
+
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
 
     if (!serviceEnabled) {
@@ -280,52 +369,68 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
     return result;
   }
 
+  void _applyLocalControlRegistration({
+    required EventControl control,
+    required EventListType listType,
+    required DateTime registeredAt,
+    String? observation,
+  }) {
+    final currentDetails = _currentQrDetails;
+
+    if (currentDetails == null) {
+      return;
+    }
+
+    final currentAttendance = currentDetails.eventAttendance;
+    final currentControls = currentAttendance?.controls ?? const [];
+    final updatedControl = QrEventControlRecord(
+      id: _findExistingControlRecord(currentDetails, control)?.id ?? 0,
+      controlId: control.id,
+      controlName: control.name,
+      controlOrder: control.order,
+      status: listType == EventListType.attended ? 'ASISTIO' : 'OBSERVADO',
+      registeredAt: registeredAt,
+      note: observation,
+    );
+    final updatedControls =
+        [
+          ...currentControls.where((record) => record.controlId != control.id),
+          updatedControl,
+        ]..sort((left, right) {
+          final orderComparison = left.controlOrder.compareTo(
+            right.controlOrder,
+          );
+
+          if (orderComparison != 0) {
+            return orderComparison;
+          }
+
+          return left.registeredAt.compareTo(right.registeredAt);
+        });
+    final attendedCount = updatedControls
+        .where((record) => record.isAttended)
+        .length;
+    final observedCount = updatedControls.length - attendedCount;
+    final updatedAttendance = QrEventAttendanceRecord(
+      status: attendedCount > 0 ? 'ASISTIO' : 'OBSERVADO',
+      registeredAt: registeredAt,
+      controls: updatedControls,
+      registeredControlsCount: updatedControls.length,
+      attendedControlsCount: attendedCount,
+      observedControlsCount: observedCount,
+    );
+    final updatedDetails = currentDetails.copyWith(
+      eventAttendance: updatedAttendance,
+    );
+
+    setState(() {
+      _currentQrDetails = updatedDetails;
+    });
+    _writeCachedQrDetails(_buildQrDetailsCacheKey(), updatedDetails);
+  }
+
   bool get _hasActiveEventContext =>
       widget.activeEventId != null && widget.activeEventName != null;
-
-  String? _buildAttendanceRestrictionMessage(QrDetails? qrDetails) {
-    if (_lookupErrorMessage != null) {
-      return null;
-    }
-
-    if (!_hasActiveEventContext || widget.activeEventOffices.isEmpty) {
-      return null;
-    }
-
-    if (qrDetails == null || qrDetails.officeId == null) {
-      return 'Este usuario no esta permitido asistir a este evento.';
-    }
-
-    final allowedOfficeIds = widget.activeEventOffices
-        .map((office) => office.id)
-        .toSet();
-
-    if (allowedOfficeIds.contains(qrDetails.officeId)) {
-      return null;
-    }
-
-    return 'Este usuario no esta permitido asistir a este evento.';
-  }
-
-  String? _buildAttendanceRestrictionDetail(QrDetails? qrDetails) {
-    if (_lookupErrorMessage != null) {
-      return null;
-    }
-
-    if (!_hasActiveEventContext || widget.activeEventOffices.isEmpty) {
-      return null;
-    }
-
-    if (qrDetails == null) {
-      return 'No se encontro una persona registrada con una oficina valida para compararla contra este evento.';
-    }
-
-    if (qrDetails.officeId == null) {
-      return 'La persona escaneada no tiene una oficina asociada en la base de datos.';
-    }
-
-    return 'La oficina del usuario no esta asociada a este evento.';
-  }
 
   QrEventControlRecord? _findExistingControlRecord(
     QrDetails? qrDetails,
@@ -472,7 +577,7 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
                     );
                   }
 
-                  final qrDetails = snapshot.data;
+                  final qrDetails = _currentQrDetails ?? snapshot.data;
 
                   if (qrDetails == null) {
                     return Card(
@@ -490,8 +595,8 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
                             const SizedBox(height: 8),
                             Text(
                               _hasActiveEventContext
-                                  ? 'Como no se pudo validar su oficina, en este evento solo podras guardarlo como Observado.'
-                                  : 'Puedes guardarlo igual en este evento para pruebas usando Asistio u Observado.',
+                                  ? 'No se puede registrar en el evento hasta validar que pertenece a las oficinas o cargos configurados.'
+                                  : 'Selecciona un evento para validar si puede registrarse.',
                               style: textTheme.bodyMedium,
                             ),
                           ],
@@ -590,75 +695,13 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
               FutureBuilder<QrDetails?>(
                 future: _qrDetailsFuture,
                 builder: (context, snapshot) {
-                  if (snapshot.connectionState != ConnectionState.done) {
-                    return const SizedBox.shrink();
-                  }
-
-                  final restrictionMessage = _buildAttendanceRestrictionMessage(
-                    snapshot.data,
-                  );
-                  final restrictionDetail = _buildAttendanceRestrictionDetail(
-                    snapshot.data,
-                  );
-
-                  if (restrictionMessage == null || restrictionDetail == null) {
-                    return const SizedBox.shrink();
-                  }
-
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 14),
-                    child: Card(
-                      color: AppPalette.orangeSoft,
-                      child: Padding(
-                        padding: const EdgeInsets.all(18),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(
-                              Icons.block_rounded,
-                              color: AppPalette.orange,
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    restrictionMessage,
-                                    style: textTheme.titleMedium,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '$restrictionDetail Solo puedes registrarlo como Observado.',
-                                    style: textTheme.bodyMedium,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-              FutureBuilder<QrDetails?>(
-                future: _qrDetailsFuture,
-                builder: (context, snapshot) {
                   if (_lookupErrorMessage != null) {
                     return const SizedBox.shrink();
                   }
 
-                  final qrDetails = snapshot.data;
+                  final qrDetails = _currentQrDetails ?? snapshot.data;
                   final isLookupPending =
                       snapshot.connectionState != ConnectionState.done;
-                  final restrictionMessage = _buildAttendanceRestrictionMessage(
-                    qrDetails,
-                  );
-
-                  if (restrictionMessage != null) {
-                    return const SizedBox.shrink();
-                  }
 
                   if (!_hasActiveEventContext) {
                     return const SizedBox.shrink();
@@ -673,6 +716,38 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
                           child: Text(
                             'Este evento no tiene controles configurados.',
                             style: textTheme.bodyMedium,
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+
+                  if (qrDetails == null) {
+                    return const SizedBox.shrink();
+                  }
+
+                  if (qrDetails.canRegisterInActiveEvent == false) {
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 18),
+                      child: Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'No se puede registrar',
+                                style: textTheme.titleLarge?.copyWith(
+                                  color: const Color(0xFFD94841),
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                qrDetails.eventRegistrationMessage ??
+                                    'Este usuario no esta permitido asistir a este evento.',
+                                style: textTheme.bodyMedium,
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -770,6 +845,13 @@ class _AttendanceLocationSnapshot {
   final double latitude;
   final double longitude;
   final double? accuracy;
+}
+
+class _CachedQrDetails {
+  const _CachedQrDetails({required this.details, required this.cachedAt});
+
+  final QrDetails details;
+  final DateTime cachedAt;
 }
 
 class _ControlRegistrationCard extends StatelessWidget {

@@ -8,20 +8,20 @@ datasource db {
 }
 
 model asistencias {
-  id                Int               @id @default(autoincrement())
-  evento_id         Int
-  persona_id        Int
-  nombre_snapshot   String            @db.VarChar(150)
-  estado            estado_asistencia @default(ASISTIO)
-  qr_leido          String?
-  datos_qr_snapshot Json?
-  observacion       String?
-  registrado_por_id Int?
-  registrado_en     DateTime          @default(now()) @db.Timestamptz(6)
+  id                   Int                    @id @default(autoincrement())
+  evento_id            Int
+  persona_id           Int
+  nombre_snapshot      String                 @db.VarChar(150)
+  estado               estado_asistencia      @default(ASISTIO)
+  qr_leido             String?
+  datos_qr_snapshot    Json?
+  observacion          String?
+  registrado_por_id    Int?
+  registrado_en        DateTime               @default(now()) @db.Timestamptz(6)
   asistencia_controles asistencia_controles[]
-  eventos           eventos           @relation(fields: [evento_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  personas          personas          @relation(fields: [persona_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  usuarios          usuarios?         @relation(fields: [registrado_por_id], references: [id], onUpdate: NoAction)
+  eventos              eventos                @relation(fields: [evento_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  personas             personas               @relation(fields: [persona_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  usuarios             usuarios?              @relation(fields: [registrado_por_id], references: [id], onUpdate: NoAction)
 
   @@unique([evento_id, persona_id])
   @@index([datos_qr_snapshot], map: "idx_asistencias_datos_qr_snapshot", type: Gin)
@@ -54,46 +54,76 @@ model evento_departamentos {
 }
 
 model eventos {
-  id                   Int                    @id @default(autoincrement())
-  nombre               String                 @db.VarChar(150)
-  fecha_evento         DateTime               @db.Timestamptz(6)
-  descripcion          String?
-  direccion            String?                @db.VarChar(255)
-  latitud              Float?                 @db.DoublePrecision
-  longitud             Float?                 @db.DoublePrecision
-  oficina_ids_excluidos Int[]                 @default([])
-  estado               estado_evento          @default(ACTIVO)
-  creado_por_id        Int
-  created_at           DateTime               @default(now()) @db.Timestamptz(6)
-  updated_at           DateTime               @default(now()) @db.Timestamptz(6)
-  asistencias          asistencias[]
-  evento_controles     evento_controles[]
+  id                    Int                     @id @default(autoincrement())
+  nombre                String                  @db.VarChar(150)
+  fecha_evento          DateTime                @db.Timestamptz(6)
+  descripcion           String?
+  direccion             String?                 @db.VarChar(255)
+  latitud               Float?                  @db.DoublePrecision
+  longitud              Float?                  @db.DoublePrecision
+  oficina_ids_excluidos Int[]                   @default([])
+  estado                estado_evento           @default(ACTIVO)
+  creado_por_id         Int
+  created_at            DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime                @default(now()) @db.Timestamptz(6)
+  asistencias           asistencias[]
+  evento_controles      evento_controles[]
   // OBSOLETO: departamentos ya no se usa para asociar
-  evento_departamentos evento_departamentos[]
-  evento_oficinas      evento_oficinas[]
-  usuarios             usuarios               @relation(fields: [creado_por_id], references: [id], onUpdate: NoAction)
+  evento_departamentos  evento_departamentos[]
+  evento_oficinas       evento_oficinas[]
+  evento_cargos         evento_cargos[]
+  evento_oficina_cargos evento_oficina_cargos[]
+  usuarios              usuarios                @relation(fields: [creado_por_id], references: [id], onUpdate: NoAction)
 
   @@index([fecha_evento], map: "idx_eventos_fecha_evento")
 }
 
 model oficinas {
-  id              Int               @id
-  oficina         String            @db.VarChar(150)
-  cod             String            @db.VarChar(50)
-  nivel           Int
-  evento_oficinas evento_oficinas[]
-  usuarios        usuarios[]
+  id                    Int                     @id
+  oficina               String                  @db.VarChar(150)
+  cod                   String                  @db.VarChar(50)
+  nivel                 Int
+  evento_oficinas       evento_oficinas[]
+  evento_oficina_cargos evento_oficina_cargos[]
+  usuarios              usuarios[]              @relation("UsuarioOficina")
+  usuarios_comision     usuarios[]              @relation("UsuarioOficinaComision")
 
   @@index([cod], map: "idx_oficinas_cod")
   @@index([nivel], map: "idx_oficinas_nivel")
 }
 
 model cargos {
-  codigo   String     @id @db.VarChar(50)
-  cargo    String     @db.VarChar(150)
-  usuarios usuarios[]
+  codigo                String                  @id @db.VarChar(50)
+  cargo                 String                  @db.VarChar(150)
+  usuarios              usuarios[]              @relation("UsuarioCargo")
+  usuarios_subcargo     usuarios[]              @relation("UsuarioSubcargo")
+  evento_cargos         evento_cargos[]
+  evento_oficina_cargos evento_oficina_cargos[]
 
   @@index([cargo], map: "idx_cargos_cargo")
+}
+
+model evento_cargos {
+  evento_id    Int
+  cargo_codigo String  @db.VarChar(50)
+  eventos      eventos @relation(fields: [evento_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  cargos       cargos  @relation(fields: [cargo_codigo], references: [codigo], onUpdate: NoAction)
+
+  @@id([evento_id, cargo_codigo])
+  @@index([cargo_codigo], map: "idx_evento_cargos_cargo_codigo")
+}
+
+model evento_oficina_cargos {
+  evento_id    Int
+  oficina_id   Int
+  cargo_codigo String   @db.VarChar(50)
+  eventos      eventos  @relation(fields: [evento_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  oficinas     oficinas @relation(fields: [oficina_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  cargos       cargos   @relation(fields: [cargo_codigo], references: [codigo], onUpdate: NoAction)
+
+  @@id([evento_id, oficina_id, cargo_codigo])
+  @@index([oficina_id], map: "idx_evento_oficina_cargos_oficina_id")
+  @@index([cargo_codigo], map: "idx_evento_oficina_cargos_cargo_codigo")
 }
 
 model evento_oficinas {
@@ -108,14 +138,14 @@ model evento_oficinas {
 }
 
 model evento_controles {
-  id                   Int                   @id @default(autoincrement())
-  evento_id             Int
-  nombre                String                @db.VarChar(120)
-  orden                 Int
-  created_at            DateTime              @default(now()) @db.Timestamptz(6)
-  updated_at            DateTime              @default(now()) @db.Timestamptz(6)
-  asistencia_controles  asistencia_controles[]
-  eventos               eventos               @relation(fields: [evento_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                   Int                    @id @default(autoincrement())
+  evento_id            Int
+  nombre               String                 @db.VarChar(120)
+  orden                Int
+  created_at           DateTime               @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime               @default(now()) @db.Timestamptz(6)
+  asistencia_controles asistencia_controles[]
+  eventos              eventos                @relation(fields: [evento_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([evento_id, orden])
   @@index([evento_id], map: "idx_evento_controles_evento_id")
@@ -164,35 +194,91 @@ model personas {
 }
 
 model usuarios {
-  id               Int           @id @default(autoincrement())
-  nombre_completo  String        @db.VarChar(150)
-  nombres          String?       @db.VarChar(150)
-  primer_apellido  String?       @db.VarChar(80)
-  segundo_apellido String?       @db.VarChar(80)
-  tercer_apellido  String?       @db.VarChar(80)
-  ci               String?       @db.VarChar(30)
-  tipo_vinculo     String?       @db.VarChar(30)
-  unidad           String?       @db.VarChar(120)
-  oficina_id       Int?
-  cargo_codigo     String?       @db.VarChar(50)
-  cargo            String?       @db.VarChar(120)
-  numero_item      String?       @db.VarChar(50)
-  foto_url         String?       @db.Text
-  email            String        @unique @db.VarChar(150)
-  password_hash    String
-  rol              rol_usuario   @default(OPERADOR)
-  activo           Boolean       @default(true)
-  created_at       DateTime      @default(now()) @db.Timestamptz(6)
-  updated_at       DateTime      @default(now()) @db.Timestamptz(6)
-  asistencias      asistencias[]
+  id                   Int                    @id @default(autoincrement())
+  nombre_completo      String                 @db.VarChar(150)
+  nombres              String?                @db.VarChar(150)
+  primer_apellido      String?                @db.VarChar(80)
+  segundo_apellido     String?                @db.VarChar(80)
+  tercer_apellido      String?                @db.VarChar(80)
+  ci                   String?                @db.VarChar(30)
+  celular              String?                @db.VarChar(30)
+  tipo_vinculo         String?                @db.VarChar(30)
+  unidad               String?                @db.VarChar(120)
+  oficina_id           Int?
+  oficina_comision_id  Int?
+  cargo_codigo         String?                @db.VarChar(50)
+  cargo                String?                @db.VarChar(120)
+  subcargo_codigo      String?                @db.VarChar(50)
+  subcargo             String?                @db.VarChar(120)
+  lugar                String?                @db.VarChar(120)
+  numero_item          String?                @db.VarChar(50)
+  foto_url             String?                @db.Text
+  email                String                 @unique @db.VarChar(150)
+  password_hash        String
+  rol                  rol_usuario            @default(OPERADOR)
+  activo               Boolean                @default(true)
+  session_version      Int                    @default(0)
+  created_at           DateTime               @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime               @default(now()) @db.Timestamptz(6)
+  asistencias          asistencias[]
   asistencia_controles asistencia_controles[]
-  cargos           cargos?       @relation(fields: [cargo_codigo], references: [codigo], onUpdate: NoAction)
-  eventos          eventos[]
-  oficinas         oficinas?     @relation(fields: [oficina_id], references: [id], onUpdate: NoAction)
-  persona          personas?
+  cargos               cargos?                @relation("UsuarioCargo", fields: [cargo_codigo], references: [codigo], onUpdate: NoAction)
+  subcargo_ref         cargos?                @relation("UsuarioSubcargo", fields: [subcargo_codigo], references: [codigo], onUpdate: NoAction)
+  eventos              eventos[]
+  oficinas             oficinas?              @relation("UsuarioOficina", fields: [oficina_id], references: [id], onUpdate: NoAction)
+  oficina_comision     oficinas?              @relation("UsuarioOficinaComision", fields: [oficina_comision_id], references: [id], onUpdate: NoAction)
+  persona              personas?
+  almuerzos_funcionario almuerzos[]            @relation("AlmuerzoFuncionario")
+  almuerzos_salida      almuerzos[]            @relation("AlmuerzoSalidaRegistrador")
+  almuerzos_retorno     almuerzos[]            @relation("AlmuerzoRetornoRegistrador")
+  salidas_solicitadas  salidas[]              @relation("SalidaSolicitante")
+  salidas_aprobadas    salidas[]              @relation("SalidaAprobador")
+  salidas_salida        salidas[]              @relation("SalidaSalidaRegistrador")
+  salidas_llegada       salidas[]              @relation("SalidaLlegadaRegistrador")
+  notificacion_tokens   notificacion_tokens[]
+  celulares_asistencia  celulares_asistencia[] @relation("CelularUsuario")
+  celulares_logout      celulares_asistencia[] @relation("CelularLogoutSolicitante")
 
   @@index([cargo_codigo], map: "idx_usuarios_cargo_codigo")
+  @@index([subcargo_codigo], map: "idx_usuarios_subcargo_codigo")
+  @@index([oficina_comision_id], map: "idx_usuarios_oficina_comision_id")
   @@index([oficina_id], map: "idx_usuarios_oficina_id")
+}
+
+model notificacion_tokens {
+  id         Int      @id @default(autoincrement())
+  usuario_id Int
+  token      String   @unique
+  platform   String   @db.VarChar(20)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  usuarios   usuarios @relation(fields: [usuario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([usuario_id], map: "idx_notificacion_tokens_usuario_id")
+}
+
+model celulares_asistencia {
+  id                    Int       @id @default(autoincrement())
+  device_id             String    @unique @db.VarChar(120)
+  usuario_id            Int
+  platform              String    @db.VarChar(30)
+  manufacturer          String?   @db.VarChar(120)
+  model                 String?   @db.VarChar(160)
+  android_sdk           Int?
+  battery_level         Int?
+  is_charging           Boolean?
+  brightness            Int?
+  kiosk_enabled         Boolean   @default(false)
+  last_seen_at          DateTime  @default(now()) @db.Timestamptz(6)
+  logout_requested_at   DateTime? @db.Timestamptz(6)
+  logout_requested_by_id Int?
+  created_at            DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime  @default(now()) @db.Timestamptz(6)
+  usuario               usuarios  @relation("CelularUsuario", fields: [usuario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  logout_solicitado_por usuarios? @relation("CelularLogoutSolicitante", fields: [logout_requested_by_id], references: [id], onUpdate: NoAction)
+
+  @@index([usuario_id], map: "idx_celulares_asistencia_usuario_id")
+  @@index([last_seen_at], map: "idx_celulares_asistencia_last_seen")
 }
 
 enum estado_asistencia {
@@ -208,6 +294,93 @@ enum estado_evento {
 
 enum rol_usuario {
   ADMIN
+  ADMIN_SALUD
   CONTROL
+  CREDENCIALES
+  ALMUERZO
   OPERADOR
+}
+
+model almuerzos {
+  id                          Int       @id @default(autoincrement())
+  usuario_id                  Int
+  fecha                       DateTime  @db.Date
+  hora_salida                 String    @db.VarChar(5)
+  salida_en                   DateTime  @default(now()) @db.Timestamptz(6)
+  hora_retorno                String?   @db.VarChar(5)
+  retorno_en                  DateTime? @db.Timestamptz(6)
+  registrado_salida_por_id    Int?
+  registrado_retorno_por_id   Int?
+  qr_leido                    String?   @db.Text
+  datos_qr_snapshot           Json?
+  funcionario_nombre_completo String    @db.VarChar(220)
+  funcionario_ci              String?   @db.VarChar(30)
+  funcionario_numero_item     String?   @db.VarChar(50)
+  funcionario_cargo           String?   @db.VarChar(120)
+  funcionario_oficina_id      Int?
+  funcionario_oficina         String?   @db.VarChar(150)
+  created_at                  DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at                  DateTime  @default(now()) @db.Timestamptz(6)
+  funcionario                 usuarios  @relation("AlmuerzoFuncionario", fields: [usuario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  registrador_salida          usuarios? @relation("AlmuerzoSalidaRegistrador", fields: [registrado_salida_por_id], references: [id], onUpdate: NoAction)
+  registrador_retorno         usuarios? @relation("AlmuerzoRetornoRegistrador", fields: [registrado_retorno_por_id], references: [id], onUpdate: NoAction)
+
+  @@index([fecha], map: "idx_almuerzos_fecha")
+  @@index([usuario_id], map: "idx_almuerzos_usuario_id")
+  @@index([funcionario_ci], map: "idx_almuerzos_funcionario_ci")
+  @@index([funcionario_oficina_id], map: "idx_almuerzos_funcionario_oficina_id")
+  @@index([registrado_salida_por_id], map: "idx_almuerzos_registrado_salida_por_id")
+  @@index([registrado_retorno_por_id], map: "idx_almuerzos_registrado_retorno_por_id")
+}
+
+model salidas {
+  id                          Int           @id @default(autoincrement())
+  usuario_id                  Int
+  motivo                      motivo_salida
+  estado                      estado_salida @default(PENDIENTE)
+  lugar_destino               String        @db.VarChar(255)
+  descripcion                 String?
+  fecha_permiso               DateTime      @db.Date
+  hora_inicio                 String?       @db.VarChar(5)
+  hora_final                  String?       @db.VarChar(5)
+  hora_llegada                String?       @db.VarChar(5)
+  salida_en                   DateTime?     @db.Timestamptz(6)
+  llegada_en                  DateTime?     @db.Timestamptz(6)
+  registrado_salida_por_id    Int?
+  registrado_llegada_por_id   Int?
+  qr_leido                    String?       @db.Text
+  datos_qr_snapshot           Json?
+  solicitante_nombre_completo String        @db.VarChar(220)
+  solicitante_numero_item     String?       @db.VarChar(50)
+  solicitante_cargo           String?       @db.VarChar(120)
+  solicitante_oficina_id      Int?
+  solicitante_oficina         String?       @db.VarChar(150)
+  aprobado_por_id             Int?
+  aprobado_por_nombre         String?       @db.VarChar(220)
+  aprobado_en                 DateTime?     @db.Timestamptz(6)
+  created_at                  DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at                  DateTime      @default(now()) @db.Timestamptz(6)
+  usuarios                    usuarios      @relation("SalidaSolicitante", fields: [usuario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  aprobador                   usuarios?     @relation("SalidaAprobador", fields: [aprobado_por_id], references: [id], onUpdate: NoAction)
+  registrador_salida          usuarios?     @relation("SalidaSalidaRegistrador", fields: [registrado_salida_por_id], references: [id], onUpdate: NoAction)
+  registrador_llegada         usuarios?     @relation("SalidaLlegadaRegistrador", fields: [registrado_llegada_por_id], references: [id], onUpdate: NoAction)
+
+  @@index([estado], map: "idx_salidas_estado")
+  @@index([fecha_permiso], map: "idx_salidas_fecha_permiso")
+  @@index([solicitante_oficina_id], map: "idx_salidas_solicitante_oficina_id")
+  @@index([aprobado_por_id], map: "idx_salidas_aprobado_por_id")
+  @@index([registrado_salida_por_id], map: "idx_salidas_registrado_salida_por_id")
+  @@index([registrado_llegada_por_id], map: "idx_salidas_registrado_llegada_por_id")
+  @@index([usuario_id], map: "idx_salidas_usuario_id")
+}
+
+enum motivo_salida {
+  TRABAJO
+  PARTICULAR
+}
+
+enum estado_salida {
+  PENDIENTE
+  APROBADO
+  RECHAZADO
 }

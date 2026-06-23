@@ -57,6 +57,27 @@ class EventOffice {
   String get displayLabel => '$name | Cod. $code';
 }
 
+class EventJobTitle {
+  const EventJobTitle({required this.code, required this.name});
+
+  final String code;
+  final String name;
+
+  String get displayLabel => '$name | Cod. $code';
+}
+
+class EventOfficeJobTitleSelection {
+  const EventOfficeJobTitleSelection({
+    required this.officeId,
+    required this.jobTitleCodes,
+  });
+
+  final int officeId;
+  final List<String> jobTitleCodes;
+
+  bool get allowsAllJobTitles => jobTitleCodes.isEmpty;
+}
+
 class EventRosterEntry {
   const EventRosterEntry({
     required this.id,
@@ -91,11 +112,34 @@ class EventRosterEntry {
   final String? qrValue;
 }
 
+class EventAbsenteeEntry {
+  const EventAbsenteeEntry({
+    required this.personId,
+    required this.fullName,
+    this.ci,
+    this.tipoVinculo,
+    this.officeName,
+    this.jobTitle,
+    this.requirementReason,
+  });
+
+  final int personId;
+  final String fullName;
+  final String? ci;
+  final String? tipoVinculo;
+  final String? officeName;
+  final String? jobTitle;
+  final String? requirementReason;
+}
+
 class EventRecordDraft {
   const EventRecordDraft({
     required this.name,
     required this.date,
     required this.officeIds,
+    this.finalOfficeIds = const [],
+    required this.jobTitleCodes,
+    this.officeJobTitleSelections = const [],
     this.excludedOfficeIds = const [],
     required this.controls,
     required this.address,
@@ -106,6 +150,9 @@ class EventRecordDraft {
   final String name;
   final DateTime date;
   final List<int> officeIds;
+  final List<int> finalOfficeIds;
+  final List<String> jobTitleCodes;
+  final List<EventOfficeJobTitleSelection> officeJobTitleSelections;
   final List<int> excludedOfficeIds;
   final List<EventControlDraft> controls;
   final String address;
@@ -126,12 +173,19 @@ class EventRecord {
     this.longitude,
     this.controls = const [],
     this.offices = const [],
+    this.jobTitles = const [],
+    this.selectedJobTitleCodes = const [],
+    this.officeJobTitleSelections = const [],
     this.selectedOfficeIds = const [],
     this.excludedOfficeIds = const [],
     this.attended = const [],
     this.observed = const [],
+    this.absentees = const [],
     this.attendedCount,
     this.observedCount,
+    this.absenteeCount,
+    this.officeCountOverride,
+    this.jobTitleCountOverride,
     this.hasDetailedAttendanceData = true,
   });
 
@@ -146,23 +200,41 @@ class EventRecord {
   final double? longitude;
   final List<EventControl> controls;
   final List<EventOffice> offices;
+  final List<EventJobTitle> jobTitles;
+  final List<String> selectedJobTitleCodes;
+  final List<EventOfficeJobTitleSelection> officeJobTitleSelections;
   final List<int> selectedOfficeIds;
   final List<int> excludedOfficeIds;
   final List<EventRosterEntry> attended;
   final List<EventRosterEntry> observed;
+  final List<EventAbsenteeEntry> absentees;
   final int? attendedCount;
   final int? observedCount;
+  final int? absenteeCount;
+  final int? officeCountOverride;
+  final int? jobTitleCountOverride;
   final bool hasDetailedAttendanceData;
 
   int get resolvedAttendedCount => attendedCount ?? attended.length;
 
   int get resolvedObservedCount => observedCount ?? observed.length;
 
-  int get totalTrackedPeople => resolvedAttendedCount + resolvedObservedCount;
+  int get resolvedAbsenteeCount => absenteeCount ?? absentees.length;
 
-  int get officeCount => offices.length;
+  int get totalTrackedPeople =>
+      resolvedAttendedCount + resolvedObservedCount + resolvedAbsenteeCount;
+
+  int get officeCount => officeCountOverride ?? offices.length;
 
   String get officeCountLabel {
+    if (officeCount == 0 && jobTitleCount > 0) {
+      return 'Por cargos';
+    }
+
+    if (officeCount == 0) {
+      return 'Sin oficinas';
+    }
+
     if (officeCount == 1) {
       return '1 oficina';
     }
@@ -171,6 +243,10 @@ class EventRecord {
   }
 
   String get officeLabel {
+    if (offices.isEmpty && jobTitleCount > 0) {
+      return 'Por cargos';
+    }
+
     if (offices.isEmpty) {
       return 'Sin oficinas';
     }
@@ -179,6 +255,20 @@ class EventRecord {
   }
 
   String get officeNames => offices.map((office) => office.name).join(', ');
+
+  int get jobTitleCount => jobTitleCountOverride ?? jobTitles.length;
+
+  String get jobTitleCountLabel {
+    if (jobTitleCount == 0) {
+      return 'Todos los cargos';
+    }
+
+    if (jobTitleCount == 1) {
+      return '1 cargo';
+    }
+
+    return '$jobTitleCount cargos';
+  }
 
   int get controlsCount => controls.length;
 

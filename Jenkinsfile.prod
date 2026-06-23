@@ -20,9 +20,8 @@ pipeline {
         GIT_URL = 'https://github.com/alcaldiacochabamba/innovafuncionario.cochabamba.bo.git'
         GIT_CREDENTIALS = 'github-https'
         GIT_BRANCH = 'prod'
-        DOCKER_BUILDKIT = '1'
-        COMPOSE_DOCKER_CLI_BUILD = '1'
-        BUILDKIT_PROGRESS = 'plain'
+        DOCKER_BUILDKIT = '0'
+        COMPOSE_DOCKER_CLI_BUILD = '0'
         FRONTEND_SERVICE = 'frontend'
         BACKEND_SERVICE = 'backend'
     }
@@ -43,6 +42,13 @@ pipeline {
 
                     if (params.SERVICE == 'all') {
                         sh """
+                            set +x
+                            set -a
+                            . backend/.env.prod
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            export APP_VERSION="\$(git rev-parse --short HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)"
+                            set -x
                             docker-compose \
                             --env-file backend/.env.prod \
                             -f ${env.DOCKER_COMPOSE_FILE} \
@@ -50,6 +56,13 @@ pipeline {
                         """
                     } else {
                         sh """
+                            set +x
+                            set -a
+                            . backend/.env.prod
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            export APP_VERSION="\$(git rev-parse --short HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)"
+                            set -x
                             docker-compose \
                             --env-file backend/.env.prod \
                             -f ${env.DOCKER_COMPOSE_FILE} \
@@ -68,6 +81,13 @@ pipeline {
                     if (params.SERVICE == 'all') {
 
                         sh """
+                            set +x
+                            set -a
+                            . backend/.env.prod
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            export APP_VERSION="\$(git rev-parse --short HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)"
+                            set -x
                             docker-compose \
                             --env-file backend/.env.prod \
                             -f ${env.DOCKER_COMPOSE_FILE} \
@@ -77,6 +97,13 @@ pipeline {
                     } else {
 
                         sh """
+                            set +x
+                            set -a
+                            . backend/.env.prod
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            export APP_VERSION="\$(git rev-parse --short HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)"
+                            set -x
                             docker-compose \
                             --env-file backend/.env.prod \
                             -f ${env.DOCKER_COMPOSE_FILE} \
@@ -96,6 +123,12 @@ pipeline {
                     if (params.SERVICE == 'all') {
 
                         sh """
+                            set +x
+                            set -a
+                            . backend/.env.prod
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
                             docker-compose \
                             --env-file backend/.env.prod \
                             -f ${env.DOCKER_COMPOSE_FILE} \
@@ -105,6 +138,12 @@ pipeline {
                     } else {
 
                         sh """
+                            set +x
+                            set -a
+                            . backend/.env.prod
+                            set +a
+                            export PAYLOAD_ENCRYPTION_KEY="\${PAYLOAD_ENCRYPTION_KEY:-\$QR_DYNAMIC_SECRET}"
+                            set -x
                             docker-compose \
                             --env-file backend/.env.prod \
                             -f ${env.DOCKER_COMPOSE_FILE} \
@@ -120,12 +159,14 @@ pipeline {
 
     post {
         failure {
-            sh """
-                docker-compose \
-                --env-file backend/.env.prod \
-                -f ${env.DOCKER_COMPOSE_FILE} \
-                ps
-            """
+            withEnv(['PAYLOAD_ENCRYPTION_KEY=post-failure-placeholder']) {
+                sh """
+                    docker-compose \
+                    --env-file backend/.env.prod \
+                    -f ${env.DOCKER_COMPOSE_FILE} \
+                    ps
+                """
+            }
         }
     }
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -30,33 +31,68 @@ class _UsersScreenState extends State<UsersScreen> {
   List<CargoOption> _cargos = const [];
   bool _isLoading = true;
   bool _isCreating = false;
+  bool _isLoadingReferenceData = false;
   final Set<int> _updatingUserIds = <int>{};
   final TextEditingController _searchController = TextEditingController();
+  final Map<String, String> _userSearchIndex = <String, String>{};
+  Timer? _searchDebounce;
+  String _searchQuery = '';
+  List<AppUser>? _filteredUsersCache;
+  OfficeOption? _selectedFilterOffice;
+  CargoOption? _selectedFilterCargo;
   String? _errorMessage;
   int _currentPage = 0;
 
   int get _adminCount => _users.where((user) => user.isAdmin).length;
   int get _controlCount => _users.where((user) => user.isControl).length;
+  int get _credentialsCount =>
+      _users.where((user) => user.isCredentials).length;
   int get _externalCount => _users.where((user) => user.isExternalUser).length;
   int get _activeUsersCount => _users.where((user) => user.activo).length;
   List<AppUser> get _filteredUsers {
-    final query = _normalizeSearchText(_searchController.text);
+    final cachedUsers = _filteredUsersCache;
 
-    if (query.isEmpty) {
+    if (cachedUsers != null) {
+      return cachedUsers;
+    }
+
+    final query = _searchQuery;
+    final selectedOffice = _selectedFilterOffice;
+    final selectedCargo = _selectedFilterCargo;
+
+    if (selectedCargo != null) {
+      final filteredUsers = _users
+          .where((user) => _userMatchesCargo(user, selectedCargo))
+          .toList(growable: false);
+      _filteredUsersCache = filteredUsers;
+      return filteredUsers;
+    }
+
+    if (query.isEmpty && selectedOffice == null) {
+      _filteredUsersCache = _users;
       return _users;
     }
 
-    return _users
+    final filteredUsers = _users
         .where((user) {
-          final searchableText = _normalizeSearchText(
-            '${user.ci} ${user.fullName} ${user.nombreCompleto} '
-            '${user.primerApellido} ${user.segundoApellido} '
-            '${user.tercerApellido} ${user.email}',
-          );
+          final matchesOffice =
+              selectedOffice == null ||
+              _userBelongsToOffice(user, selectedOffice);
 
-          return searchableText.contains(query);
+          if (!matchesOffice) {
+            return false;
+          }
+
+          if (query.isEmpty) {
+            return true;
+          }
+
+          return _searchableTextForUser(user).contains(query);
         })
         .toList(growable: false);
+
+    _filteredUsersCache = filteredUsers;
+    return filteredUsers;
   }
 
   int get _totalPages => _filteredUsers.isEmpty
@@ -76,12 +112,83 @@ class _UsersScreenState extends State<UsersScreen> {
   void initState() {
     super.initState();
     _loadData();
+    _loadOfficesForFilter();
   }
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _invalidateUserFilters({bool clearSearchIndex = false}) {
+    _filteredUsersCache = null;
+
+    if (clearSearchIndex) {
+      _userSearchIndex.clear();
+    }
+  }
+
+  void _handleSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (!mounted) {
+        return;
+      }
+
+      final nextQuery = _normalizeSearchText(value);
+
+      if (nextQuery == _searchQuery) {
+        return;
+      }
+
+      setState(() {
+        _searchQuery = nextQuery;
+        _selectedFilterCargo = null;
+        _currentPage = 0;
+        _invalidateUserFilters();
+      });
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+
+    setState(() {
+      _searchController.clear();
+      _searchQuery = '';
+      _currentPage = 0;
+      _invalidateUserFilters();
+    });
+  }
+
+  String _searchableTextForUser(AppUser user) {
+    final cacheKey =
+        '${user.id ?? 'new'}|${user.email}|${user.ci}|${user.celular}|${user.fullName}|'
+        '${user.cargoCodigo}|${user.cargo}|'
+        '${user.subcargoCodigo ?? ''}|${user.subcargo}|${user.cargoEfectivo}|'
+        '${user.officeCode}|${user.officeName}|${user.primaryOfficeName}|'
+        '${user.commissionOfficeName}|${user.unidad}|${user.lugar}';
+    final cachedText = _userSearchIndex[cacheKey];
+
+    if (cachedText != null) {
+      return cachedText;
+    }
+
+    final searchableText = _normalizeSearchText(
+      '${user.ci} ${user.celular} ${user.fullName} ${user.nombreCompleto} '
+      '${user.primerApellido} ${user.segundoApellido} '
+      '${user.tercerApellido} ${user.email} '
+      '${user.cargoCodigo ?? ''} ${user.cargo} '
+      '${user.subcargoCodigo ?? ''} ${user.subcargo} ${user.cargoEfectivo} '
+      '${user.officeCode} ${user.officeName} '
+      '${user.primaryOfficeName} ${user.commissionOfficeName} '
+      '${user.unidad} ${user.lugar}',
+    );
+    _userSearchIndex[cacheKey] = searchableText;
+
+    return searchableText;
   }
 
   Future<void> _loadData() async {
@@ -95,22 +202,17 @@ class _UsersScreenState extends State<UsersScreen> {
     });
 
     try {
-      final results = await Future.wait([
-        dependencies.authApiService.fetchUsers(
-          requesterEmail: widget.currentUser.email,
-        ),
-        dependencies.authApiService.fetchOffices(),
-        dependencies.authApiService.fetchCargos(),
-      ]);
+      final users = await dependencies.authApiService.fetchUsers(
+        requesterEmail: widget.currentUser.email,
+      );
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _users = _sortUsers(results[0] as List<AppUser>);
-        _offices = results[1] as List<OfficeOption>;
-        _cargos = results[2] as List<CargoOption>;
+        _users = _sortUsers(users);
+        _invalidateUserFilters(clearSearchIndex: true);
         _currentPage = _safeCurrentPage;
       });
     } on BackendApiException catch (error) {
@@ -139,7 +241,11 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 
   Future<void> _openCreateDialog() async {
-    if (_offices.isEmpty || _cargos.isEmpty || _isCreating) {
+    if (_isCreating || !await _ensureReferenceData()) {
+      return;
+    }
+
+    if (!mounted) {
       return;
     }
 
@@ -162,17 +268,21 @@ class _UsersScreenState extends State<UsersScreen> {
         requesterEmail: widget.currentUser.email,
         role: draft.role,
         email: draft.email,
-        password: draft.password!,
         nombreCompleto: draft.nombreCompleto,
         primerApellido: draft.primerApellido,
         segundoApellido: draft.segundoApellido,
         tercerApellido: draft.tercerApellido,
         ci: draft.ci,
+        celular: draft.celular,
         tipoVinculo: draft.tipoVinculo,
         oficinaId: draft.office.id,
+        oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
+        subcargoCodigo: draft.subcargo?.code,
         unidad: draft.office.name,
         cargo: draft.cargo.name,
+        subcargo: draft.subcargo?.name ?? '',
+        lugar: draft.lugar,
         numeroItem: draft.numeroItem,
         activo: draft.activo,
         fotoData: draft.fotoData!,
@@ -184,6 +294,7 @@ class _UsersScreenState extends State<UsersScreen> {
 
       setState(() {
         _users = _sortUsers([createdUser, ..._users]);
+        _invalidateUserFilters(clearSearchIndex: true);
         _currentPage = 0;
       });
 
@@ -240,6 +351,7 @@ class _UsersScreenState extends State<UsersScreen> {
           updatedUser,
           ..._users.where((item) => item.id != updatedUser.id),
         ]);
+        _invalidateUserFilters(clearSearchIndex: true);
         _currentPage = _safeCurrentPage;
       });
 
@@ -274,10 +386,15 @@ class _UsersScreenState extends State<UsersScreen> {
   Future<void> _openEditDialog(AppUser user) async {
     final userId = user.id;
 
-    if (userId == null ||
-        _offices.isEmpty ||
-        _cargos.isEmpty ||
-        _updatingUserIds.contains(userId)) {
+    if (userId == null || _updatingUserIds.contains(userId)) {
+      return;
+    }
+
+    if (!await _ensureReferenceData()) {
+      return;
+    }
+
+    if (!mounted) {
       return;
     }
 
@@ -310,11 +427,16 @@ class _UsersScreenState extends State<UsersScreen> {
         segundoApellido: draft.segundoApellido,
         tercerApellido: draft.tercerApellido,
         ci: draft.ci,
+        celular: draft.celular,
         tipoVinculo: draft.tipoVinculo,
         oficinaId: draft.office.id,
+        oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
+        subcargoCodigo: draft.subcargo?.code,
         unidad: draft.office.name,
         cargo: draft.cargo.name,
+        subcargo: draft.subcargo?.name ?? '',
+        lugar: draft.lugar,
         numeroItem: draft.numeroItem,
         activo: draft.activo,
         fotoData: draft.fotoData,
@@ -329,6 +451,7 @@ class _UsersScreenState extends State<UsersScreen> {
           updatedUser,
           ..._users.where((item) => item.id != updatedUser.id),
         ]);
+        _invalidateUserFilters(clearSearchIndex: true);
         _currentPage = _safeCurrentPage;
       });
 
@@ -352,6 +475,193 @@ class _UsersScreenState extends State<UsersScreen> {
         });
       }
     }
+  }
+
+  Future<bool> _ensureReferenceData() async {
+    if (_offices.isNotEmpty && _cargos.isNotEmpty) {
+      return true;
+    }
+
+    if (_isLoadingReferenceData) {
+      return false;
+    }
+
+    setState(() {
+      _isLoadingReferenceData = true;
+    });
+
+    try {
+      final offices = _offices.isEmpty
+          ? await dependencies.authApiService.fetchOffices()
+          : _offices;
+      final cargos = _cargos.isEmpty
+          ? await dependencies.authApiService.fetchCargos()
+          : _cargos;
+
+      if (!mounted) {
+        return false;
+      }
+
+      setState(() {
+        _offices = offices;
+        _cargos = cargos;
+      });
+
+      if (offices.isEmpty || cargos.isEmpty) {
+        AppAlert.showWarning(
+          context,
+          'No hay oficinas o cargos disponibles para gestionar usuarios.',
+        );
+        return false;
+      }
+
+      return true;
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        AppAlert.showError(context, error.message);
+      }
+      return false;
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar oficinas y cargos.');
+      }
+      return false;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingReferenceData = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadOfficesForFilter() async {
+    if (_offices.isNotEmpty || _isLoadingReferenceData) {
+      return;
+    }
+
+    setState(() {
+      _isLoadingReferenceData = true;
+    });
+
+    try {
+      final offices = await dependencies.authApiService.fetchOffices();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _offices = offices;
+      });
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar las oficinas.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingReferenceData = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadCargosForFilter() async {
+    if (_cargos.isNotEmpty || _isLoadingReferenceData) {
+      return;
+    }
+
+    setState(() {
+      _isLoadingReferenceData = true;
+    });
+
+    try {
+      final cargos = await dependencies.authApiService.fetchCargos();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _cargos = cargos;
+      });
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar los cargos.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingReferenceData = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _pickFilterOffice() async {
+    await _loadOfficesForFilter();
+
+    if (!mounted || _offices.isEmpty) {
+      return;
+    }
+
+    final office = await showModalBottomSheet<OfficeOption>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _OfficeSelectionSheet(
+        offices: _offices,
+        selectedOffice: _selectedFilterOffice,
+        title: 'Filtrar por oficina',
+        searchLabel: 'Buscar oficina',
+        searchHint: 'Escribe nombre, codigo o nivel',
+      ),
+    );
+
+    if (!mounted || office == null) {
+      return;
+    }
+
+    setState(() {
+      _selectedFilterOffice = office;
+      _selectedFilterCargo = null;
+      _currentPage = 0;
+      _invalidateUserFilters();
+    });
+  }
+
+  Future<void> _pickFilterCargo() async {
+    await _loadCargosForFilter();
+
+    if (!mounted || _cargos.isEmpty) {
+      return;
+    }
+
+    final cargo = await showModalBottomSheet<CargoOption>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _CargoSelectionSheet(
+        cargos: _cargos,
+        selectedCargo: _selectedFilterCargo,
+      ),
+    );
+
+    if (!mounted || cargo == null) {
+      return;
+    }
+
+    _searchDebounce?.cancel();
+
+    setState(() {
+      _selectedFilterCargo = cargo;
+      _selectedFilterOffice = null;
+      _searchController.clear();
+      _searchQuery = '';
+      _currentPage = 0;
+      _invalidateUserFilters();
+    });
   }
 
   @override
@@ -391,7 +701,7 @@ class _UsersScreenState extends State<UsersScreen> {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              'Aqui el administrador puede gestionar las cuentas con rol administrador, control y funcionario.',
+                              'Aqui el administrador puede gestionar las cuentas con rol administrador, control, credenciales y funcionario.',
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
                           ],
@@ -405,26 +715,29 @@ class _UsersScreenState extends State<UsersScreen> {
                     ],
                   ),
                   const SizedBox(height: 18),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: [
-                      _UserStatCard(
+                  _UserStatsGrid(
+                    stats: [
+                      _UserStatItem(
                         label: 'Administradores',
                         value: '$_adminCount',
                         icon: Icons.verified_user_outlined,
                       ),
-                      _UserStatCard(
+                      _UserStatItem(
                         label: 'Control',
                         value: '$_controlCount',
                         icon: Icons.fact_check_outlined,
                       ),
-                      _UserStatCard(
+                      _UserStatItem(
+                        label: 'Credenciales',
+                        value: '$_credentialsCount',
+                        icon: Icons.badge_outlined,
+                      ),
+                      _UserStatItem(
                         label: 'Funcionarios',
                         value: '$_externalCount',
                         icon: Icons.person_outline_rounded,
                       ),
-                      _UserStatCard(
+                      _UserStatItem(
                         label: 'Activos',
                         value: '$_activeUsersCount',
                         icon: Icons.verified_user_outlined,
@@ -433,13 +746,15 @@ class _UsersScreenState extends State<UsersScreen> {
                   ),
                   const SizedBox(height: 18),
                   ElevatedButton.icon(
-                    onPressed: _isCreating ? null : _openCreateDialog,
+                    onPressed: (_isCreating || _isLoadingReferenceData)
+                        ? null
+                        : _openCreateDialog,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppPalette.orange,
                       foregroundColor: Colors.white,
                       elevation: 0,
                     ),
-                    icon: _isCreating
+                    icon: (_isCreating || _isLoadingReferenceData)
                         ? const SizedBox(
                             width: 18,
                             height: 18,
@@ -450,34 +765,60 @@ class _UsersScreenState extends State<UsersScreen> {
                           )
                         : const Icon(Icons.person_add_alt_1_rounded),
                     label: Text(
-                      _isCreating ? 'Creando usuario...' : 'Crear usuario',
+                      _isCreating
+                          ? 'Creando usuario...'
+                          : _isLoadingReferenceData
+                          ? 'Cargando datos...'
+                          : 'Crear usuario',
                     ),
                   ),
                   const SizedBox(height: 16),
                   TextField(
                     controller: _searchController,
-                    onChanged: (_) {
-                      setState(() {
-                        _currentPage = 0;
-                      });
-                    },
+                    onChanged: _handleSearchChanged,
                     decoration: InputDecoration(
                       labelText: 'Buscar usuarios',
-                      hintText: 'Busca por CI, nombre o correo',
+                      hintText:
+                          'Busca por CI, nombre, usuario, cargo u oficina',
                       prefixIcon: const Icon(Icons.search_rounded),
                       suffixIcon: _searchController.text.trim().isEmpty
                           ? null
                           : IconButton(
                               tooltip: 'Limpiar busqueda',
-                              onPressed: () {
-                                setState(() {
-                                  _searchController.clear();
-                                  _currentPage = 0;
-                                });
-                              },
+                              onPressed: _clearSearch,
                               icon: const Icon(Icons.close_rounded),
                             ),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  _OfficeFilterField(
+                    selectedOffice: _selectedFilterOffice,
+                    isLoading: _isLoadingReferenceData,
+                    onTap: _pickFilterOffice,
+                    onClear: _selectedFilterOffice == null
+                        ? null
+                        : () {
+                            setState(() {
+                              _selectedFilterOffice = null;
+                              _currentPage = 0;
+                              _invalidateUserFilters();
+                            });
+                          },
+                  ),
+                  const SizedBox(height: 12),
+                  _CargoFilterField(
+                    selectedCargo: _selectedFilterCargo,
+                    isLoading: _isLoadingReferenceData,
+                    onTap: _pickFilterCargo,
+                    onClear: _selectedFilterCargo == null
+                        ? null
+                        : () {
+                            setState(() {
+                              _selectedFilterCargo = null;
+                              _currentPage = 0;
+                              _invalidateUserFilters();
+                            });
+                          },
                   ),
                   if (_errorMessage != null) ...[
                     const SizedBox(height: 14),
@@ -588,59 +929,99 @@ class _UsersPaginationBar extends StatelessWidget {
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Wrap(
-          spacing: 12,
-          runSpacing: 10,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          alignment: WrapAlignment.spaceBetween,
-          children: [
-            Text(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isCompact = constraints.maxWidth < 560;
+            final summary = Text(
               'Mostrando $firstVisible-$endIndex de $totalUsers usuarios',
+              textAlign: isCompact ? TextAlign.center : TextAlign.start,
               style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            Row(
-              mainAxisSize: MainAxisSize.min,
+            );
+            final pageLabel = _PaginationPageLabel(
+              currentPage: currentPage,
+              totalPages: totalPages,
+            );
+            final previousButton = OutlinedButton.icon(
+              onPressed: onPrevious,
+              icon: const Icon(Icons.chevron_left_rounded),
+              label: const Text('Anterior'),
+            );
+            final nextButton = OutlinedButton.icon(
+              onPressed: onNext,
+              icon: const Icon(Icons.chevron_right_rounded),
+              label: const Text('Siguiente'),
+            );
+
+            if (isCompact) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  summary,
+                  const SizedBox(height: 12),
+                  Center(child: pageLabel),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      SizedBox(width: 150, child: previousButton),
+                      SizedBox(width: 150, child: nextButton),
+                    ],
+                  ),
+                ],
+              );
+            }
+
+            return Row(
               children: [
-                OutlinedButton.icon(
-                  onPressed: onPrevious,
-                  icon: const Icon(Icons.chevron_left_rounded),
-                  label: const Text('Anterior'),
-                ),
+                Expanded(child: summary),
+                const SizedBox(width: 12),
+                previousButton,
                 const SizedBox(width: 10),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 9,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppPalette.orangeSoft,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppPalette.line),
-                  ),
-                  child: Text(
-                    'Pagina ${currentPage + 1} de $totalPages',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
+                pageLabel,
                 const SizedBox(width: 10),
-                OutlinedButton.icon(
-                  onPressed: onNext,
-                  icon: const Icon(Icons.chevron_right_rounded),
-                  label: const Text('Siguiente'),
-                ),
+                nextButton,
               ],
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
   }
 }
 
-class _UserStatCard extends StatelessWidget {
-  const _UserStatCard({
+class _PaginationPageLabel extends StatelessWidget {
+  const _PaginationPageLabel({
+    required this.currentPage,
+    required this.totalPages,
+  });
+
+  final int currentPage;
+  final int totalPages;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: AppPalette.orangeSoft,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: Text(
+        'Pagina ${currentPage + 1} de $totalPages',
+        textAlign: TextAlign.center,
+        style: Theme.of(
+          context,
+        ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+}
+
+class _UserStatItem {
+  const _UserStatItem({
     required this.label,
     required this.value,
     required this.icon,
@@ -649,11 +1030,65 @@ class _UserStatCard extends StatelessWidget {
   final String label;
   final String value;
   final IconData icon;
+}
+
+class _UserStatsGrid extends StatelessWidget {
+  const _UserStatsGrid({required this.stats});
+
+  final List<_UserStatItem> stats;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = 12.0;
+        final maxWidth = constraints.maxWidth;
+        final columnCount = maxWidth >= 920
+            ? 4
+            : maxWidth >= 560
+            ? 2
+            : 1;
+        final cardWidth = columnCount == 1
+            ? maxWidth
+            : (maxWidth - (spacing * (columnCount - 1))) / columnCount;
+
+        return Wrap(
+          alignment: WrapAlignment.center,
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final stat in stats)
+              _UserStatCard(
+                width: cardWidth,
+                label: stat.label,
+                value: stat.value,
+                icon: stat.icon,
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _UserStatCard extends StatelessWidget {
+  const _UserStatCard({
+    required this.width,
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  final double width;
+  final String label;
+  final String value;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 185,
+      width: width,
+      constraints: const BoxConstraints(minHeight: 112),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppPalette.surfaceSoft,
@@ -676,7 +1111,12 @@ class _UserStatCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
                 const SizedBox(height: 4),
                 Text(value, style: Theme.of(context).textTheme.titleLarge),
               ],
@@ -706,102 +1146,269 @@ class _UserListCard extends StatelessWidget {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(18),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Base64Avatar(
-              size: 72,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isCompact = constraints.maxWidth < 430;
+            final avatar = Base64Avatar(
+              size: isCompact ? 64 : 72,
               fallbackLabel: user.initial,
               photoSource: user.fotoUrl,
               borderRadius: BorderRadius.circular(18),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      Text(
+            );
+            final tappableAvatar = Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => _showUserPhotoViewer(context, user),
+                borderRadius: BorderRadius.circular(18),
+                child: avatar,
+              ),
+            );
+            final details = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: isCompact
+                            ? constraints.maxWidth
+                            : constraints.maxWidth - 100,
+                      ),
+                      child: Text(
                         user.fullName,
+                        softWrap: true,
                         style: Theme.of(context).textTheme.titleLarge,
                       ),
-                      _RoleChip(role: user.role),
-                      _StatusChip(isActive: user.activo),
-                      OutlinedButton.icon(
-                        onPressed: isUpdating ? null : onEdit,
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 8,
-                          ),
-                          visualDensity: VisualDensity.compact,
+                    ),
+                    _RoleChip(role: user.role),
+                    _StatusChip(isActive: user.activo),
+                    OutlinedButton.icon(
+                      onPressed: isUpdating ? null : onEdit,
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
                         ),
-                        icon: const Icon(Icons.edit_outlined, size: 16),
-                        label: const Text('Editar'),
+                        visualDensity: VisualDensity.compact,
                       ),
-                      OutlinedButton.icon(
-                        onPressed: isUpdating ? null : onToggleActive,
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 8,
-                          ),
-                          side: BorderSide(
-                            color: user.activo
-                                ? const Color(0xFFD94841)
-                                : AppPalette.orange,
-                          ),
-                          visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.edit_outlined, size: 16),
+                      label: const Text('Editar'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: isUpdating ? null : onToggleActive,
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
                         ),
-                        icon: isUpdating
-                            ? const SizedBox(
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : Icon(
-                                user.activo
-                                    ? Icons.block_outlined
-                                    : Icons.check_circle_outline_rounded,
-                                size: 16,
-                              ),
-                        label: Text(user.activo ? 'Desactivar' : 'Activar'),
+                        side: BorderSide(
+                          color: user.activo
+                              ? const Color(0xFFD94841)
+                              : AppPalette.orange,
+                        ),
+                        visualDensity: VisualDensity.compact,
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 14,
-                    runSpacing: 10,
-                    children: [
-                      _UserMeta(label: 'CI', value: user.ci),
-                      _UserMeta(label: 'Correo', value: user.email),
+                      icon: isUpdating
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              user.activo
+                                  ? Icons.block_outlined
+                                  : Icons.check_circle_outline_rounded,
+                              size: 16,
+                            ),
+                      label: Text(user.activo ? 'Desactivar' : 'Activar'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 14,
+                  runSpacing: 10,
+                  children: [
+                    _UserMeta(label: 'CI', value: user.ci),
+                    if (user.celular.trim().isNotEmpty)
+                      _UserMeta(label: 'Celular', value: user.celular),
+                    _UserMeta(label: 'Usuario', value: user.email),
+                    _UserMeta(
+                      label: 'Oficina',
+                      value: _resolvedOfficeName(user),
+                    ),
+                    if (user.hasCommission &&
+                        (user.primaryOfficeName ?? '').trim().isNotEmpty)
                       _UserMeta(
-                        label: 'Oficina',
-                        value: _resolvedOfficeName(user),
+                        label: 'Oficina base',
+                        value: user.primaryOfficeName!,
                       ),
-                      _UserMeta(label: 'Cargo', value: user.cargo),
+                    _UserMeta(label: 'Cargo', value: user.cargo),
+                    if (user.subcargo.trim().isNotEmpty)
+                      _UserMeta(label: 'Subcargo', value: user.subcargo),
+                    if (user.cargoEfectivo.trim().isNotEmpty &&
+                        user.cargoEfectivo != user.cargo)
                       _UserMeta(
-                        label: 'Tipo',
-                        value: _tipoVinculoLabel(user.tipoVinculo),
+                        label: 'Cargo efectivo',
+                        value: user.cargoEfectivo,
                       ),
-                      if (user.numeroItem.trim().isNotEmpty)
-                        _UserMeta(label: 'Item', value: user.numeroItem),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
+                    if (user.lugar.trim().isNotEmpty)
+                      _UserMeta(label: 'Lugar', value: user.lugar),
+                    _UserMeta(
+                      label: 'Tipo',
+                      value: _tipoVinculoLabel(user.tipoVinculo),
+                    ),
+                    if (user.numeroItem.trim().isNotEmpty)
+                      _UserMeta(label: 'Item', value: user.numeroItem),
+                  ],
+                ),
+              ],
+            );
+
+            if (isCompact) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [tappableAvatar, const SizedBox(height: 12), details],
+              );
+            }
+
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                tappableAvatar,
+                const SizedBox(width: 16),
+                Expanded(child: details),
+              ],
+            );
+          },
         ),
       ),
     );
+  }
+}
+
+Future<void> _showUserPhotoViewer(BuildContext context, AppUser user) {
+  return showDialog<void>(
+    context: context,
+    barrierColor: Colors.black87,
+    builder: (context) => Dialog.fullscreen(
+      backgroundColor: Colors.black,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Center(
+              child: InteractiveViewer(
+                minScale: 0.8,
+                maxScale: 4,
+                child: _UserPhotoPreview(user: user),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 16,
+            right: 16,
+            child: SafeArea(
+              child: IconButton.filled(
+                onPressed: () => Navigator.of(context).pop(),
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.white.withValues(alpha: 0.16),
+                  foregroundColor: Colors.white,
+                ),
+                icon: const Icon(Icons.close_rounded),
+                tooltip: 'Cerrar',
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _UserPhotoPreview extends StatelessWidget {
+  const _UserPhotoPreview({required this.user});
+
+  final AppUser user;
+
+  @override
+  Widget build(BuildContext context) {
+    final photoSource = user.fotoUrl?.trim();
+    final photoUri = _parseHttpPhotoUri(photoSource);
+    final photoBytes = photoUri == null ? _decodePhotoBytes(photoSource) : null;
+
+    if (photoUri != null) {
+      return Image.network(
+        photoUri.toString(),
+        fit: BoxFit.contain,
+        errorBuilder: (_, _, _) => _FullScreenPhotoFallback(user: user),
+      );
+    }
+
+    if (photoBytes != null) {
+      return Image.memory(
+        photoBytes,
+        fit: BoxFit.contain,
+        errorBuilder: (_, _, _) => _FullScreenPhotoFallback(user: user),
+      );
+    }
+
+    return _FullScreenPhotoFallback(user: user);
+  }
+}
+
+class _FullScreenPhotoFallback extends StatelessWidget {
+  const _FullScreenPhotoFallback({required this.user});
+
+  final AppUser user;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 180,
+      height: 180,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: AppPalette.orangeSoft,
+        borderRadius: BorderRadius.circular(40),
+      ),
+      child: Text(
+        user.initial,
+        style: const TextStyle(
+          color: AppPalette.orange,
+          fontSize: 72,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+Uri? _parseHttpPhotoUri(String? photoSource) {
+  if (photoSource == null || photoSource.isEmpty) {
+    return null;
+  }
+
+  final uri = Uri.tryParse(photoSource);
+
+  if (uri == null) {
+    return null;
+  }
+
+  return uri.scheme == 'http' || uri.scheme == 'https' ? uri : null;
+}
+
+Uint8List? _decodePhotoBytes(String? photoSource) {
+  if (photoSource == null || photoSource.isEmpty) {
+    return null;
+  }
+
+  try {
+    return base64Decode(photoSource);
+  } catch (_) {
+    return null;
   }
 }
 
@@ -814,12 +1421,18 @@ class _RoleChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final accentColor = switch (role) {
       AppUserRole.admin => AppPalette.orange,
+      AppUserRole.adminHealth => AppPalette.orange,
       AppUserRole.control => AppPalette.night,
+      AppUserRole.credentials => AppPalette.orange,
+      AppUserRole.lunch => Colors.green.shade700,
       AppUserRole.external => AppPalette.muted,
     };
     final backgroundColor = switch (role) {
       AppUserRole.admin => AppPalette.orangeSoft,
+      AppUserRole.adminHealth => AppPalette.orangeSoft,
       AppUserRole.control => AppPalette.blueSoftStrong,
+      AppUserRole.credentials => AppPalette.orangeSoft,
+      AppUserRole.lunch => Colors.green.shade50,
       AppUserRole.external => AppPalette.surfaceSoft,
     };
 
@@ -1027,6 +1640,114 @@ class _NoSearchUsersState extends StatelessWidget {
   }
 }
 
+class _OfficeFilterField extends StatelessWidget {
+  const _OfficeFilterField({
+    required this.selectedOffice,
+    required this.isLoading,
+    required this.onTap,
+    required this.onClear,
+  });
+
+  final OfficeOption? selectedOffice;
+  final bool isLoading;
+  final Future<void> Function() onTap;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final office = selectedOffice;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: isLoading ? null : onTap,
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Filtrar por oficina',
+          prefixIcon: const Icon(Icons.account_tree_outlined),
+          suffixIcon: isLoading
+              ? const Padding(
+                  padding: EdgeInsets.all(14),
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : office == null
+              ? const Icon(Icons.search_rounded)
+              : IconButton(
+                  tooltip: 'Quitar filtro de oficina',
+                  onPressed: onClear,
+                  icon: const Icon(Icons.close_rounded),
+                ),
+        ),
+        child: Text(
+          office?.displayLabel ?? 'Todas las oficinas',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+            color: office == null ? AppPalette.muted : AppPalette.night,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CargoFilterField extends StatelessWidget {
+  const _CargoFilterField({
+    required this.selectedCargo,
+    required this.isLoading,
+    required this.onTap,
+    required this.onClear,
+  });
+
+  final CargoOption? selectedCargo;
+  final bool isLoading;
+  final Future<void> Function() onTap;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final cargo = selectedCargo;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: isLoading ? null : onTap,
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Filtrar por cargo',
+          prefixIcon: const Icon(Icons.badge_outlined),
+          suffixIcon: isLoading
+              ? const Padding(
+                  padding: EdgeInsets.all(14),
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : cargo == null
+              ? const Icon(Icons.search_rounded)
+              : IconButton(
+                  tooltip: 'Quitar filtro de cargo',
+                  onPressed: onClear,
+                  icon: const Icon(Icons.close_rounded),
+                ),
+        ),
+        child: Text(
+          cargo?.displayLabel ?? 'Todos los cargos',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+            color: cargo == null ? AppPalette.muted : AppPalette.night,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ManagedUserDialog extends StatefulWidget {
   const _ManagedUserDialog({
     required this.offices,
@@ -1046,6 +1767,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final ImagePicker _imagePicker = ImagePicker();
   final TextEditingController _ciController = TextEditingController();
+  final TextEditingController _celularController = TextEditingController();
   final TextEditingController _nombreCompletoController =
       TextEditingController();
   final TextEditingController _primerApellidoController =
@@ -1055,9 +1777,12 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   final TextEditingController _tercerApellidoController =
       TextEditingController();
   final TextEditingController _unidadController = TextEditingController();
+  final TextEditingController _commissionOfficeController =
+      TextEditingController();
   final TextEditingController _cargoController = TextEditingController();
+  final TextEditingController _subcargoController = TextEditingController();
+  final TextEditingController _lugarController = TextEditingController();
   final TextEditingController _numeroItemController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController =
       TextEditingController();
@@ -1066,11 +1791,15 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   String _selectedTipoVinculo = 'ITEM';
   bool _selectedActivo = true;
   OfficeOption? _selectedOffice;
+  OfficeOption? _selectedCommissionOffice;
+  bool _hasCommission = false;
   CargoOption? _selectedCargo;
+  CargoOption? _selectedSubcargo;
   Uint8List? _photoBytes;
   bool _showPhotoError = false;
   bool _hidePassword = true;
   bool _hideConfirmPassword = true;
+  bool _changePassword = false;
   bool get _isEditing => widget.initialUser != null;
 
   @override
@@ -1092,30 +1821,51 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     };
     _selectedActivo = user.activo;
     _ciController.text = user.ci;
+    _celularController.text = user.celular;
     _nombreCompletoController.text = user.nombreCompleto;
     _primerApellidoController.text = user.primerApellido;
     _segundoApellidoController.text = user.segundoApellido;
     _tercerApellidoController.text = user.tercerApellido;
     _numeroItemController.text = user.numeroItem;
-    _emailController.text = user.email;
 
-    _selectedOffice = _findInitialOffice(user);
-    _unidadController.text = _selectedOffice?.name ?? _resolvedOfficeName(user);
+    _selectedOffice = _findInitialOffice(
+      officeId: user.primaryOfficeId ?? user.officeId,
+      officeCode: user.hasCommission ? null : user.officeCode,
+      officeName: user.primaryOfficeName,
+    );
+    _unidadController.text =
+        _selectedOffice?.name ??
+        user.primaryOfficeName ??
+        _resolvedOfficeName(user);
+    _hasCommission = user.hasCommission;
+    _selectedCommissionOffice = _findInitialOffice(
+      officeId: user.commissionOfficeId,
+      officeCode: user.hasCommission ? user.officeCode : null,
+      officeName: user.commissionOfficeName,
+    );
+    _commissionOfficeController.text =
+        _selectedCommissionOffice?.name ?? user.commissionOfficeName ?? '';
     _selectedCargo = _findInitialCargo(user);
     _cargoController.text = _selectedCargo?.name ?? user.cargo;
+    _selectedSubcargo = _findInitialSubcargo(user);
+    _subcargoController.text = _selectedSubcargo?.name ?? user.subcargo;
+    _lugarController.text = user.lugar;
   }
 
   @override
   void dispose() {
     _ciController.dispose();
+    _celularController.dispose();
     _nombreCompletoController.dispose();
     _primerApellidoController.dispose();
     _segundoApellidoController.dispose();
     _tercerApellidoController.dispose();
     _unidadController.dispose();
+    _commissionOfficeController.dispose();
     _cargoController.dispose();
+    _subcargoController.dispose();
+    _lugarController.dispose();
     _numeroItemController.dispose();
-    _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
@@ -1160,17 +1910,79 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     setState(() {
       _selectedCargo = cargo;
       _cargoController.text = cargo.name;
+
+      if (!_requiresLugarForCargo(cargo)) {
+        _lugarController.clear();
+      }
     });
   }
 
-  OfficeOption? _findInitialOffice(AppUser user) {
+  Future<void> _pickSubcargo() async {
+    final cargo = await showModalBottomSheet<CargoOption>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _CargoSelectionSheet(
+        cargos: widget.cargos,
+        selectedCargo: _selectedSubcargo,
+      ),
+    );
+
+    if (!mounted || cargo == null) {
+      return;
+    }
+
+    setState(() {
+      _selectedSubcargo = cargo;
+      _subcargoController.text = cargo.name;
+    });
+  }
+
+  void _clearSubcargo() {
+    setState(() {
+      _selectedSubcargo = null;
+      _subcargoController.clear();
+    });
+  }
+
+  Future<void> _pickCommissionOffice() async {
+    final office = await showModalBottomSheet<OfficeOption>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _OfficeSelectionSheet(
+        offices: widget.offices,
+        selectedOffice: _selectedCommissionOffice,
+      ),
+    );
+
+    if (!mounted || office == null) {
+      return;
+    }
+
+    setState(() {
+      _selectedCommissionOffice = office;
+      _commissionOfficeController.text = office.name;
+    });
+  }
+
+  OfficeOption? _findInitialOffice({
+    int? officeId,
+    String? officeCode,
+    String? officeName,
+  }) {
     for (final office in widget.offices) {
-      if (user.officeId != null && office.id == user.officeId) {
+      if (officeId != null && office.id == officeId) {
         return office;
       }
 
-      if (user.officeCode != null &&
-          office.code.toLowerCase() == user.officeCode!.toLowerCase()) {
+      if (officeCode != null &&
+          office.code.toLowerCase() == officeCode.toLowerCase()) {
+        return office;
+      }
+
+      if (officeName != null &&
+          office.name.toLowerCase() == officeName.toLowerCase()) {
         return office;
       }
     }
@@ -1181,6 +1993,25 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   CargoOption? _findInitialCargo(AppUser user) {
     for (final cargo in widget.cargos) {
       if (cargo.name.toLowerCase() == user.cargo.toLowerCase()) {
+        return cargo;
+      }
+    }
+
+    return null;
+  }
+
+  CargoOption? _findInitialSubcargo(AppUser user) {
+    final subcargoCode = user.subcargoCodigo?.trim().toUpperCase();
+
+    for (final cargo in widget.cargos) {
+      if (subcargoCode != null &&
+          subcargoCode.isNotEmpty &&
+          cargo.code.trim().toUpperCase() == subcargoCode) {
+        return cargo;
+      }
+
+      if (user.subcargo.trim().isNotEmpty &&
+          cargo.name.toLowerCase() == user.subcargo.toLowerCase()) {
         return cargo;
       }
     }
@@ -1219,7 +2050,9 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
       return;
     }
 
-    if (_selectedOffice == null || _selectedCargo == null) {
+    if (_selectedOffice == null ||
+        _selectedCargo == null ||
+        (_hasCommission && _selectedCommissionOffice == null)) {
       return;
     }
 
@@ -1236,17 +2069,25 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
         tipoVinculo: _selectedTipoVinculo,
         activo: _selectedActivo,
         ci: _ciController.text.trim(),
+        celular: _celularController.text.trim(),
         nombreCompleto: _nombreCompletoController.text.trim(),
         primerApellido: _primerApellidoController.text.trim(),
         segundoApellido: _segundoApellidoController.text.trim(),
         tercerApellido: _tercerApellidoController.text.trim(),
         office: _selectedOffice!,
+        commissionOffice: _hasCommission ? _selectedCommissionOffice : null,
         cargo: _selectedCargo!,
+        subcargo: _selectedSubcargo,
+        lugar: _requiresLugarForCargo(_selectedCargo)
+            ? _lugarController.text.trim()
+            : '',
         numeroItem: _numeroItemController.text.trim(),
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim().isEmpty
-            ? null
-            : _passwordController.text.trim(),
+        email: _ciController.text.trim(),
+        password: _isEditing
+            ? (_changePassword && _passwordController.text.trim().isNotEmpty
+                  ? _passwordController.text.trim()
+                  : null)
+            : null,
         fotoData: _photoBytes == null ? null : base64Encode(_photoBytes!),
       ),
     );
@@ -1295,7 +2136,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                       Text(
                         _isEditing
                             ? 'Actualiza los datos del usuario y guarda los cambios.'
-                            : 'Completa los mismos datos del registro principal y define si la cuenta sera de administrador, control o funcionario.',
+                            : 'Completa los datos del usuario. El acceso se creara automaticamente con CI como usuario y primer apellido + CI como contrasena inicial.',
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       const SizedBox(height: 18),
@@ -1311,6 +2152,18 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                           DropdownMenuItem(
                             value: AppUserRole.admin,
                             child: Text('Administrador'),
+                          ),
+                          DropdownMenuItem(
+                            value: AppUserRole.adminHealth,
+                            child: Text('Admin (salud)'),
+                          ),
+                          DropdownMenuItem(
+                            value: AppUserRole.credentials,
+                            child: Text('Credenciales'),
+                          ),
+                          DropdownMenuItem(
+                            value: AppUserRole.lunch,
+                            child: Text('Almuerzo'),
                           ),
                           DropdownMenuItem(
                             value: AppUserRole.external,
@@ -1364,6 +2217,18 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         hint: 'Ingresa el carnet de identidad',
                         isRequired: true,
                         validator: _requiredValidator('Ingresa el CI.'),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                      const SizedBox(height: 14),
+                      _FormField(
+                        controller: _celularController,
+                        label: 'Celular',
+                        hint: 'Ingresa el numero de celular',
+                        isRequired: true,
+                        keyboardType: TextInputType.phone,
+                        validator: _requiredValidator(
+                          'Ingresa el numero de celular.',
+                        ),
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -1382,16 +2247,19 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         validator: _requiredValidator(
                           'Ingresa el primer apellido.',
                         ),
+                        onChanged: (_) => setState(() {}),
                       ),
                       const SizedBox(height: 14),
                       _FormField(
                         controller: _segundoApellidoController,
-                        label: 'Segundo apellido',
-                        hint: 'Ingresa el segundo apellido',
-                        isRequired: true,
-                        validator: _requiredValidator(
-                          'Ingresa el segundo apellido.',
-                        ),
+                        label: 'Segundo apellido (opcional)',
+                        hint: 'Ingresa el segundo apellido si aplica',
+                        validator: (value) {
+                          if ((value ?? '').trim().length > 80) {
+                            return 'El segundo apellido es demasiado largo.';
+                          }
+                          return null;
+                        },
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -1426,6 +2294,52 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                               : FontWeight.w600,
                         ),
                       ),
+                      const SizedBox(height: 12),
+                      CheckboxListTile(
+                        value: _hasCommission,
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: const Text('Comision'),
+                        onChanged: (value) {
+                          setState(() {
+                            _hasCommission = value ?? false;
+
+                            if (!_hasCommission) {
+                              _selectedCommissionOffice = null;
+                              _commissionOfficeController.clear();
+                            }
+                          });
+                        },
+                      ),
+                      if (_hasCommission) ...[
+                        const SizedBox(height: 10),
+                        _PickerField(
+                          controller: _commissionOfficeController,
+                          label: 'Oficina de comision',
+                          hint: 'Selecciona la oficina de comision',
+                          icon: Icons.swap_horiz_rounded,
+                          isRequired: true,
+                          onTap: _pickCommissionOffice,
+                          validator: _requiredValidator(
+                            'Selecciona la oficina de comision.',
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _selectedCommissionOffice == null
+                              ? 'Esta oficina contara como principal para eventos.'
+                              : 'Comision: ${_selectedCommissionOffice!.name}',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: _selectedCommissionOffice == null
+                                    ? null
+                                    : AppPalette.orange,
+                                fontWeight: _selectedCommissionOffice == null
+                                    ? null
+                                    : FontWeight.w600,
+                              ),
+                        ),
+                      ],
                       const SizedBox(height: 14),
                       _PickerField(
                         controller: _cargoController,
@@ -1452,6 +2366,46 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                               : FontWeight.w600,
                         ),
                       ),
+                      const SizedBox(height: 14),
+                      _PickerField(
+                        controller: _subcargoController,
+                        label: 'Subcargo / funcion actual',
+                        hint: 'Opcional: selecciona el cargo que cumple ahora',
+                        icon: Icons.assignment_ind_outlined,
+                        onTap: _pickSubcargo,
+                        suffixIcon: _selectedSubcargo == null
+                            ? null
+                            : IconButton(
+                                tooltip: 'Quitar subcargo',
+                                onPressed: _clearSubcargo,
+                                icon: const Icon(Icons.close_rounded),
+                              ),
+                        validator: (_) => null,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _selectedSubcargo == null
+                            ? 'Si se asigna, este cargo contara para permisos y solicitudes.'
+                            : 'Funcion actual: ${_selectedSubcargo!.name}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: _selectedSubcargo == null
+                              ? null
+                              : AppPalette.orange,
+                          fontWeight: _selectedSubcargo == null
+                              ? null
+                              : FontWeight.w600,
+                        ),
+                      ),
+                      if (_requiresLugarForCargo(_selectedCargo)) ...[
+                        const SizedBox(height: 14),
+                        _FormField(
+                          controller: _lugarController,
+                          label: 'Lugar',
+                          hint: 'Ingresa el lugar al que pertenece',
+                          isRequired: true,
+                          validator: _requiredValidator('Ingresa el lugar.'),
+                        ),
+                      ],
                       if (_selectedTipoVinculo == 'ITEM') ...[
                         const SizedBox(height: 14),
                         _FormField(
@@ -1495,104 +2449,92 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         onPickPhoto: _pickPhoto,
                       ),
                       const SizedBox(height: 14),
-                      _FormField(
-                        controller: _emailController,
-                        label: 'Correo',
-                        hint: _selectedRole == AppUserRole.admin
-                            ? 'usuario@admin.com'
-                            : 'usuario@correo.com',
-                        keyboardType: TextInputType.emailAddress,
-                        isRequired: true,
-                        validator: (value) {
-                          final email = value?.trim().toLowerCase() ?? '';
-
-                          if (email.isEmpty || !email.contains('@')) {
-                            return 'Ingresa un correo valido.';
-                          }
-
-                          if (_selectedRole == AppUserRole.admin &&
-                              !email.contains('@admin')) {
-                            return 'El administrador debe usar un correo con @admin.';
-                          }
-
-                          if (_selectedRole != AppUserRole.admin &&
-                              email.contains('@admin')) {
-                            return 'Solo el administrador puede usar un correo con @admin.';
-                          }
-
-                          return null;
-                        },
+                      _AccessInfoCard(
+                        isEditing: _isEditing,
+                        ci: _ciController.text,
+                        primerApellido: _primerApellidoController.text,
                       ),
-                      const SizedBox(height: 14),
-                      _FormField(
-                        controller: _passwordController,
-                        label: 'Contrasena',
-                        hint: '*******',
-                        obscureText: _hidePassword,
-                        isRequired: !_isEditing,
-                        suffixIcon: IconButton(
-                          onPressed: () {
+                      if (_isEditing) ...[
+                        const SizedBox(height: 12),
+                        CheckboxListTile(
+                          value: _changePassword,
+                          contentPadding: EdgeInsets.zero,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          title: const Text('Cambiar contrasena'),
+                          onChanged: (value) {
                             setState(() {
-                              _hidePassword = !_hidePassword;
+                              _changePassword = value ?? false;
+
+                              if (!_changePassword) {
+                                _passwordController.clear();
+                                _confirmPasswordController.clear();
+                              }
                             });
                           },
-                          icon: Icon(
-                            _hidePassword
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
-                          ),
                         ),
-                        validator: (value) {
-                          final password = (value ?? '').trim();
+                        if (_changePassword) ...[
+                          const SizedBox(height: 14),
+                          _FormField(
+                            controller: _passwordController,
+                            label: 'Nueva contrasena',
+                            hint: '*******',
+                            obscureText: _hidePassword,
+                            isRequired: true,
+                            suffixIcon: IconButton(
+                              onPressed: () {
+                                setState(() {
+                                  _hidePassword = !_hidePassword;
+                                });
+                              },
+                              icon: Icon(
+                                _hidePassword
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                              ),
+                            ),
+                            validator: (value) {
+                              final password = (value ?? '').trim();
 
-                          if (_isEditing && password.isEmpty) {
-                            return null;
-                          }
+                              if (password.length < 6) {
+                                return 'La contrasena debe tener al menos 6 caracteres.';
+                              }
 
-                          if (password.length < 6) {
-                            return 'La contrasena debe tener al menos 6 caracteres.';
-                          }
-
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 14),
-                      _FormField(
-                        controller: _confirmPasswordController,
-                        label: 'Confirmar contrasena',
-                        hint: '*******',
-                        obscureText: _hideConfirmPassword,
-                        isRequired: !_isEditing,
-                        suffixIcon: IconButton(
-                          onPressed: () {
-                            setState(() {
-                              _hideConfirmPassword = !_hideConfirmPassword;
-                            });
-                          },
-                          icon: Icon(
-                            _hideConfirmPassword
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
+                              return null;
+                            },
                           ),
-                        ),
-                        validator: (value) {
-                          final password = _passwordController.text.trim();
-                          final confirmation = (value ?? '').trim();
+                          const SizedBox(height: 14),
+                          _FormField(
+                            controller: _confirmPasswordController,
+                            label: 'Confirmar nueva contrasena',
+                            hint: '*******',
+                            obscureText: _hideConfirmPassword,
+                            isRequired: true,
+                            suffixIcon: IconButton(
+                              onPressed: () {
+                                setState(() {
+                                  _hideConfirmPassword = !_hideConfirmPassword;
+                                });
+                              },
+                              icon: Icon(
+                                _hideConfirmPassword
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                              ),
+                            ),
+                            validator: (value) {
+                              final password = _passwordController.text.trim();
+                              final confirmation = (value ?? '').trim();
 
-                          if (_isEditing &&
-                              password.isEmpty &&
-                              confirmation.isEmpty) {
-                            return null;
-                          }
+                              if (confirmation != password) {
+                                return 'Las contrasenas no coinciden.';
+                              }
 
-                          if (confirmation != password) {
-                            return 'Las contrasenas no coinciden.';
-                          }
-
-                          return null;
-                        },
-                        onFieldSubmitted: (_) => _submit(),
-                      ),
+                              return null;
+                            },
+                            onFieldSubmitted: (_) => _submit(),
+                          ),
+                        ],
+                      ],
                     ],
                   ),
                 ),
@@ -1633,12 +2575,16 @@ class _ManagedUserDraft {
     required this.tipoVinculo,
     required this.activo,
     required this.ci,
+    required this.celular,
     required this.nombreCompleto,
     required this.primerApellido,
     required this.segundoApellido,
     required this.tercerApellido,
     required this.office,
+    required this.commissionOffice,
     required this.cargo,
+    required this.subcargo,
+    required this.lugar,
     required this.numeroItem,
     required this.email,
     required this.password,
@@ -1649,16 +2595,76 @@ class _ManagedUserDraft {
   final String tipoVinculo;
   final bool activo;
   final String ci;
+  final String celular;
   final String nombreCompleto;
   final String primerApellido;
   final String segundoApellido;
   final String tercerApellido;
   final OfficeOption office;
+  final OfficeOption? commissionOffice;
   final CargoOption cargo;
+  final CargoOption? subcargo;
+  final String lugar;
   final String numeroItem;
   final String email;
   final String? password;
   final String? fotoData;
+}
+
+class _AccessInfoCard extends StatelessWidget {
+  const _AccessInfoCard({
+    required this.isEditing,
+    required this.ci,
+    required this.primerApellido,
+  });
+
+  final bool isEditing;
+  final String ci;
+  final String primerApellido;
+
+  @override
+  Widget build(BuildContext context) {
+    final normalizedCi = ci.trim();
+    final initialPassword = _buildInitialPassword(
+      primerApellido: primerApellido,
+      ci: ci,
+    );
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppPalette.surfaceSoft,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Acceso a la app',
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            isEditing
+                ? 'Usuario: ${normalizedCi.isEmpty ? 'CI del usuario' : normalizedCi}'
+                : 'Usuario inicial: ${normalizedCi.isEmpty ? 'CI del usuario' : normalizedCi}',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          if (!isEditing) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Contrasena inicial: ${initialPassword.isEmpty ? 'primer apellido + CI' : initialPassword}',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 class _FormField extends StatelessWidget {
@@ -1667,10 +2673,11 @@ class _FormField extends StatelessWidget {
     required this.label,
     required this.hint,
     required this.validator,
-    this.keyboardType,
     this.obscureText = false,
     this.suffixIcon,
+    this.onChanged,
     this.onFieldSubmitted,
+    this.keyboardType,
     this.isRequired = false,
   });
 
@@ -1678,10 +2685,11 @@ class _FormField extends StatelessWidget {
   final String label;
   final String hint;
   final String? Function(String?) validator;
-  final TextInputType? keyboardType;
   final bool obscureText;
   final Widget? suffixIcon;
+  final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onFieldSubmitted;
+  final TextInputType? keyboardType;
   final bool isRequired;
 
   @override
@@ -1691,6 +2699,7 @@ class _FormField extends StatelessWidget {
       keyboardType: keyboardType,
       obscureText: obscureText,
       validator: validator,
+      onChanged: onChanged,
       onFieldSubmitted: onFieldSubmitted,
       decoration: InputDecoration(
         label: _RequiredFieldLabel(label: label, isRequired: isRequired),
@@ -1738,6 +2747,7 @@ class _PickerField extends StatelessWidget {
     required this.onTap,
     required this.validator,
     this.isRequired = false,
+    this.suffixIcon,
   });
 
   final TextEditingController controller;
@@ -1747,6 +2757,7 @@ class _PickerField extends StatelessWidget {
   final Future<void> Function() onTap;
   final String? Function(String?) validator;
   final bool isRequired;
+  final Widget? suffixIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -1799,7 +2810,7 @@ class _PickerField extends StatelessWidget {
                                   ?.copyWith(color: AppPalette.muted),
                             ),
                     ),
-                    Icon(icon, color: AppPalette.orange),
+                    suffixIcon ?? Icon(icon, color: AppPalette.orange),
                   ],
                 ),
               ),
@@ -1925,10 +2936,16 @@ class _OfficeSelectionSheet extends StatefulWidget {
   const _OfficeSelectionSheet({
     required this.offices,
     required this.selectedOffice,
+    this.title = 'Selecciona la unidad',
+    this.searchLabel = 'Buscar unidad',
+    this.searchHint = 'Escribe nombre, codigo o nivel',
   });
 
   final List<OfficeOption> offices;
   final OfficeOption? selectedOffice;
+  final String title;
+  final String searchLabel;
+  final String searchHint;
 
   @override
   State<_OfficeSelectionSheet> createState() => _OfficeSelectionSheetState();
@@ -1945,15 +2962,18 @@ class _OfficeSelectionSheetState extends State<_OfficeSelectionSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final query = _searchController.text.trim().toLowerCase();
+    final query = _normalizeOfficeSearchText(_searchController.text);
     final filteredOffices = widget.offices
         .where((office) {
           if (query.isEmpty) {
             return true;
           }
 
-          return office.name.toLowerCase().contains(query) ||
-              office.code.toLowerCase().contains(query) ||
+          return _officeTextLooksSimilar(
+                _normalizeOfficeSearchText(office.name),
+                query,
+              ) ||
+              _normalizeOfficeSearchText(office.code).contains(query) ||
               office.level.toString().contains(query);
         })
         .toList(growable: false);
@@ -1981,7 +3001,7 @@ class _OfficeSelectionSheetState extends State<_OfficeSelectionSheet> {
                     children: [
                       Expanded(
                         child: Text(
-                          'Selecciona la unidad',
+                          widget.title,
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                       ),
@@ -1995,10 +3015,10 @@ class _OfficeSelectionSheetState extends State<_OfficeSelectionSheet> {
                   TextField(
                     controller: _searchController,
                     onChanged: (_) => setState(() {}),
-                    decoration: const InputDecoration(
-                      labelText: 'Buscar unidad',
-                      hintText: 'Escribe nombre, codigo o nivel',
-                      prefixIcon: Icon(Icons.search_rounded),
+                    decoration: InputDecoration(
+                      labelText: widget.searchLabel,
+                      hintText: widget.searchHint,
+                      prefixIcon: const Icon(Icons.search_rounded),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -2220,10 +3240,16 @@ int _userRoleOrder(AppUserRole role) {
   switch (role) {
     case AppUserRole.admin:
       return 0;
-    case AppUserRole.control:
+    case AppUserRole.adminHealth:
       return 1;
-    case AppUserRole.external:
+    case AppUserRole.control:
       return 2;
+    case AppUserRole.credentials:
+      return 3;
+    case AppUserRole.lunch:
+      return 4;
+    case AppUserRole.external:
+      return 5;
   }
 }
 
@@ -2236,6 +3262,133 @@ String _resolvedOfficeName(AppUser user) {
 
   final unidad = user.unidad.trim();
   return unidad.isNotEmpty ? unidad : 'Sin oficina';
+}
+
+bool _userBelongsToOffice(AppUser user, OfficeOption office) {
+  final effectiveOfficeId = user.hasCommission
+      ? user.commissionOfficeId ?? user.officeId
+      : user.primaryOfficeId ?? user.officeId;
+
+  if (effectiveOfficeId == office.id) {
+    return true;
+  }
+
+  final expectedCode = _normalizeExactOfficeValue(office.code);
+  final userCode = _normalizeExactOfficeValue(user.officeCode ?? '');
+
+  if (expectedCode.isNotEmpty && userCode == expectedCode) {
+    return true;
+  }
+
+  final expectedName = _normalizeExactOfficeValue(office.name);
+  final userOfficeName = _normalizeExactOfficeValue(
+    user.hasCommission
+        ? user.commissionOfficeName ?? ''
+        : user.primaryOfficeName ?? user.officeName ?? user.unidad,
+  );
+
+  return expectedName.isNotEmpty && userOfficeName == expectedName;
+}
+
+bool _userMatchesCargo(AppUser user, CargoOption cargo) {
+  final expectedCode = cargo.code.trim().toUpperCase();
+  final userCode = (user.cargoCodigo ?? '').trim().toUpperCase();
+  final userSubcargoCode = (user.subcargoCodigo ?? '').trim().toUpperCase();
+  final userEffectiveCode = (user.cargoEfectivoCodigo ?? '')
+      .trim()
+      .toUpperCase();
+
+  if (expectedCode.isNotEmpty &&
+      (userCode == expectedCode ||
+          userSubcargoCode == expectedCode ||
+          userEffectiveCode == expectedCode)) {
+    return true;
+  }
+
+  final expectedName = _normalizeSearchText(cargo.name);
+  final userCargo = _normalizeSearchText(user.cargo);
+  final userSubcargo = _normalizeSearchText(user.subcargo);
+  final userEffectiveCargo = _normalizeSearchText(user.cargoEfectivo);
+
+  return expectedName.isNotEmpty &&
+      (userCargo == expectedName ||
+          userSubcargo == expectedName ||
+          userEffectiveCargo == expectedName);
+}
+
+bool _requiresLugarForCargo(CargoOption? cargo) {
+  if (cargo == null) {
+    return false;
+  }
+
+  const porteroCargoCodes = {'CA116', 'CA082', 'CA096', 'CA087'};
+  final normalizedCode = cargo.code.trim().toUpperCase();
+  final normalizedName = _normalizeSearchText(cargo.name);
+
+  return porteroCargoCodes.contains(normalizedCode) ||
+      normalizedName.startsWith('portero') ||
+      normalizedName.startsWith('guardia municipal');
+}
+
+bool _officeTextLooksSimilar(String value, String query) {
+  if (value.isEmpty || query.isEmpty) {
+    return false;
+  }
+
+  if (value == query || value.contains(query) || query.contains(value)) {
+    return true;
+  }
+
+  final valueTokens = _officeSearchTokens(value);
+  final queryTokens = _officeSearchTokens(query);
+
+  if (valueTokens.isEmpty || queryTokens.isEmpty) {
+    return false;
+  }
+
+  final matches = queryTokens
+      .where((token) => valueTokens.any((valueToken) => valueToken == token))
+      .length;
+  final requiredMatches = queryTokens.length <= 2 ? queryTokens.length : 2;
+
+  return matches >= requiredMatches;
+}
+
+Set<String> _officeSearchTokens(String value) {
+  const ignoredTokens = {
+    'oficina',
+    'unidad',
+    'direccion',
+    'direcciones',
+    'departamento',
+    'secretaria',
+    'municipal',
+    'gobierno',
+    'autonomo',
+    'de',
+    'del',
+    'la',
+    'las',
+    'los',
+    'el',
+    'y',
+  };
+
+  return value
+      .split(' ')
+      .where(
+        (token) =>
+            token.isNotEmpty &&
+            !ignoredTokens.contains(token) &&
+            (token.length >= 3 || RegExp(r'\d').hasMatch(token)),
+      )
+      .toSet();
+}
+
+String _normalizeExactOfficeValue(String value) {
+  return _stripTextAccents(
+    value.trim().toLowerCase(),
+  ).replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
 String _tipoVinculoLabel(String value) {
@@ -2252,7 +3405,40 @@ String _tipoVinculoLabel(String value) {
 }
 
 String _normalizeSearchText(String value) {
-  return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+  return _stripTextAccents(
+    value.trim().toLowerCase(),
+  ).replaceAll(RegExp(r'\s+'), ' ');
+}
+
+String _normalizeOfficeSearchText(String value) {
+  return _normalizeSearchText(value)
+      .replaceAll(RegExp(r'\bcomision\b'), ' ')
+      .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+}
+
+String _stripTextAccents(String value) {
+  return value
+      .replaceAll(RegExp(r'[áàäâãÁÀÄÂÃÃ¡Ã Ã¤Ã¢Ã£]'), 'a')
+      .replaceAll(RegExp(r'[éèëêÉÈËÊÃ©Ã¨Ã«Ãª]'), 'e')
+      .replaceAll(RegExp(r'[íìïîÍÌÏÎÃ­Ã¬Ã¯Ã®]'), 'i')
+      .replaceAll(RegExp(r'[óòöôõÓÒÖÔÕÃ³Ã²Ã¶Ã´Ãµ]'), 'o')
+      .replaceAll(RegExp(r'[úùüûÚÙÜÛÃºÃ¹Ã¼Ã»]'), 'u')
+      .replaceAll(RegExp(r'[ñÑÃ±]'), 'n');
+}
+
+String _buildInitialPassword({
+  required String primerApellido,
+  required String ci,
+}) {
+  final prefix = _stripTextAccents(
+    primerApellido,
+  ).trim().toLowerCase().replaceAll(RegExp(r'[^a-zA-Z]'), '');
+  final normalizedCi = ci.trim().replaceAll(RegExp(r'\s+'), '');
+  final passwordPrefix = prefix.length > 3 ? prefix.substring(0, 3) : prefix;
+
+  return '$passwordPrefix$normalizedCi';
 }
 
 class _RequiredFieldLabel extends StatelessWidget {

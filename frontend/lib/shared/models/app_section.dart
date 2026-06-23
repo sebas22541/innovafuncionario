@@ -7,12 +7,22 @@ enum AppSection {
   reports,
   map,
   users,
+  notifications,
   credentials,
+  permissionExits,
+  cellPhones,
+  myExitPermits,
+  exitPermitRequests,
+  lunches,
+  lunchScanner,
   qrScanner,
+  myQr,
   settings,
 }
 
 extension AppSectionX on AppSection {
+  String get storageKey => name;
+
   String get label {
     switch (this) {
       case AppSection.home:
@@ -27,10 +37,26 @@ extension AppSectionX on AppSection {
         return 'Mapa';
       case AppSection.users:
         return 'Usuarios';
+      case AppSection.notifications:
+        return 'Notificaciones';
       case AppSection.credentials:
         return 'Credenciales';
+      case AppSection.permissionExits:
+        return 'Salidas';
+      case AppSection.cellPhones:
+        return 'Celulares';
+      case AppSection.myExitPermits:
+        return 'Mis solicitudes';
+      case AppSection.exitPermitRequests:
+        return 'Solicitudes recibidas';
+      case AppSection.lunches:
+        return 'Almuerzos';
+      case AppSection.lunchScanner:
+        return 'Escaner almuerzo';
       case AppSection.qrScanner:
         return 'Escanear';
+      case AppSection.myQr:
+        return 'Mi QR';
       case AppSection.settings:
         return 'Perfil';
     }
@@ -50,10 +76,26 @@ extension AppSectionX on AppSection {
         return 'Mapa de QR';
       case AppSection.users:
         return 'Gestion de usuarios';
+      case AppSection.notifications:
+        return 'Notificaciones';
       case AppSection.credentials:
         return 'Credenciales';
+      case AppSection.permissionExits:
+        return 'Permisos';
+      case AppSection.cellPhones:
+        return 'Celulares';
+      case AppSection.myExitPermits:
+        return 'Mis solicitudes';
+      case AppSection.exitPermitRequests:
+        return 'Solicitudes recibidas';
+      case AppSection.lunches:
+        return 'Control de almuerzos';
+      case AppSection.lunchScanner:
+        return 'Escaner de almuerzo';
       case AppSection.qrScanner:
         return 'Escaneo QR';
+      case AppSection.myQr:
+        return 'Mi QR';
       case AppSection.settings:
         return 'Perfil y ajustes';
     }
@@ -73,12 +115,42 @@ extension AppSectionX on AppSection {
         return Icons.map_outlined;
       case AppSection.users:
         return Icons.people_alt_outlined;
+      case AppSection.notifications:
+        return Icons.notifications_active_outlined;
       case AppSection.credentials:
         return Icons.badge_outlined;
+      case AppSection.permissionExits:
+        return Icons.exit_to_app_rounded;
+      case AppSection.cellPhones:
+        return Icons.phone_android_rounded;
+      case AppSection.myExitPermits:
+        return Icons.assignment_outlined;
+      case AppSection.exitPermitRequests:
+        return Icons.assignment_turned_in_outlined;
+      case AppSection.lunches:
+        return Icons.restaurant_menu_rounded;
+      case AppSection.lunchScanner:
+        return Icons.qr_code_scanner_rounded;
       case AppSection.qrScanner:
         return Icons.qr_code_scanner_rounded;
+      case AppSection.myQr:
+        return Icons.qr_code_2_rounded;
       case AppSection.settings:
         return Icons.person_outline_rounded;
     }
   }
+}
+
+AppSection? parseAppSection(String? value) {
+  if (value == null || value.trim().isEmpty) {
+    return null;
+  }
+
+  for (final section in AppSection.values) {
+    if (section.storageKey == value.trim()) {
+      return section;
+    }
+  }
+
+  return null;
 }

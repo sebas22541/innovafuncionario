@@ -27,6 +27,10 @@ class RolePortalShell extends StatefulWidget {
     required this.selectedSection,
     required this.entries,
     required this.onSelected,
+    required this.onBack,
+    required this.onNotifications,
+    required this.unreadNotifications,
+    this.lunchModeActive = false,
     required this.onLogout,
     required this.child,
   });
@@ -36,6 +40,10 @@ class RolePortalShell extends StatefulWidget {
   final AppSection selectedSection;
   final List<PortalNavEntry> entries;
   final ValueChanged<AppSection> onSelected;
+  final VoidCallback onBack;
+  final VoidCallback onNotifications;
+  final int unreadNotifications;
+  final bool lunchModeActive;
   final VoidCallback onLogout;
   final Widget child;
 
@@ -45,6 +53,12 @@ class RolePortalShell extends StatefulWidget {
 
 class _RolePortalShellState extends State<RolePortalShell> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  static const String _lunchAdminPin = 'alm0010';
+  static const int _secretTapTarget = 5;
+  static const Duration _secretTapWindow = Duration(seconds: 3);
+
+  int _secretTapCount = 0;
+  DateTime? _lastSecretTapAt;
 
   bool get _isHome => widget.selectedSection == AppSection.home;
 
@@ -79,25 +93,95 @@ class _RolePortalShellState extends State<RolePortalShell> {
     widget.onSelected(section);
   }
 
-  Future<void> _handleLogout() async {
+  void _handleLogout() {
     FocusManager.instance.primaryFocus?.unfocus();
     final scaffoldState = _scaffoldKey.currentState;
 
-    if (scaffoldState?.isDrawerOpen == true) {
-      scaffoldState!.closeDrawer();
-      await Future<void>.delayed(const Duration(milliseconds: 220));
-    }
+    Future<void>(() async {
+      if (scaffoldState?.isDrawerOpen == true) {
+        scaffoldState!.closeDrawer();
+        await Future<void>.delayed(const Duration(milliseconds: 220));
+      }
 
-    if (!mounted) {
+      if (mounted) {
+        widget.onLogout();
+      }
+    });
+  }
+
+  void _handleSecretLogoTap() {
+    if (!widget.currentUser.isLunchControl) {
       return;
     }
 
-    widget.onLogout();
+    final now = DateTime.now();
+    final lastTapAt = _lastSecretTapAt;
+    if (lastTapAt == null || now.difference(lastTapAt) > _secretTapWindow) {
+      _secretTapCount = 1;
+    } else {
+      _secretTapCount++;
+    }
+    _lastSecretTapAt = now;
+
+    if (_secretTapCount < _secretTapTarget) {
+      return;
+    }
+
+    _secretTapCount = 0;
+    _lastSecretTapAt = null;
+    _showLunchAdminPinDialog();
+  }
+
+  Future<void> _showLunchAdminPinDialog() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    final controller = TextEditingController();
+    final pin = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('PIN de administrador'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            obscureText: true,
+            keyboardType: TextInputType.text,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(labelText: 'PIN'),
+            onSubmitted: (value) => Navigator.of(context).pop(value),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(controller.text),
+              child: const Text('Aceptar'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+
+    if (!mounted || pin == null) {
+      return;
+    }
+
+    if (pin.trim() == _lunchAdminPin) {
+      _handleLogout();
+      return;
+    }
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('PIN incorrecto.')));
   }
 
   @override
   Widget build(BuildContext context) {
     final borderRadius = BorderRadius.circular(widget.isFramed ? 38 : 0);
+    final isLunchControl = widget.currentUser.isLunchControl;
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -121,17 +205,31 @@ class _RolePortalShellState extends State<RolePortalShell> {
           resizeToAvoidBottomInset: false,
           backgroundColor: _isHome ? Colors.white : AppPalette.night,
           drawerScrimColor: Colors.black.withValues(alpha: 0.28),
-          drawer: _PortalDrawer(
-            currentUser: widget.currentUser,
-            selectedSection: widget.selectedSection,
-            entries: widget.entries,
-            onSelected: _handleSectionTap,
-            onLogout: _handleLogout,
-          ),
-          body: _isHome
+          drawer: isLunchControl
+              ? null
+              : _PortalDrawer(
+                  currentUser: widget.currentUser,
+                  selectedSection: widget.selectedSection,
+                  entries: widget.entries,
+                  onSelected: _handleSectionTap,
+                  onLogout: _handleLogout,
+                ),
+          body: isLunchControl
+              ? _LunchPortalBody(
+                  showBack: widget.lunchModeActive,
+                  onBack: widget.onBack,
+                  onSecretLogoTap: _handleSecretLogoTap,
+                  child: widget.child,
+                )
+              : _isHome
               ? Column(
                   children: [
-                    _PortalHomeTopBar(onMenu: _openDrawer),
+                    _PortalHomeTopBar(
+                      unreadNotifications: widget.unreadNotifications,
+                      onNotifications: widget.onNotifications,
+                      onMenu: _openDrawer,
+                      onSecretLogoTap: _handleSecretLogoTap,
+                    ),
                     Expanded(child: widget.child),
                   ],
                 )
@@ -140,8 +238,11 @@ class _RolePortalShellState extends State<RolePortalShell> {
                     _PortalInnerHeader(
                       currentUser: widget.currentUser,
                       entry: _currentEntry,
-                      onBack: () => widget.onSelected(AppSection.home),
+                      onBack: widget.onBack,
+                      unreadNotifications: widget.unreadNotifications,
+                      onNotifications: widget.onNotifications,
                       onMenu: _openDrawer,
+                      onSecretLogoTap: _handleSecretLogoTap,
                     ),
                     Expanded(
                       child: Container(
@@ -165,6 +266,80 @@ class _RolePortalShellState extends State<RolePortalShell> {
                   ],
                 ),
         ),
+      ),
+    );
+  }
+}
+
+class _LunchPortalBody extends StatelessWidget {
+  const _LunchPortalBody({
+    required this.showBack,
+    required this.onBack,
+    required this.onSecretLogoTap,
+    required this.child,
+  });
+
+  final bool showBack;
+  final VoidCallback onBack;
+  final VoidCallback onSecretLogoTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: AppPalette.cream,
+      child: Column(
+        children: [
+          if (showBack)
+            Container(
+              width: double.infinity,
+              color: AppPalette.night,
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+              child: SafeArea(
+                bottom: false,
+                child: Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: onBack,
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 8,
+                        ),
+                      ),
+                      icon: const Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        size: 22,
+                      ),
+                      label: const Text(
+                        'Atras',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: onSecretLogoTap,
+                      child: const SizedBox(
+                        width: 52,
+                        height: 42,
+                        child: Icon(
+                          Icons.qr_code_2_rounded,
+                          color: Colors.white,
+                          size: 28,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          Expanded(child: child),
+        ],
       ),
     );
   }
@@ -304,9 +479,17 @@ class RolePortalHomeContent extends StatelessWidget {
 }
 
 class _PortalHomeTopBar extends StatelessWidget {
-  const _PortalHomeTopBar({required this.onMenu});
+  const _PortalHomeTopBar({
+    required this.unreadNotifications,
+    required this.onNotifications,
+    required this.onMenu,
+    required this.onSecretLogoTap,
+  });
 
+  final int unreadNotifications;
+  final VoidCallback onNotifications;
   final VoidCallback onMenu;
+  final VoidCallback onSecretLogoTap;
 
   @override
   Widget build(BuildContext context) {
@@ -320,6 +503,10 @@ class _PortalHomeTopBar extends StatelessWidget {
             children: [
               const _CochalLogo(height: 32),
               const Spacer(),
+              _PortalNotificationIconButton(
+                unreadCount: unreadNotifications,
+                onPressed: onNotifications,
+              ),
               IconButton(
                 onPressed: onMenu,
                 icon: const Icon(
@@ -330,7 +517,11 @@ class _PortalHomeTopBar extends StatelessWidget {
               ),
             ],
           ),
-          const IgnorePointer(child: _InlogLogo(height: 60)),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onSecretLogoTap,
+            child: const _InlogLogo(height: 60),
+          ),
         ],
       ),
     );
@@ -342,13 +533,19 @@ class _PortalInnerHeader extends StatelessWidget {
     required this.currentUser,
     required this.entry,
     required this.onBack,
+    required this.unreadNotifications,
+    required this.onNotifications,
     required this.onMenu,
+    required this.onSecretLogoTap,
   });
 
   final AppUser currentUser;
   final PortalNavEntry entry;
   final VoidCallback onBack;
+  final int unreadNotifications;
+  final VoidCallback onNotifications;
   final VoidCallback onMenu;
+  final VoidCallback onSecretLogoTap;
 
   @override
   Widget build(BuildContext context) {
@@ -382,6 +579,10 @@ class _PortalInnerHeader extends StatelessWidget {
                 borderRadius: BorderRadius.circular(999),
               ),
               const SizedBox(width: 6),
+              _PortalNotificationIconButton(
+                unreadCount: unreadNotifications,
+                onPressed: onNotifications,
+              ),
               IconButton(
                 onPressed: onMenu,
                 icon: const Icon(
@@ -393,14 +594,18 @@ class _PortalInnerHeader extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Container(
-            width: 68,
-            height: 68,
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onSecretLogoTap,
+            child: Container(
+              width: 68,
+              height: 68,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(entry.icon, size: 30, color: AppPalette.night),
             ),
-            child: Icon(entry.icon, size: 30, color: AppPalette.night),
           ),
           const SizedBox(height: 8),
           Text(
@@ -414,6 +619,58 @@ class _PortalInnerHeader extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _PortalNotificationIconButton extends StatelessWidget {
+  const _PortalNotificationIconButton({
+    required this.unreadCount,
+    required this.onPressed,
+  });
+
+  final int unreadCount;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        IconButton(
+          onPressed: onPressed,
+          tooltip: 'Notificaciones',
+          icon: const Icon(
+            Icons.notifications_rounded,
+            color: Colors.white,
+            size: 24,
+          ),
+        ),
+        if (unreadCount > 0)
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Container(
+              width: unreadCount > 9 ? 18 : 10,
+              height: unreadCount > 9 ? 18 : 10,
+              alignment: Alignment.center,
+              decoration: const BoxDecoration(
+                color: Color(0xFFE85487),
+                shape: BoxShape.circle,
+              ),
+              child: unreadCount > 9
+                  ? Text(
+                      unreadCount > 99 ? '99+' : '$unreadCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    )
+                  : null,
+            ),
+          ),
+      ],
     );
   }
 }
@@ -507,75 +764,85 @@ class _PortalDrawer extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Center(
-                child: Base64Avatar(
-                  size: 110,
-                  fallbackLabel: currentUser.fullName,
-                  photoSource: currentUser.fotoUrl,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-              ),
-              const SizedBox(height: 14),
-              Center(
-                child: Text(
-                  currentUser.fullName,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    color: Colors.black87,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 20,
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Base64Avatar(
+                          size: 110,
+                          fallbackLabel: currentUser.fullName,
+                          photoSource: currentUser.fotoUrl,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Center(
+                        child: Text(
+                          currentUser.fullName,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(
+                                color: Colors.black87,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 20,
+                              ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Center(
+                        child: Text(
+                          currentUser.email,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(color: AppPalette.muted, fontSize: 13),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      for (final entry in menuEntries) ...[
+                        _PortalDrawerItem(
+                          icon: entry.icon,
+                          label: entry.label,
+                          isSelected: selectedSection == entry.section,
+                          onTap: () => onSelected(entry.section),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                      if (settingsEntry != null) ...[
+                        const SizedBox(height: 14),
+                        Container(height: 1, color: AppPalette.line),
+                        const SizedBox(height: 18),
+                        Text(
+                          'Otras opciones',
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(
+                                color: Colors.black54,
+                                fontWeight: FontWeight.w500,
+                                fontSize: 13,
+                              ),
+                        ),
+                        const SizedBox(height: 10),
+                        _PortalDrawerItem(
+                          icon: settingsEntry.icon,
+                          label: settingsEntry.label,
+                          isSelected: selectedSection == AppSection.settings,
+                          onTap: () => onSelected(AppSection.settings),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                    ],
                   ),
-                ),
-              ),
-              const SizedBox(height: 6),
-              Center(
-                child: Text(
-                  currentUser.email,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppPalette.muted,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-              for (final entry in menuEntries) ...[
-                _PortalDrawerItem(
-                  icon: entry.icon,
-                  label: entry.label,
-                  isSelected: selectedSection == entry.section,
-                  onTap: () => onSelected(entry.section),
-                ),
-                const SizedBox(height: 8),
-              ],
-              const SizedBox(height: 14),
-              Container(height: 1, color: AppPalette.line),
-              const SizedBox(height: 18),
-              Text(
-                'Otras opciones',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  color: Colors.black54,
-                  fontWeight: FontWeight.w500,
-                  fontSize: 13,
                 ),
               ),
               const SizedBox(height: 10),
-              if (settingsEntry != null) ...[
+              if (!currentUser.isLunchControl)
                 _PortalDrawerItem(
-                  icon: Icons.edit_rounded,
-                  label: 'Mi perfil',
-                  isSelected: selectedSection == AppSection.settings,
-                  onTap: () => onSelected(AppSection.settings),
+                  icon: Icons.logout_rounded,
+                  label: 'Cerrar sesion',
+                  isSelected: false,
+                  onTap: onLogout,
                 ),
-                const SizedBox(height: 8),
-              ],
-              const Spacer(),
-              _PortalDrawerItem(
-                icon: Icons.logout_rounded,
-                label: 'Cerrar sesion',
-                isSelected: false,
-                onTap: onLogout,
-              ),
             ],
           ),
         ),

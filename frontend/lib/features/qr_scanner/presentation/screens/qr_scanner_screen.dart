@@ -20,6 +20,7 @@ class QrScannerScreen extends StatefulWidget {
     this.activeEventId,
     this.activeEventName,
     this.activeEventOffices = const [],
+    this.activeEventJobTitles = const [],
     this.activeEventControls = const [],
   });
 
@@ -27,6 +28,7 @@ class QrScannerScreen extends StatefulWidget {
   final int? activeEventId;
   final String? activeEventName;
   final List<EventOffice> activeEventOffices;
+  final List<EventJobTitle> activeEventJobTitles;
   final List<EventControl> activeEventControls;
 
   @override
@@ -45,14 +47,54 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
 
   QrScanResultModel? _lastScanModel;
   final TextEditingController _ciController = TextEditingController();
+  final FocusNode _ciFocusNode = FocusNode();
+  final GlobalKey _manualCiSearchKey = GlobalKey();
   bool _isHandlingDetection = false;
   bool _isSearchingCi = false;
 
   @override
+  void initState() {
+    super.initState();
+    _ciFocusNode.addListener(_handleCiFocusChange);
+  }
+
+  @override
   void dispose() {
+    _ciFocusNode.removeListener(_handleCiFocusChange);
+    _ciFocusNode.dispose();
     _ciController.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _handleCiFocusChange() {
+    if (!_ciFocusNode.hasFocus) {
+      return;
+    }
+
+    Future<void>.delayed(
+      const Duration(milliseconds: 320),
+      _scrollManualCiSearchIntoView,
+    );
+  }
+
+  Future<void> _scrollManualCiSearchIntoView() async {
+    if (!mounted) {
+      return;
+    }
+
+    final searchContext = _manualCiSearchKey.currentContext;
+
+    if (searchContext == null) {
+      return;
+    }
+
+    await Scrollable.ensureVisible(
+      searchContext,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+      alignment: 0.92,
+    );
   }
 
   Future<void> _openDetailsScreen({
@@ -76,6 +118,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
           activeEventId: widget.activeEventId,
           activeEventName: widget.activeEventName,
           activeEventOffices: widget.activeEventOffices,
+          activeEventJobTitles: widget.activeEventJobTitles,
           activeEventControls: widget.activeEventControls,
           manualCi: manualCi,
           prefetchedQrDetails: prefetchedQrDetails,
@@ -204,12 +247,14 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth >= 900;
 
         return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+          padding: EdgeInsets.fromLTRB(20, 20, 20, 24 + keyboardInset),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -217,12 +262,6 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
                 _ActiveEventCard(eventName: widget.activeEventName!),
                 const SizedBox(height: 12),
               ],
-              _ManualCiSearchCard(
-                controller: _ciController,
-                isSearching: _isSearchingCi,
-                onSearch: _searchByCi,
-              ),
-              const SizedBox(height: 12),
               if (isWide)
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -238,22 +277,14 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
                     const SizedBox(width: 16),
                     Expanded(
                       flex: 5,
-                      child: Column(
-                        children: [
-                          const _ScannerTipsCard(),
-                          const SizedBox(height: 12),
-                          ScannerResultPanel(
-                            lastScan: _lastScanModel?.toEntity(),
-                            onRestart: _restartScanner,
-                          ),
-                        ],
+                      child: ScannerResultPanel(
+                        lastScan: _lastScanModel?.toEntity(),
+                        onRestart: _restartScanner,
                       ),
                     ),
                   ],
                 )
               else ...[
-                const _ScannerTipsCard(),
-                const SizedBox(height: 12),
                 _ScannerViewport(
                   controller: _controller,
                   isScannerActive: _lastScanModel == null,
@@ -265,6 +296,14 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
                   onRestart: _restartScanner,
                 ),
               ],
+              const SizedBox(height: 12),
+              _ManualCiSearchCard(
+                key: _manualCiSearchKey,
+                controller: _ciController,
+                focusNode: _ciFocusNode,
+                isSearching: _isSearchingCi,
+                onSearch: _searchByCi,
+              ),
             ],
           ),
         );
@@ -324,12 +363,15 @@ class _ActiveEventCard extends StatelessWidget {
 
 class _ManualCiSearchCard extends StatelessWidget {
   const _ManualCiSearchCard({
+    super.key,
     required this.controller,
+    required this.focusNode,
     required this.isSearching,
     required this.onSearch,
   });
 
   final TextEditingController controller;
+  final FocusNode focusNode;
   final bool isSearching;
   final VoidCallback onSearch;
 
@@ -353,6 +395,7 @@ class _ManualCiSearchCard extends StatelessWidget {
             const SizedBox(height: 14),
             TextField(
               controller: controller,
+              focusNode: focusNode,
               textInputAction: TextInputAction.search,
               onSubmitted: (_) => onSearch(),
               decoration: InputDecoration(
@@ -378,89 +421,6 @@ class _ManualCiSearchCard extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _ScannerTipsCard extends StatelessWidget {
-  const _ScannerTipsCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            Text(
-              'Sugerencias de uso',
-              style: TextStyle(
-                color: AppPalette.ink,
-                fontWeight: FontWeight.w700,
-                fontSize: 18,
-              ),
-            ),
-            SizedBox(height: 12),
-            _ScannerTipItem(
-              title: 'Alinea el codigo',
-              description: 'Mantelo dentro del marco hasta confirmar lectura.',
-            ),
-            SizedBox(height: 10),
-            _ScannerTipItem(
-              title: 'Evita reflejos',
-              description: 'Mejora el enfoque con luz uniforme sobre el QR.',
-            ),
-            SizedBox(height: 10),
-            _ScannerTipItem(
-              title: 'Revisa el detalle',
-              description:
-                  'Despues de detectar el codigo, valida la informacion.',
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ScannerTipItem extends StatelessWidget {
-  const _ScannerTipItem({required this.title, required this.description});
-
-  final String title;
-  final String description;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 28,
-          height: 28,
-          decoration: const BoxDecoration(
-            color: AppPalette.orangeSoft,
-            shape: BoxShape.circle,
-          ),
-          alignment: Alignment.center,
-          child: const Icon(
-            Icons.check_rounded,
-            size: 16,
-            color: AppPalette.orange,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 4),
-              Text(description, style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ),
-        ),
-      ],
     );
   }
 }

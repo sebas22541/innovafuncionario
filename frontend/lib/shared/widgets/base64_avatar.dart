@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_palette.dart';
@@ -26,8 +27,10 @@ class Base64Avatar extends StatelessWidget {
     final normalizedPhotoSource = photoSource?.trim();
     final hasPhoto = normalizedPhotoSource?.isNotEmpty == true;
     final photoUri = _tryParsePhotoUri(normalizedPhotoSource);
-    final photoBytes =
-        photoUri == null ? _tryDecodePhotoBytes(normalizedPhotoSource) : null;
+    final photoBytes = photoUri == null
+        ? _cachedPhotoBytes(normalizedPhotoSource)
+        : null;
+    final cacheSize = (size * MediaQuery.devicePixelRatioOf(context)).round();
 
     return ClipRRect(
       borderRadius: resolvedBorderRadius,
@@ -36,10 +39,17 @@ class Base64Avatar extends StatelessWidget {
         height: size,
         child: hasPhoto
             ? (photoUri != null
-                  ? Image.network(
-                      photoUri.toString(),
+                  ? CachedNetworkImage(
+                      imageUrl: photoUri.toString(),
+                      memCacheWidth: cacheSize,
+                      memCacheHeight: cacheSize,
+                      maxWidthDiskCache: cacheSize,
+                      maxHeightDiskCache: cacheSize,
                       fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) =>
+                      filterQuality: FilterQuality.medium,
+                      placeholder: (_, _) =>
+                          _AvatarFallback(size: size, label: fallbackLabel),
+                      errorWidget: (_, _, _) =>
                           _AvatarFallback(size: size, label: fallbackLabel),
                     )
                   : photoBytes != null
@@ -55,6 +65,8 @@ class Base64Avatar extends StatelessWidget {
     );
   }
 }
+
+final Map<String, Uint8List?> _decodedPhotoCache = <String, Uint8List?>{};
 
 Uri? _tryParsePhotoUri(String? photoSource) {
   if (photoSource == null || photoSource.isEmpty) {
@@ -84,6 +96,17 @@ Uint8List? _tryDecodePhotoBytes(String? photoSource) {
   } catch (_) {
     return null;
   }
+}
+
+Uint8List? _cachedPhotoBytes(String? photoSource) {
+  if (photoSource == null || photoSource.isEmpty) {
+    return null;
+  }
+
+  return _decodedPhotoCache.putIfAbsent(
+    photoSource,
+    () => _tryDecodePhotoBytes(photoSource),
+  );
 }
 
 class _AvatarFallback extends StatelessWidget {

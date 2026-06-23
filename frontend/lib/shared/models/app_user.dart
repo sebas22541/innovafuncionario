@@ -1,12 +1,18 @@
-enum AppUserRole { admin, control, external }
+enum AppUserRole { admin, adminHealth, control, credentials, lunch, external }
 
 extension AppUserRoleX on AppUserRole {
   String get apiValue {
     switch (this) {
       case AppUserRole.admin:
         return 'ADMIN';
+      case AppUserRole.adminHealth:
+        return 'ADMIN_SALUD';
       case AppUserRole.control:
         return 'CONTROL';
+      case AppUserRole.credentials:
+        return 'CREDENCIALES';
+      case AppUserRole.lunch:
+        return 'ALMUERZO';
       case AppUserRole.external:
         return 'OPERADOR';
     }
@@ -16,8 +22,14 @@ extension AppUserRoleX on AppUserRole {
     switch (this) {
       case AppUserRole.admin:
         return 'Administrador';
+      case AppUserRole.adminHealth:
+        return 'Admin (salud)';
       case AppUserRole.control:
         return 'Control';
+      case AppUserRole.credentials:
+        return 'Credenciales';
+      case AppUserRole.lunch:
+        return 'Almuerzo';
       case AppUserRole.external:
         return 'Funcionario';
     }
@@ -34,19 +46,32 @@ class AppUser {
     required this.segundoApellido,
     required this.tercerApellido,
     required this.ci,
+    required this.celular,
     required this.tipoVinculo,
     required this.unidad,
     required this.cargo,
+    required this.lugar,
     required this.numeroItem,
     required this.activo,
+    this.cargoCodigo,
+    this.subcargoCodigo,
+    this.subcargo = '',
+    this.cargoEfectivoCodigo,
+    this.cargoEfectivo = '',
     this.fotoUrl,
     this.officeId,
     this.officeName,
     this.officeCode,
+    this.primaryOfficeId,
+    this.primaryOfficeName,
+    this.commissionOfficeId,
+    this.commissionOfficeName,
+    this.hasCommission = false,
     this.nombreVisible,
     this.personaId,
     this.qrCode,
     this.qrPayload,
+    this.authToken,
   });
 
   final int? id;
@@ -57,19 +82,71 @@ class AppUser {
   final String segundoApellido;
   final String tercerApellido;
   final String ci;
+  final String celular;
   final String tipoVinculo;
   final String unidad;
   final String cargo;
+  final String lugar;
   final String numeroItem;
   final bool activo;
+  final String? cargoCodigo;
+  final String? subcargoCodigo;
+  final String subcargo;
+  final String? cargoEfectivoCodigo;
+  final String cargoEfectivo;
   final String? fotoUrl;
   final int? officeId;
   final String? officeName;
   final String? officeCode;
+  final int? primaryOfficeId;
+  final String? primaryOfficeName;
+  final int? commissionOfficeId;
+  final String? commissionOfficeName;
+  final bool hasCommission;
   final String? nombreVisible;
   final int? personaId;
   final String? qrCode;
   final String? qrPayload;
+  final String? authToken;
+
+  AppUser withAuthToken(String? authToken) {
+    return AppUser(
+      id: id,
+      email: email,
+      role: role,
+      nombreCompleto: nombreCompleto,
+      primerApellido: primerApellido,
+      segundoApellido: segundoApellido,
+      tercerApellido: tercerApellido,
+      ci: ci,
+      celular: celular,
+      tipoVinculo: tipoVinculo,
+      unidad: unidad,
+      cargo: cargo,
+      lugar: lugar,
+      numeroItem: numeroItem,
+      activo: activo,
+      cargoCodigo: cargoCodigo,
+      subcargoCodigo: subcargoCodigo,
+      subcargo: subcargo,
+      cargoEfectivoCodigo: cargoEfectivoCodigo,
+      cargoEfectivo: cargoEfectivo,
+      fotoUrl: fotoUrl,
+      officeId: officeId,
+      officeName: officeName,
+      officeCode: officeCode,
+      primaryOfficeId: primaryOfficeId,
+      primaryOfficeName: primaryOfficeName,
+      commissionOfficeId: commissionOfficeId,
+      commissionOfficeName: commissionOfficeName,
+      hasCommission: hasCommission,
+      nombreVisible: nombreVisible,
+      personaId: personaId,
+      qrCode: qrCode,
+      qrPayload: qrPayload,
+      authToken: authToken,
+    );
+  }
 
   factory AppUser.fromJson(Map<String, dynamic> source) {
     return AppUser(
@@ -84,20 +161,72 @@ class AppUser {
       ),
       tercerApellido: _readString(source['tercerApellido'], 'tercerApellido'),
       ci: _readString(source['ci'], 'ci'),
+      celular: source['celular'] as String? ?? '',
       tipoVinculo: _readString(source['tipoVinculo'], 'tipoVinculo'),
       unidad: _readString(source['unidad'], 'unidad'),
       cargo: _readString(source['cargo'], 'cargo'),
+      lugar: source['lugar'] as String? ?? '',
       numeroItem: _readString(source['numeroItem'], 'numeroItem'),
       activo: source['activo'] as bool? ?? true,
+      cargoCodigo: source['cargoCodigo'] as String?,
+      subcargoCodigo: source['subcargoCodigo'] as String?,
+      subcargo: source['subcargo'] as String? ?? '',
+      cargoEfectivoCodigo: source['cargoEfectivoCodigo'] as String?,
+      cargoEfectivo: source['cargoEfectivo'] as String? ?? '',
       fotoUrl: (source['fotoUrl'] ?? source['fotoBase64']) as String?,
       officeId: source['oficinaId'] as int?,
       officeName: source['oficinaNombre'] as String?,
       officeCode: source['oficinaCodigo'] as String?,
+      primaryOfficeId: source['oficinaPrincipalId'] as int?,
+      primaryOfficeName: source['oficinaPrincipalNombre'] as String?,
+      commissionOfficeId: source['oficinaComisionId'] as int?,
+      commissionOfficeName: source['oficinaComisionNombre'] as String?,
+      hasCommission: source['tieneComision'] as bool? ?? false,
       nombreVisible: source['nombreVisible'] as String?,
       personaId: source['personaId'] as int?,
       qrCode: source['qrCode'] as String?,
       qrPayload: source['qrPayload'] as String?,
+      authToken: source['authToken'] as String?,
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'email': email,
+      'rol': role.apiValue,
+      'nombreCompleto': nombreCompleto,
+      'primerApellido': primerApellido,
+      'segundoApellido': segundoApellido,
+      'tercerApellido': tercerApellido,
+      'ci': ci,
+      'celular': celular,
+      'tipoVinculo': tipoVinculo,
+      'unidad': unidad,
+      'cargo': cargo,
+      'lugar': lugar,
+      'cargoCodigo': cargoCodigo,
+      'subcargoCodigo': subcargoCodigo,
+      'subcargo': subcargo,
+      'cargoEfectivoCodigo': cargoEfectivoCodigo,
+      'cargoEfectivo': cargoEfectivo,
+      'numeroItem': numeroItem,
+      'activo': activo,
+      'fotoUrl': fotoUrl,
+      'oficinaId': officeId,
+      'oficinaNombre': officeName,
+      'oficinaCodigo': officeCode,
+      'oficinaPrincipalId': primaryOfficeId,
+      'oficinaPrincipalNombre': primaryOfficeName,
+      'oficinaComisionId': commissionOfficeId,
+      'oficinaComisionNombre': commissionOfficeName,
+      'tieneComision': hasCommission,
+      'nombreVisible': nombreVisible,
+      'personaId': personaId,
+      'qrCode': qrCode,
+      'qrPayload': qrPayload,
+      'authToken': authToken,
+    };
   }
 
   String get fullName {
@@ -135,9 +264,16 @@ class AppUser {
 
   String get roleLabel => role.label;
 
-  bool get isAdmin => role == AppUserRole.admin;
+  bool get isAdmin =>
+      role == AppUserRole.admin || role == AppUserRole.adminHealth;
+
+  bool get isAdminHealth => role == AppUserRole.adminHealth;
 
   bool get isControl => role == AppUserRole.control;
+
+  bool get isCredentials => role == AppUserRole.credentials;
+
+  bool get isLunchControl => role == AppUserRole.lunch;
 
   bool get isExternalUser => role == AppUserRole.external;
 
@@ -146,6 +282,35 @@ class AppUser {
   bool get canUseEventsPanel => isAdmin || isControl;
 
   bool get canUseEventScanner => isAdmin || isControl;
+
+  String? get effectiveCargoCode {
+    final effective = cargoEfectivoCodigo?.trim();
+    if (effective != null && effective.isNotEmpty) {
+      return effective;
+    }
+
+    final sub = subcargoCodigo?.trim();
+    if (sub != null && sub.isNotEmpty) {
+      return sub;
+    }
+
+    final base = cargoCodigo?.trim();
+    return base == null || base.isEmpty ? null : base;
+  }
+
+  String get effectiveCargo {
+    final effective = cargoEfectivo.trim();
+    if (effective.isNotEmpty) {
+      return effective;
+    }
+
+    final sub = subcargo.trim();
+    if (sub.isNotEmpty) {
+      return sub;
+    }
+
+    return cargo;
+  }
 
   bool get hasPhoto => fotoUrl?.trim().isNotEmpty == true;
 
@@ -176,8 +341,20 @@ AppUserRole _readRole(dynamic value) {
     return AppUserRole.admin;
   }
 
+  if (value == 'ADMIN_SALUD') {
+    return AppUserRole.adminHealth;
+  }
+
   if (value == 'CONTROL') {
     return AppUserRole.control;
+  }
+
+  if (value == 'CREDENCIALES') {
+    return AppUserRole.credentials;
+  }
+
+  if (value == 'ALMUERZO') {
+    return AppUserRole.lunch;
   }
 
   return AppUserRole.external;

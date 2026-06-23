@@ -2,7 +2,9 @@
   "name": "qr_asistencia_app_frontend",
   "private": true,
   "scripts": {
-    "dev:local": "flutter run -d chrome --dart-define=BACKEND_BASE_URL=http://localhost:3000",
-    "build:local": "flutter build web --debug --dart-define=BACKEND_BASE_URL=http://localhost:3000"
+    "dev:local": "flutter run -d chrome --dart-define=BACKEND_BASE_URL=http://localhost:4000",
+    "dev:web": "flutter run -d web-server --web-hostname localhost --web-port 8080 --dart-define=BACKEND_BASE_URL=http://localhost:4000",
+    "build:local": "flutter build web --debug --dart-define=BACKEND_BASE_URL=http://localhost:4000",
+    "build:apk:dev": "powershell -ExecutionPolicy Bypass -File scripts/build-dev-apk.ps1"
   }
 }

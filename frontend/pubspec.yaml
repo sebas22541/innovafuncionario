@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+2
+version: 1.0.0+7
 
 environment:
   sdk: ^3.10.4
@@ -46,8 +46,18 @@ dependencies:
   qr: ^3.0.2
   qr_flutter: ^4.1.0
   geolocator: ^14.0.2
+<<<<<<< HEAD
   excel: ^4.0.6
   share_plus: ^13.1.0
+=======
+  shared_preferences: ^2.5.3
+  cached_network_image: ^3.4.1
+  cryptography: ^2.9.0
+  excel: ^4.0.6
+  web: ^1.1.1
+  firebase_core: ^4.10.0
+  firebase_messaging: ^16.3.0
+>>>>>>> 83bbe3119e470b5b1c7d696cc8f396c08c49bec2
 
 dev_dependencies:
   flutter_test:
@@ -78,6 +88,14 @@ flutter:
     - assets/images/inlogplo.png
     - assets/images/letrablan.png
     - assets/images/letragris.png
+    - assets/font-fallback/roboto/v32/KFOmCnqEu92Fr1Me4GZLCzYlKw.woff2
+    - assets/font-fallback/notosanssymbols/v43/rP2up3q65FkAtHfwd-eIS2brbDN6gxP34F9jRRCe4W3gfQ8gb_VFRkzrbQ.woff2
+    - assets/font-fallback/notosanssymbols2/v24/I_uyMoGduATTei9eI8daxVHDyfisHr71-gTBWXPM4Q.woff2
+    - assets/font-fallback/notosanssymbols2/v24/I_uyMoGduATTei9eI8daxVHDyfisHr71-jrBWXPM4Q.woff2
+    - assets/font-fallback/notosanssymbols2/v24/I_uyMoGduATTei9eI8daxVHDyfisHr71-prgfE71.woff2
+    - assets/font-fallback/notosanssymbols2/v24/I_uyMoGduATTei9eI8daxVHDyfisHr71-pTgfA.woff2
+    - assets/font-fallback/notosanssymbols2/v24/I_uyMoGduATTei9eI8daxVHDyfisHr71-ujgfE71.woff2
+    - assets/font-fallback/notosanssymbols2/v24/I_uyMoGduATTei9eI8daxVHDyfisHr71-vrgfE71.woff2
 
   fonts:
     - family: Poppins

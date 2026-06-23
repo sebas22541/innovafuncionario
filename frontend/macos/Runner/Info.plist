@@ -24,6 +24,12 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>$(PRODUCT_COPYRIGHT)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>La app usa la camara para escanear codigos QR de asistencia.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>La app usa tu ubicacion para validar registros de asistencia y generar QR dinamicos.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>La app puede acceder a tus fotos solo cuando eliges una imagen de perfil.</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>

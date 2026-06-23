@@ -36,6 +36,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final TextEditingController _tercerApellidoController =
       TextEditingController();
   final TextEditingController _ciController = TextEditingController();
+  final TextEditingController _celularController = TextEditingController();
   final TextEditingController _unidadController = TextEditingController();
   final TextEditingController _cargoController = TextEditingController();
   final TextEditingController _numeroItemController = TextEditingController();
@@ -69,8 +70,6 @@ class _AuthScreenState extends State<AuthScreen> {
   @override
   void initState() {
     super.initState();
-    _loadOffices();
-    _loadCargos();
   }
 
   @override
@@ -81,6 +80,7 @@ class _AuthScreenState extends State<AuthScreen> {
     _segundoApellidoController.dispose();
     _tercerApellidoController.dispose();
     _ciController.dispose();
+    _celularController.dispose();
     _unidadController.dispose();
     _cargoController.dispose();
     _numeroItemController.dispose();
@@ -326,6 +326,10 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Future<void> _submit() async {
+    if (_isSubmitting) {
+      return;
+    }
+
     final form = _formKey.currentState;
 
     if (form == null || !form.validate()) {
@@ -360,6 +364,7 @@ class _AuthScreenState extends State<AuthScreen> {
               segundoApellido: _segundoApellidoController.text.trim(),
               tercerApellido: _tercerApellidoController.text.trim(),
               ci: _ciController.text.trim(),
+              celular: _celularController.text.trim(),
               tipoVinculo: _selectedTipoVinculo,
               oficinaId: _selectedOffice?.id,
               cargoCodigo: _selectedCargo?.code,
@@ -451,6 +456,7 @@ class _AuthScreenState extends State<AuthScreen> {
                       segundoApellidoController: _segundoApellidoController,
                       tercerApellidoController: _tercerApellidoController,
                       ciController: _ciController,
+                      celularController: _celularController,
                       unidadController: _unidadController,
                       cargoController: _cargoController,
                       numeroItemController: _numeroItemController,
@@ -510,7 +516,7 @@ class _AuthScreenState extends State<AuthScreen> {
                       child: Center(
                         child: ConstrainedBox(
                           constraints: BoxConstraints(
-                            maxWidth: _stage == _AuthStage.register ? 620 : 390,
+                            maxWidth: _stage == _AuthStage.register ? 620 : 490,
                             minHeight: _stage == _AuthStage.register
                                 ? 0
                                 : resolvedStageMinHeight,
@@ -589,6 +595,7 @@ class _AuthFormCard extends StatelessWidget {
     required this.segundoApellidoController,
     required this.tercerApellidoController,
     required this.ciController,
+    required this.celularController,
     required this.unidadController,
     required this.cargoController,
     required this.numeroItemController,
@@ -631,6 +638,7 @@ class _AuthFormCard extends StatelessWidget {
   final TextEditingController segundoApellidoController;
   final TextEditingController tercerApellidoController;
   final TextEditingController ciController;
+  final TextEditingController celularController;
   final TextEditingController unidadController;
   final TextEditingController cargoController;
   final TextEditingController numeroItemController;
@@ -713,19 +721,20 @@ class _AuthFormCard extends StatelessWidget {
           _AuthField(
             controller: emailController,
             focusNode: emailFocusNode,
-            label: 'Correo',
-            hint: 'Correo',
-            keyboardType: TextInputType.emailAddress,
+            label: 'CI',
+            hint: 'Ingresa tu CI',
+            keyboardType: TextInputType.text,
             textInputAction: TextInputAction.next,
             enableSuggestions: false,
             autocorrect: false,
             enableIMEPersonalizedLearning: false,
+            isLoginStyle: true,
             onFieldSubmitted: (_) => passwordFocusNode.requestFocus(),
             validator: (value) {
-              final email = value?.trim() ?? '';
+              final login = value?.trim() ?? '';
 
-              if (email.isEmpty || !email.contains('@')) {
-                return 'Ingresa un correo valido.';
+              if (login.length < 3) {
+                return 'Ingresa un CI valido.';
               }
 
               return null;
@@ -743,6 +752,7 @@ class _AuthFormCard extends StatelessWidget {
             enableSuggestions: false,
             autocorrect: false,
             enableIMEPersonalizedLearning: false,
+            isLoginStyle: true,
             suffixIcon: IconButton(
               onPressed: onTogglePasswordVisibility,
               icon: Icon(
@@ -767,6 +777,7 @@ class _AuthFormCard extends StatelessWidget {
             color: const Color(0xFFE95182),
             onTap: isSubmitting ? null : onSubmit,
             isLoading: isSubmitting,
+            isLoginStyle: true,
           ),
         ],
       ),
@@ -784,6 +795,16 @@ class _AuthFormCard extends StatelessWidget {
           isRequired: true,
           textInputAction: TextInputAction.next,
           validator: _requiredValidator('Ingresa tu CI.'),
+        ),
+        const SizedBox(height: 12),
+        _AuthField(
+          controller: celularController,
+          label: 'Celular',
+          hint: 'Celular',
+          isRequired: true,
+          keyboardType: TextInputType.phone,
+          textInputAction: TextInputAction.next,
+          validator: _requiredValidator('Ingresa tu numero de celular.'),
         ),
         const SizedBox(height: 12),
         _DropdownField<String>(
@@ -853,10 +874,14 @@ class _AuthFormCard extends StatelessWidget {
         _AuthField(
           controller: segundoApellidoController,
           label: 'Segundo Apellido',
-          hint: 'Segundo Apellido',
-          isRequired: true,
+          hint: 'Opcional',
           textInputAction: TextInputAction.next,
-          validator: _requiredValidator('Ingresa tu segundo apellido.'),
+          validator: (value) {
+            if ((value ?? '').trim().length > 80) {
+              return 'El segundo apellido es demasiado largo.';
+            }
+            return null;
+          },
         ),
         const SizedBox(height: 12),
         _AuthField(
@@ -1103,6 +1128,7 @@ class _AuthField extends StatelessWidget {
     this.enableSuggestions = true,
     this.autocorrect = true,
     this.enableIMEPersonalizedLearning = true,
+    this.isLoginStyle = false,
   });
 
   final TextEditingController controller;
@@ -1120,9 +1146,22 @@ class _AuthField extends StatelessWidget {
   final bool enableSuggestions;
   final bool autocorrect;
   final bool enableIMEPersonalizedLearning;
+  final bool isLoginStyle;
 
   @override
   Widget build(BuildContext context) {
+    final fillColor = isLoginStyle
+        ? const Color(0xFFF0EDF7)
+        : Colors.white;
+    final textColor = isLoginStyle
+        ? const Color(0xFF7A679B)
+        : const Color(0xFF585364);
+    final borderRadius = BorderRadius.circular(isLoginStyle ? 20 : 18);
+    final contentPadding = EdgeInsets.symmetric(
+      horizontal: isLoginStyle ? 28 : 18,
+      vertical: isLoginStyle ? 19 : 15,
+    );
+
     return TextFormField(
       controller: controller,
       focusNode: focusNode,
@@ -1135,37 +1174,56 @@ class _AuthField extends StatelessWidget {
       enableIMEPersonalizedLearning: enableIMEPersonalizedLearning,
       validator: validator,
       onFieldSubmitted: onFieldSubmitted,
+      cursorColor: AppPalette.night,
+      style: TextStyle(
+        color: isLoginStyle ? const Color(0xFF4F4267) : AppPalette.ink,
+        fontSize: isLoginStyle ? 16 : 14,
+        fontWeight: FontWeight.w500,
+      ),
       decoration: InputDecoration(
         filled: true,
-        fillColor: const Color(0xFFF0EEF6),
+        fillColor: fillColor,
         floatingLabelBehavior: FloatingLabelBehavior.never,
-        label: _RequiredFieldLabel(label: label, isRequired: isRequired),
+        label: _RequiredFieldLabel(
+          label: label,
+          isRequired: isRequired,
+          style: TextStyle(
+            color: textColor,
+            fontSize: isLoginStyle ? 16 : 14,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
         hintText: hint,
         suffixIcon: suffixIcon,
-        hintStyle: const TextStyle(color: Color(0xFF585364), fontSize: 14),
-        labelStyle: const TextStyle(color: Color(0xFF585364), fontSize: 14),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 18,
-          vertical: 15,
+        hintStyle: TextStyle(
+          color: textColor,
+          fontSize: isLoginStyle ? 16 : 14,
+          fontWeight: FontWeight.w500,
         ),
+        labelStyle: TextStyle(
+          color: textColor,
+          fontSize: isLoginStyle ? 16 : 14,
+          fontWeight: FontWeight.w500,
+        ),
+        contentPadding: contentPadding,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: borderRadius,
           borderSide: BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: borderRadius,
           borderSide: BorderSide.none,
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: borderRadius,
           borderSide: const BorderSide(color: AppPalette.night, width: 1.2),
         ),
         errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: borderRadius,
           borderSide: const BorderSide(color: Color(0xFFD94841), width: 1.2),
         ),
         focusedErrorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: borderRadius,
           borderSide: const BorderSide(color: Color(0xFFD94841), width: 1.2),
         ),
       ),
@@ -1234,7 +1292,7 @@ class _SelectionField extends StatelessWidget {
                       vertical: 15,
                     ),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF0EEF6),
+                    color: Colors.white,
                       borderRadius: BorderRadius.circular(18),
                       border: Border.all(
                         color: borderColor,
@@ -1317,7 +1375,7 @@ class _DropdownField<T> extends StatelessWidget {
       icon: const Icon(Icons.expand_more_rounded, color: Color(0xFF585364)),
       decoration: InputDecoration(
         filled: true,
-        fillColor: const Color(0xFFF0EEF6),
+        fillColor: Colors.white,
         label: _RequiredFieldLabel(label: label, isRequired: isRequired),
         floatingLabelBehavior: FloatingLabelBehavior.never,
         labelStyle: const TextStyle(color: Color(0xFF585364), fontSize: 14),
@@ -1424,6 +1482,7 @@ class _AuthPrimaryButton extends StatelessWidget {
     required this.onTap,
     this.isLoading = false,
     this.icon,
+    this.isLoginStyle = false,
   });
 
   final String label;
@@ -1431,19 +1490,26 @@ class _AuthPrimaryButton extends StatelessWidget {
   final VoidCallback? onTap;
   final bool isLoading;
   final IconData? icon;
+  final bool isLoginStyle;
 
   @override
   Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(isLoginStyle ? 20 : 20);
+    final padding = EdgeInsets.symmetric(
+      horizontal: 18,
+      vertical: isLoginStyle ? 21 : 16,
+    );
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: radius,
         child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          padding: padding,
           decoration: BoxDecoration(
             color: onTap == null ? color.withValues(alpha: 0.55) : color,
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: radius,
             boxShadow: const [
               BoxShadow(
                 color: Color(0x1E000000),
@@ -1471,9 +1537,9 @@ class _AuthPrimaryButton extends StatelessWidget {
                       ],
                       Text(
                         label,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: Colors.white,
-                          fontSize: 15,
+                          fontSize: isLoginStyle ? 18 : 15,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
