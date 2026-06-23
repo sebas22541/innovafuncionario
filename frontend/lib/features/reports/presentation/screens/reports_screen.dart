@@ -2666,6 +2666,13 @@ String _formatDateTime(DateTime dateTime) {
   return '${_formatDate(dateTime)} ${_formatTime(dateTime)}';
 }
 
+String _formatDateOnly(DateTime dateTime) {
+  final day = dateTime.day.toString().padLeft(2, '0');
+  final month = dateTime.month.toString().padLeft(2, '0');
+
+  return '$day/$month/${dateTime.year}';
+}
+
 String _formatDate(DateTime dateTime) {
   const months = [
     'ene',
@@ -2737,79 +2744,58 @@ List<List<String>> _buildEventAbsenteePdfRows(
 
 List<String> _buildEventExcelHeaders(EventRecord event) {
   return [
-    'Nro',
-    'Evento',
-    'Fecha evento',
+    'Fecha',
     'CI',
-    'Nombre',
+    'Nombre completo',
     'Tipo',
     'Oficina',
-    'Estado general',
-    'Hora registro',
-    'Observacion',
-    for (final control in _sortedEventControls(event.controls)) ...[
-      '${control.name} estado',
-      '${control.name} hora',
-    ],
+    'Cargo',
+    for (final control in _sortedEventControls(event.controls)) control.name,
   ];
 }
 
 List<List<Object?>> _buildEventExcelRows(EventRecord event) {
   final controls = _sortedEventControls(event.controls);
   final rows = <List<Object?>>[];
-  var index = 1;
 
   for (final entry in _sortEventRosterEntries(event.attended)) {
     rows.add(
       _buildEventAttendanceExcelRow(
-        index: index,
         event: event,
         entry: entry,
-        generalStatus: 'Asistio',
         controls: controls,
       ),
     );
-    index++;
   }
 
   for (final entry in _sortEventRosterEntries(event.observed)) {
     rows.add(
       _buildEventAttendanceExcelRow(
-        index: index,
         event: event,
         entry: entry,
-        generalStatus: 'Observado',
         controls: controls,
       ),
     );
-    index++;
   }
 
   for (final entry in _sortEventAbsenteeEntries(event.absentees)) {
     rows.add([
-      index,
-      event.name,
-      _formatDateTime(event.date),
+      _formatDateOnly(event.date),
       entry.ci?.trim().isNotEmpty == true ? entry.ci!.trim() : '',
       entry.fullName,
       _eventRosterTipoLabel(entry.tipoVinculo),
       entry.officeName ?? '',
-      'Falto',
-      '',
-      entry.requirementReason ?? '',
-      for (final _ in controls) ...['', ''],
+      entry.jobTitle ?? '',
+      for (final _ in controls) '',
     ]);
-    index++;
   }
 
   return rows;
 }
 
 List<Object?> _buildEventAttendanceExcelRow({
-  required int index,
   required EventRecord event,
   required EventRosterEntry entry,
-  required String generalStatus,
   required List<EventControl> controls,
 }) {
   final controlsById = {
@@ -2817,22 +2803,16 @@ List<Object?> _buildEventAttendanceExcelRow({
   };
 
   return [
-    index,
-    event.name,
-    _formatDateTime(event.date),
+    _formatDateOnly(event.date),
     entry.ci?.trim().isNotEmpty == true ? entry.ci!.trim() : '',
     entry.fullName,
     _eventRosterTipoLabel(entry.tipoVinculo),
     entry.officeName ?? '',
-    generalStatus,
-    _formatDateTime(entry.registeredAt),
-    entry.note,
-    for (final control in controls) ...[
-      _controlStatusLabel(controlsById[control.id]?.status),
+    entry.jobTitle ?? '',
+    for (final control in controls)
       controlsById[control.id] == null
           ? ''
-          : _formatDateTime(controlsById[control.id]!.registeredAt),
-    ],
+          : _formatTime(controlsById[control.id]!.registeredAt),
   ];
 }
 
@@ -2849,17 +2829,6 @@ List<EventControl> _sortedEventControls(List<EventControl> controls) {
   });
 
   return sortedControls;
-}
-
-String _controlStatusLabel(String? status) {
-  switch (status) {
-    case 'ASISTIO':
-      return 'Asistio';
-    case 'OBSERVADO':
-      return 'Observado';
-    default:
-      return '';
-  }
 }
 
 List<List<String>> _buildPersonnelPdfRows(List<AppUser> users) {

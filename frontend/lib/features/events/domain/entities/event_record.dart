@@ -92,6 +92,7 @@ class EventRosterEntry {
     this.ci,
     this.tipoVinculo,
     this.officeName,
+    this.jobTitle,
     this.qrValue,
   });
 
@@ -107,6 +108,7 @@ class EventRosterEntry {
   final String? ci;
   final String? tipoVinculo;
   final String? officeName;
+  final String? jobTitle;
   final String? qrValue;
 }
 
@@ -117,6 +119,7 @@ class EventAbsenteeEntry {
     this.ci,
     this.tipoVinculo,
     this.officeName,
+    this.jobTitle,
     this.requirementReason,
   });
 
@@ -125,6 +128,7 @@ class EventAbsenteeEntry {
   final String? ci;
   final String? tipoVinculo;
   final String? officeName;
+  final String? jobTitle;
   final String? requirementReason;
 }
 
