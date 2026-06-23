@@ -5,7 +5,6 @@ import 'core/theme/app_theme.dart';
 import 'features/auth/presentation/screens/auth_screen.dart';
 import 'injection_container.dart';
 import 'shared/infrastructure/app_image_cache.dart';
-import 'shared/infrastructure/app_permissions_service.dart';
 import 'shared/infrastructure/backend_api_client.dart';
 import 'shared/infrastructure/firebase_notifications_service.dart';
 import 'shared/infrastructure/session_store.dart';
@@ -43,7 +42,6 @@ class _QrWebAppState extends State<QrWebApp> {
       onOpenNotifications: _openNotificationsFromNotification,
       onNotificationsChanged: _handleNotificationsChanged,
     );
-    _requestStartupPermissions();
     _restoreSession();
   }
 
@@ -144,12 +142,6 @@ class _QrWebAppState extends State<QrWebApp> {
     setState(() {
       _notificationsOpenToken++;
       _notificationsRefreshToken++;
-    });
-  }
-
-  void _requestStartupPermissions() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      AppPermissionsService.requestStartupPermissions();
     });
   }
 

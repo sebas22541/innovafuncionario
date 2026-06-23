@@ -182,11 +182,18 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
                     children: [
                       Expanded(
                         flex: 7,
-                        child: _LunchScannerViewport(
-                          controller: _controller,
-                          isScannerActive: !_isHandlingDetection,
-                          onDetect: _handleDetect,
-                          mode: selectedMode,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _ScannerModeTitle(mode: selectedMode),
+                            const SizedBox(height: 12),
+                            _LunchScannerViewport(
+                              controller: _controller,
+                              isScannerActive: !_isHandlingDetection,
+                              onDetect: _handleDetect,
+                              mode: selectedMode,
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(width: 16),
@@ -198,13 +205,14 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
                           exitPermitResponse: _lastExitPermitResponse,
                           errorMessage: _lastError,
                           isScanning: !_isHandlingDetection,
-                          onChangeMode: _changeMode,
                         ),
                       ),
                     ],
                   )
                 : Column(
                     children: [
+                      _ScannerModeTitle(mode: selectedMode),
+                      const SizedBox(height: 12),
                       _LunchScannerViewport(
                         controller: _controller,
                         isScannerActive: !_isHandlingDetection,
@@ -218,7 +226,6 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
                         exitPermitResponse: _lastExitPermitResponse,
                         errorMessage: _lastError,
                         isScanning: !_isHandlingDetection,
-                        onChangeMode: _changeMode,
                       ),
                     ],
                   ),
@@ -226,23 +233,6 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
         },
       ),
     );
-  }
-
-  Future<void> _changeMode() async {
-    _cancelIdleTimer();
-    await _controller.stop();
-    if (!mounted) {
-      return;
-    }
-
-    setState(() {
-      _selectedMode = null;
-      _lastError = null;
-      _lastLunchResponse = null;
-      _lastExitPermitResponse = null;
-      _isHandlingDetection = false;
-    });
-    widget.onModeActiveChanged?.call(false);
   }
 
   void _returnToModeSelection() {
@@ -380,6 +370,28 @@ class _ScannerModeButton extends StatelessWidget {
             fontWeight: FontWeight.w700,
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ScannerModeTitle extends StatelessWidget {
+  const _ScannerModeTitle({required this.mode});
+
+  final _ScannerMode mode;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = mode == _ScannerMode.lunch
+        ? 'QR de almuerzo'
+        : 'QR de permiso de salida';
+
+    return Text(
+      text,
+      textAlign: TextAlign.center,
+      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+        color: AppPalette.night,
+        fontWeight: FontWeight.w800,
       ),
     );
   }
@@ -743,7 +755,6 @@ class _LunchScanResultCard extends StatelessWidget {
     required this.exitPermitResponse,
     required this.errorMessage,
     required this.isScanning,
-    required this.onChangeMode,
   });
 
   final _ScannerMode mode;
@@ -751,7 +762,6 @@ class _LunchScanResultCard extends StatelessWidget {
   final ExitPermitScanResponse? exitPermitResponse;
   final String? errorMessage;
   final bool isScanning;
-  final VoidCallback onChangeMode;
 
   @override
   Widget build(BuildContext context) {
@@ -771,22 +781,11 @@ class _LunchScanResultCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    mode == _ScannerMode.lunch
-                        ? 'Registro de almuerzo'
-                        : 'Registro de permiso de salida',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                ),
-                IconButton(
-                  onPressed: onChangeMode,
-                  icon: const Icon(Icons.swap_horiz_rounded),
-                  tooltip: 'Cambiar registro',
-                ),
-              ],
+            Text(
+              mode == _ScannerMode.lunch
+                  ? 'Registro de almuerzo'
+                  : 'Registro de permiso de salida',
+              style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 12),
             if (mode == _ScannerMode.lunch) ...[
