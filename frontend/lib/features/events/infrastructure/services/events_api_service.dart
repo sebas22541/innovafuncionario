@@ -408,6 +408,7 @@ class EventsApiService {
           _readNullableString(source['unidad']) ??
           _readNullableString(source['departamento']),
       tipoVinculo: _readNullableString(source['tipoVinculo']),
+      jobTitle: _readNullableString(source['cargo']),
       qrValue: _readNullableString(source['qrLeido']),
     );
   }
@@ -425,6 +426,7 @@ class EventsApiService {
           _readNullableString(source['unidad']) ??
           _readNullableString(source['departamento']),
       tipoVinculo: _readNullableString(source['tipoVinculo']),
+      jobTitle: _readNullableString(source['cargo']),
       requirementReason: _readNullableString(source['motivoFalta']),
     );
   }
