@@ -1990,8 +1990,7 @@ async function resolveExpandedEventOffices(
       const officeCode = normalizeOfficeCode(office.cod);
 
       return directCodes.some(
-        (selectedCode) =>
-          officeCode === selectedCode || officeCode.startsWith(`${selectedCode}.`),
+        (selectedCode) => isOfficeCoveredByBranch(officeCode, selectedCode),
       );
     });
   const excludedCodes = normalizedExcludedOffices
@@ -2003,12 +2002,10 @@ async function resolveExpandedEventOffices(
       const officeCode = normalizeOfficeCode(office.cod);
 
       const isIncluded = directCodes.some(
-        (selectedCode) =>
-          officeCode === selectedCode || officeCode.startsWith(`${selectedCode}.`),
+        (selectedCode) => isOfficeCoveredByBranch(officeCode, selectedCode),
       );
       const isExcluded = excludedCodes.some(
-        (excludedCode) =>
-          officeCode === excludedCode || officeCode.startsWith(`${excludedCode}.`),
+        (excludedCode) => isOfficeCoveredByBranch(officeCode, excludedCode),
       );
 
       return isIncluded && !isExcluded;
@@ -2129,10 +2126,26 @@ function normalizeOfficeMatchText(value: unknown) {
 function isOfficeCoveredByBranch(officeCode: string, branchCode: string) {
   const normalizedOfficeCode = normalizeOfficeCode(officeCode);
   const normalizedBranchCode = normalizeOfficeCode(branchCode);
+  const explicitBranchCodes =
+    submayoraltyEventBranchCodes[normalizedBranchCode];
+
+  if (explicitBranchCodes != null) {
+    return normalizedOfficeCode === normalizedBranchCode ||
+      explicitBranchCodes.has(normalizedOfficeCode);
+  }
 
   return normalizedOfficeCode === normalizedBranchCode ||
     normalizedOfficeCode.startsWith(`${normalizedBranchCode}.`);
 }
+
+const submayoraltyEventBranchCodes: Record<string, Set<string>> = {
+  "10.2.2": new Set(["10.4.3.1", "10.4.3.2", "10.4.3.3", "10.4.3.4"]),
+  "10.2.3": new Set(["10.4.4.1", "10.4.4.2", "10.4.4.3", "10.4.4.4"]),
+  "10.2.4": new Set(["10.4.5.1", "10.4.5.2", "10.4.5.3", "10.4.5.4"]),
+  "10.2.5": new Set(["10.4.7.1", "10.4.7.2", "10.4.7.3", "10.4.7.4"]),
+  "10.2.6": new Set(["10.4.6.1", "10.4.6.2", "10.4.6.3", "10.4.6.4"]),
+  "10.2.7": new Set(["10.4.8.1", "10.4.8.2", "10.4.8.3", "10.4.8.4"]),
+};
 
 function compareOfficeHierarchy(
   left: { cod: string; oficina: string },

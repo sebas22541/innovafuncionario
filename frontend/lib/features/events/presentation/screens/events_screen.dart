@@ -3884,6 +3884,13 @@ bool _isOfficeCoveredByBranch(String officeCode, String branchCode) {
   final normalizedOfficeCode = _normalizeOfficeCode(officeCode);
   final normalizedBranchCode = _normalizeOfficeCode(branchCode);
 
+  final explicitBranchCodes =
+      _submayoraltyEventBranchCodes[normalizedBranchCode];
+  if (explicitBranchCodes != null) {
+    return normalizedOfficeCode == normalizedBranchCode ||
+        explicitBranchCodes.contains(normalizedOfficeCode);
+  }
+
   return normalizedOfficeCode == normalizedBranchCode ||
       normalizedOfficeCode.startsWith('$normalizedBranchCode.');
 }
@@ -3891,6 +3898,15 @@ bool _isOfficeCoveredByBranch(String officeCode, String branchCode) {
 String _normalizeOfficeCode(String code) {
   return code.trim().replaceAll(RegExp(r'\.+$'), '');
 }
+
+const Map<String, Set<String>> _submayoraltyEventBranchCodes = {
+  '10.2.2': {'10.4.3.1', '10.4.3.2', '10.4.3.3', '10.4.3.4'},
+  '10.2.3': {'10.4.4.1', '10.4.4.2', '10.4.4.3', '10.4.4.4'},
+  '10.2.4': {'10.4.5.1', '10.4.5.2', '10.4.5.3', '10.4.5.4'},
+  '10.2.5': {'10.4.7.1', '10.4.7.2', '10.4.7.3', '10.4.7.4'},
+  '10.2.6': {'10.4.6.1', '10.4.6.2', '10.4.6.3', '10.4.6.4'},
+  '10.2.7': {'10.4.8.1', '10.4.8.2', '10.4.8.3', '10.4.8.4'},
+};
 
 String _formatDate(DateTime date) {
   const months = [

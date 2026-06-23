@@ -6,6 +6,8 @@ import 'package:printing/printing.dart';
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/excel_exporter.dart';
+import '../../../../shared/widgets/app_alert.dart';
 import '../../../../shared/widgets/base64_avatar.dart';
 import '../../../events/domain/entities/event_record.dart';
 import '../../domain/entities/attendance_report.dart';
@@ -39,6 +41,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   bool _isLoadingEventReport = false;
   bool _isExporting = false;
   bool _isExportingEventPdf = false;
+  bool _isExportingEventExcel = false;
   String? _errorMessage;
   String? _eventErrorMessage;
 
@@ -515,6 +518,51 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
+  Future<void> _exportEventExcel() async {
+    final event = _eventReport;
+
+    if (event == null) {
+      return;
+    }
+
+    final rows = _buildEventExcelRows(event);
+
+    if (rows.isEmpty) {
+      AppAlert.showWarning(
+        context,
+        'No hay registros de control para exportar.',
+      );
+      return;
+    }
+
+    setState(() {
+      _isExportingEventExcel = true;
+    });
+
+    try {
+      await exportExcelWorkbook(
+        fileName: _buildEventExcelFilename(event),
+        sheetName: 'Reporte evento',
+        headers: _buildEventExcelHeaders(event),
+        rows: rows,
+      );
+
+      if (mounted) {
+        AppAlert.showSuccess(context, 'Excel del evento generado.');
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible exportar el evento.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExportingEventExcel = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final report = _report;
@@ -673,6 +721,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           onPressed:
                               eventReport == null ||
                                   _isExportingEventPdf ||
+                                  _isExportingEventExcel ||
                                   _isLoadingEventReport
                               ? null
                               : _exportEventPdf,
@@ -689,6 +738,29 @@ class _ReportsScreenState extends State<ReportsScreen> {
                             _isLoadingEventReport
                                 ? 'Generando reporte...'
                                 : 'Descargar PDF',
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed:
+                              eventReport == null ||
+                                  _isExportingEventPdf ||
+                                  _isExportingEventExcel ||
+                                  _isLoadingEventReport
+                              ? null
+                              : _exportEventExcel,
+                          icon: _isExportingEventExcel
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.file_download_outlined),
+                          label: Text(
+                            _isExportingEventExcel
+                                ? 'Exportando...'
+                                : 'Descargar Excel',
                           ),
                         ),
                       ],
@@ -1639,6 +1711,13 @@ String _formatDateTime(DateTime dateTime) {
   return '${_formatDate(dateTime)} ${_formatTime(dateTime)}';
 }
 
+String _formatDateOnly(DateTime dateTime) {
+  final day = dateTime.day.toString().padLeft(2, '0');
+  final month = dateTime.month.toString().padLeft(2, '0');
+
+  return '$day/$month/${dateTime.year}';
+}
+
 String _formatDate(DateTime dateTime) {
   const months = [
     'ene',
@@ -1682,6 +1761,69 @@ List<List<String>> _buildEventPdfRows(List<EventRosterEntry> entries) {
         ],
       )
       .toList(growable: false);
+}
+
+List<String> _buildEventExcelHeaders(EventRecord event) {
+  return [
+    'Fecha',
+    'CI',
+    'Nombre completo',
+    'Tipo',
+    'Oficina',
+    'Cargo',
+    for (final control in _sortedEventControls(event.controls)) control.name,
+  ];
+}
+
+List<List<Object?>> _buildEventExcelRows(EventRecord event) {
+  final controls = _sortedEventControls(event.controls);
+  final entries = [
+    ..._sortEventRosterEntries(event.attended),
+    ..._sortEventRosterEntries(event.observed),
+  ].where((entry) => entry.controls.isNotEmpty);
+
+  return [
+    for (final entry in entries)
+      _buildEventExcelRow(event: event, entry: entry, controls: controls),
+  ];
+}
+
+List<Object?> _buildEventExcelRow({
+  required EventRecord event,
+  required EventRosterEntry entry,
+  required List<EventControl> controls,
+}) {
+  final controlsById = {
+    for (final control in entry.controls) control.controlId: control,
+  };
+
+  return [
+    _formatDateOnly(event.date),
+    entry.ci?.trim().isNotEmpty == true ? entry.ci!.trim() : '',
+    entry.fullName,
+    _eventRosterTipoLabel(entry.tipoVinculo),
+    entry.officeName ?? '',
+    entry.jobTitle ?? '',
+    for (final control in controls)
+      controlsById[control.id] == null
+          ? ''
+          : _formatTime(controlsById[control.id]!.registeredAt),
+  ];
+}
+
+List<EventControl> _sortedEventControls(List<EventControl> controls) {
+  final sortedControls = [...controls];
+  sortedControls.sort((left, right) {
+    final orderComparison = left.order.compareTo(right.order);
+
+    if (orderComparison != 0) {
+      return orderComparison;
+    }
+
+    return left.name.toLowerCase().compareTo(right.name.toLowerCase());
+  });
+
+  return sortedControls;
 }
 
 List<EventRosterEntry> _sortEventRosterEntries(List<EventRosterEntry> entries) {
@@ -1732,6 +1874,17 @@ String _buildEventReportFilename(EventRecord event) {
 
   final safeName = normalizedName.isEmpty ? 'evento' : normalizedName;
   return 'reporte-evento-${event.id}-$safeName.pdf';
+}
+
+String _buildEventExcelFilename(EventRecord event) {
+  final normalizedName = event.name
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+
+  final safeName = normalizedName.isEmpty ? 'evento' : normalizedName;
+  return 'reporte-evento-${event.id}-$safeName.xlsx';
 }
 
 String _eventSearchLabel(EventRecord event) {

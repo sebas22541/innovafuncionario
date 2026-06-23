@@ -204,8 +204,7 @@ class EventsApiService {
           _readNullableInt(source['asistieronCount']) ?? attended.length,
       observedCount:
           _readNullableInt(source['observaronCount']) ?? observed.length,
-      hasDetailedAttendanceData:
-          source['detalleCompleto'] as bool? ?? true,
+      hasDetailedAttendanceData: source['detalleCompleto'] as bool? ?? true,
     );
   }
 
@@ -327,6 +326,7 @@ class EventsApiService {
           _readNullableString(source['unidad']) ??
           _readNullableString(source['departamento']),
       tipoVinculo: _readNullableString(source['tipoVinculo']),
+      jobTitle: _readNullableString(source['cargo']),
       qrValue: _readNullableString(source['qrLeido']),
     );
   }

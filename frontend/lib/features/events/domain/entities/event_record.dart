@@ -13,10 +13,7 @@ class EventControl {
 }
 
 class EventControlDraft {
-  const EventControlDraft({
-    required this.name,
-    this.id,
-  });
+  const EventControlDraft({required this.name, this.id});
 
   final int? id;
   final String name;
@@ -74,6 +71,7 @@ class EventRosterEntry {
     this.ci,
     this.tipoVinculo,
     this.officeName,
+    this.jobTitle,
     this.qrValue,
   });
 
@@ -89,6 +87,7 @@ class EventRosterEntry {
   final String? ci;
   final String? tipoVinculo;
   final String? officeName;
+  final String? jobTitle;
   final String? qrValue;
 }
 
