@@ -4749,10 +4749,27 @@ List<_OfficeSelectionEntry> _buildOfficeSelectionEntries(
   List<EventOffice> allOffices,
 ) {
   final entries = <_OfficeSelectionEntry>[];
-  final insertedBranchOfficeIds = <int>{};
+  final visibleParentByBranchOfficeId = <int, EventOffice>{};
+
+  for (final parentOffice in filteredOffices) {
+    final parentCode = _normalizeOfficeCode(parentOffice.code);
+    final isExplicitSubmayoraltyParent = _submayoraltyEventBranchCodes
+        .containsKey(parentCode);
+    final branchOffices = _collectOfficeBranchOffices(parentOffice, allOffices);
+    for (final branchOffice in branchOffices) {
+      if (isExplicitSubmayoraltyParent) {
+        visibleParentByBranchOfficeId[branchOffice.id] = parentOffice;
+      } else {
+        visibleParentByBranchOfficeId.putIfAbsent(
+          branchOffice.id,
+          () => parentOffice,
+        );
+      }
+    }
+  }
 
   for (final office in filteredOffices) {
-    if (insertedBranchOfficeIds.contains(office.id)) {
+    if (visibleParentByBranchOfficeId.containsKey(office.id)) {
       continue;
     }
 
@@ -4763,7 +4780,6 @@ List<_OfficeSelectionEntry> _buildOfficeSelectionEntries(
       entries.add(
         _OfficeSelectionEntry(office: branchOffice, parentOffice: office),
       );
-      insertedBranchOfficeIds.add(branchOffice.id);
     }
   }
 
