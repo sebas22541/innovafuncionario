@@ -1982,9 +1982,9 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                                           directlySelectedOffices[index];
                                       final branchOffices =
                                           _collectOfficeBranchOffices(
-                                            office,
-                                            widget.offices,
-                                          )
+                                                office,
+                                                widget.offices,
+                                              )
                                               .where(
                                                 (branchOffice) =>
                                                     expandedOfficeIds.contains(
@@ -2074,8 +2074,7 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                                                                             .ellipsis,
                                                                     style: Theme.of(
                                                                       context,
-                                                                    ).textTheme
-                                                                        .bodySmall,
+                                                                    ).textTheme.bodySmall,
                                                                   ),
                                                                 ),
                                                               ],
@@ -3015,11 +3014,12 @@ class _EventOfficeSelectionSheetState
                                 final isExcludedByParent =
                                     isExcludedByHierarchy &&
                                     !isDirectlyExcluded;
-                                final descendantsCount =
-                                    _countOfficeDescendants(
+                                final branchOffices =
+                                    _collectOfficeBranchOffices(
                                       office,
                                       widget.offices,
                                     );
+                                final descendantsCount = branchOffices.length;
                                 final cardColor = isDirectlySelected
                                     ? AppPalette.orangeSoft
                                     : isDirectlyExcluded
@@ -3146,6 +3146,89 @@ class _EventOfficeSelectionSheetState
                                                   style: Theme.of(
                                                     context,
                                                   ).textTheme.bodySmall,
+                                                ),
+                                              ],
+                                              if (branchOffices.isNotEmpty) ...[
+                                                const SizedBox(height: 8),
+                                                Container(
+                                                  width: double.infinity,
+                                                  padding: const EdgeInsets.all(
+                                                    10,
+                                                  ),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.white
+                                                        .withValues(
+                                                          alpha: 0.68,
+                                                        ),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          12,
+                                                        ),
+                                                    border: Border.all(
+                                                      color: AppPalette.line,
+                                                    ),
+                                                  ),
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Text(
+                                                        'Ramas de esta oficina',
+                                                        style: Theme.of(context)
+                                                            .textTheme
+                                                            .bodySmall
+                                                            ?.copyWith(
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w700,
+                                                            ),
+                                                      ),
+                                                      const SizedBox(height: 6),
+                                                      for (final branchOffice
+                                                          in branchOffices)
+                                                        Padding(
+                                                          padding:
+                                                              const EdgeInsets.only(
+                                                                bottom: 5,
+                                                              ),
+                                                          child: _BranchOfficePreviewRow(
+                                                            office:
+                                                                branchOffice,
+                                                            isIncluded:
+                                                                expandedOfficeIds
+                                                                    .contains(
+                                                                      branchOffice
+                                                                          .id,
+                                                                    ),
+                                                            isExcluded:
+                                                                _draftExcludedOfficeIds
+                                                                    .contains(
+                                                                      branchOffice
+                                                                          .id,
+                                                                    ) ||
+                                                                (rawExpandedOfficeIds
+                                                                        .contains(
+                                                                          branchOffice
+                                                                              .id,
+                                                                        ) &&
+                                                                    !expandedOfficeIds
+                                                                        .contains(
+                                                                          branchOffice
+                                                                              .id,
+                                                                        )),
+                                                            willBeIncluded:
+                                                                !expandedOfficeIds
+                                                                    .contains(
+                                                                      branchOffice
+                                                                          .id,
+                                                                    ) &&
+                                                                !isDirectlyExcluded &&
+                                                                !isExcludedByParent,
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  ),
                                                 ),
                                               ],
                                             ],
@@ -4709,20 +4792,76 @@ class _InfoChip extends StatelessWidget {
   }
 }
 
-const _defaultEventLocation = LatLng(-16.489689, -68.119293);
+class _BranchOfficePreviewRow extends StatelessWidget {
+  const _BranchOfficePreviewRow({
+    required this.office,
+    required this.isIncluded,
+    required this.isExcluded,
+    required this.willBeIncluded,
+  });
 
-int _countOfficeDescendants(EventOffice office, List<EventOffice> offices) {
-  return _collectOfficeBranchOffices(office, offices).length;
+  final EventOffice office;
+  final bool isIncluded;
+  final bool isExcluded;
+  final bool willBeIncluded;
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColor = isExcluded
+        ? const Color(0xFFD94841)
+        : isIncluded
+        ? const Color(0xFF2E7D32)
+        : AppPalette.muted;
+    final statusIcon = isExcluded
+        ? Icons.block_rounded
+        : isIncluded
+        ? Icons.check_circle_rounded
+        : Icons.add_circle_outline_rounded;
+    final statusLabel = isExcluded
+        ? 'Fuera'
+        : isIncluded
+        ? 'Ira'
+        : willBeIncluded
+        ? 'Se agregara'
+        : 'Rama';
+
+    return Row(
+      children: [
+        Icon(statusIcon, size: 16, color: statusColor),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            office.displayLabel,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          statusLabel,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: statusColor,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
 }
+
+const _defaultEventLocation = LatLng(-16.489689, -68.119293);
 
 List<EventOffice> _collectOfficeBranchOffices(
   EventOffice office,
   List<EventOffice> offices,
 ) {
-  return offices.where((candidate) {
-    return candidate.id != office.id &&
-        _isOfficeCoveredByBranch(candidate.code, office.code);
-  }).toList(growable: false);
+  return offices
+      .where((candidate) {
+        return candidate.id != office.id &&
+            _isOfficeCoveredByBranch(candidate.code, office.code);
+      })
+      .toList(growable: false);
 }
 
 Set<int> _normalizeDirectOfficeSelection(
