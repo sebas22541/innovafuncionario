@@ -1980,11 +1980,20 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                                     itemBuilder: (context, index) {
                                       final office =
                                           directlySelectedOffices[index];
-                                      final descendantsCount =
-                                          _countOfficeDescendants(
+                                      final branchOffices =
+                                          _collectOfficeBranchOffices(
                                             office,
                                             widget.offices,
-                                          );
+                                          )
+                                              .where(
+                                                (branchOffice) =>
+                                                    expandedOfficeIds.contains(
+                                                      branchOffice.id,
+                                                    ),
+                                              )
+                                              .toList(growable: false);
+                                      final descendantsCount =
+                                          branchOffices.length;
 
                                       return Container(
                                         padding: const EdgeInsets.all(14),
@@ -2031,6 +2040,48 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                                                       style: Theme.of(
                                                         context,
                                                       ).textTheme.bodySmall,
+                                                    ),
+                                                    const SizedBox(height: 8),
+                                                    Column(
+                                                      children: [
+                                                        for (final branchOffice
+                                                            in branchOffices)
+                                                          Padding(
+                                                            padding:
+                                                                const EdgeInsets.only(
+                                                                  bottom: 4,
+                                                                ),
+                                                            child: Row(
+                                                              children: [
+                                                                const Icon(
+                                                                  Icons
+                                                                      .account_tree_rounded,
+                                                                  size: 16,
+                                                                  color:
+                                                                      AppPalette
+                                                                          .muted,
+                                                                ),
+                                                                const SizedBox(
+                                                                  width: 6,
+                                                                ),
+                                                                Expanded(
+                                                                  child: Text(
+                                                                    branchOffice
+                                                                        .displayLabel,
+                                                                    maxLines: 1,
+                                                                    overflow:
+                                                                        TextOverflow
+                                                                            .ellipsis,
+                                                                    style: Theme.of(
+                                                                      context,
+                                                                    ).textTheme
+                                                                        .bodySmall,
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                      ],
                                                     ),
                                                   ],
                                                 ],
@@ -4661,10 +4712,17 @@ class _InfoChip extends StatelessWidget {
 const _defaultEventLocation = LatLng(-16.489689, -68.119293);
 
 int _countOfficeDescendants(EventOffice office, List<EventOffice> offices) {
+  return _collectOfficeBranchOffices(office, offices).length;
+}
+
+List<EventOffice> _collectOfficeBranchOffices(
+  EventOffice office,
+  List<EventOffice> offices,
+) {
   return offices.where((candidate) {
     return candidate.id != office.id &&
         _isOfficeCoveredByBranch(candidate.code, office.code);
-  }).length;
+  }).toList(growable: false);
 }
 
 Set<int> _normalizeDirectOfficeSelection(
