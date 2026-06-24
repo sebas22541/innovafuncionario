@@ -298,7 +298,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
 
     _sendDeviceHeartbeat();
     _deviceHeartbeatTimer = Timer.periodic(
-      const Duration(seconds: 30),
+      const Duration(seconds: 2),
       (_) => _sendDeviceHeartbeat(),
     );
   }

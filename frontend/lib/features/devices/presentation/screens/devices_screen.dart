@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_palette.dart';
@@ -13,21 +15,43 @@ class DevicesScreen extends StatefulWidget {
 }
 
 class _DevicesScreenState extends State<DevicesScreen> {
+  static const Duration _refreshInterval = Duration(seconds: 2);
+
   List<ManagedDevice> _devices = const [];
   bool _isLoading = true;
+  bool _isRefreshing = false;
   String? _errorMessage;
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _refreshTimer = Timer.periodic(
+      _refreshInterval,
+      (_) => _load(showLoading: false),
+    );
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({bool showLoading = true}) async {
+    if (_isRefreshing) {
+      return;
+    }
+
+    _isRefreshing = true;
+
+    if (showLoading) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
 
     try {
       final devices = await dependencies.devicesApiService.fetchDevices();
@@ -38,21 +62,28 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
       setState(() {
         _devices = devices;
+        _errorMessage = null;
       });
     } catch (_) {
       if (!mounted) {
         return;
       }
 
-      setState(() {
-        _devices = const [];
-        _errorMessage = 'No fue posible cargar los celulares.';
-      });
-    } finally {
-      if (mounted) {
+      if (showLoading || _devices.isEmpty) {
         setState(() {
-          _isLoading = false;
+          _devices = const [];
+          _errorMessage = 'No fue posible cargar los celulares.';
         });
+      }
+    } finally {
+      _isRefreshing = false;
+
+      if (mounted) {
+        if (showLoading) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
       }
     }
   }
@@ -99,7 +130,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final onlineCount = _devices.where((device) => device.isOnline).length;
     final lowBatteryCount = _devices.where((device) {
       final batteryLevel = device.batteryLevel;
       return batteryLevel != null && batteryLevel <= 20;
@@ -123,10 +153,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   _SummaryChip(
-                    label: 'Registrados',
+                    label: 'Conectados',
                     value: '${_devices.length}',
                   ),
-                  _SummaryChip(label: 'En linea', value: '$onlineCount'),
                   _SummaryChip(
                     label: 'Bateria baja',
                     value: '$lowBatteryCount',
@@ -159,7 +188,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
             const Card(
               child: Padding(
                 padding: EdgeInsets.all(18),
-                child: Text('Todavia no hay celulares registrados.'),
+                child: Text('Sin celulares conectados.'),
               ),
             )
           else

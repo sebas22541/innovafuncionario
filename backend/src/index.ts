@@ -135,6 +135,7 @@ const requestIdHeader = "X-Request-Id";
 const HEALTH_OFFICE_LEVEL = 11;
 const CONSULTANT_LINK_TYPE = "CONSULTOR";
 const TEMPORARY_LINK_TYPE = "EVENTUAL";
+const DEVICE_ONLINE_THRESHOLD_MS = 4 * 1000;
 
 type AuthenticatedUser = {
   id: number;
@@ -8457,8 +8458,10 @@ async function loadManagedDevices() {
       FROM "celulares_asistencia" c
       INNER JOIN "usuarios" u ON u."id" = c."usuario_id"
       WHERE u."rol" = 'ALMUERZO'
+        AND c."last_seen_at" >= CURRENT_TIMESTAMP - ($1::int * INTERVAL '1 millisecond')
       ORDER BY c."last_seen_at" DESC, c."id" DESC
     `,
+    [DEVICE_ONLINE_THRESHOLD_MS],
   );
 
   return result.rows.map(serializeManagedDevice);
@@ -8486,7 +8489,6 @@ function serializeManagedDevice(device: any) {
   const lastSeenAt = device.last_seen_at instanceof Date
     ? device.last_seen_at
     : new Date(device.last_seen_at);
-  const offlineAfterMs = 90 * 1000;
   const userName = buildUserDisplayName({
     nombre_completo: device.nombre_completo,
     nombres: device.nombres,
@@ -8508,7 +8510,7 @@ function serializeManagedDevice(device: any) {
     isCharging: typeof device.is_charging === "boolean" ? device.is_charging : null,
     brightness: nullableNumber(device.brightness),
     kioskEnabled: device.kiosk_enabled === true,
-    isOnline: Date.now() - lastSeenAt.getTime() <= offlineAfterMs,
+    isOnline: Date.now() - lastSeenAt.getTime() <= DEVICE_ONLINE_THRESHOLD_MS,
     lastSeenAt: lastSeenAt.toISOString(),
     logoutRequestedAt:
       device.logout_requested_at instanceof Date
