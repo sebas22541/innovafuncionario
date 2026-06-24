@@ -137,9 +137,9 @@ const CONSULTANT_LINK_TYPE = "CONSULTOR";
 const TEMPORARY_LINK_TYPE = "EVENTUAL";
 const DEVICE_ONLINE_THRESHOLD_MS = clampInt(
   process.env.DEVICE_ONLINE_THRESHOLD_MS ?? null,
-  10_000,
-  4_000,
   30_000,
+  10_000,
+  120_000,
 );
 
 type AuthenticatedUser = {

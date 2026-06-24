@@ -20,6 +20,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
   List<ManagedDevice> _devices = const [];
   bool _isLoading = true;
   bool _isRefreshing = false;
+  int _emptyRefreshes = 0;
   String? _errorMessage;
   Timer? _refreshTimer;
 
@@ -61,7 +62,17 @@ class _DevicesScreenState extends State<DevicesScreen> {
       }
 
       setState(() {
-        _devices = devices;
+        if (devices.isEmpty && _devices.isNotEmpty && !showLoading) {
+          _emptyRefreshes++;
+
+          if (_emptyRefreshes >= 2) {
+            _devices = const [];
+          }
+        } else {
+          _emptyRefreshes = 0;
+          _devices = devices;
+        }
+
         _errorMessage = null;
       });
     } catch (_) {
