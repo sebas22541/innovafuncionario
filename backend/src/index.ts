@@ -135,7 +135,12 @@ const requestIdHeader = "X-Request-Id";
 const HEALTH_OFFICE_LEVEL = 11;
 const CONSULTANT_LINK_TYPE = "CONSULTOR";
 const TEMPORARY_LINK_TYPE = "EVENTUAL";
-const DEVICE_ONLINE_THRESHOLD_MS = 4 * 1000;
+const DEVICE_ONLINE_THRESHOLD_MS = clampInt(
+  process.env.DEVICE_ONLINE_THRESHOLD_MS ?? null,
+  10_000,
+  4_000,
+  30_000,
+);
 
 type AuthenticatedUser = {
   id: number;
