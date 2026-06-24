@@ -2877,6 +2877,10 @@ class _EventOfficeSelectionSheetState
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
     final filteredOffices = _filteredOffices;
+    final visibleOfficeEntries = _buildOfficeSelectionEntries(
+      filteredOffices,
+      widget.offices,
+    );
     final rawExpandedOfficeIds = _rawExpandedOfficeIds;
     final expandedOfficeIds = _expandedOfficeIds;
     final selectedBaseOfficeCount = _draftSelectedOfficeIds.length;
@@ -2992,11 +2996,14 @@ class _EventOfficeSelectionSheetState
                             thumbVisibility: true,
                             child: ListView.separated(
                               controller: _resultsScrollController,
-                              itemCount: filteredOffices.length,
+                              itemCount: visibleOfficeEntries.length,
                               separatorBuilder: (_, _) =>
                                   const SizedBox(height: 8),
                               itemBuilder: (context, index) {
-                                final office = filteredOffices[index];
+                                final entry = visibleOfficeEntries[index];
+                                final office = entry.office;
+                                final parentOffice = entry.parentOffice;
+                                final isBranchEntry = parentOffice != null;
                                 final isDirectlySelected =
                                     _draftSelectedOfficeIds.contains(office.id);
                                 final isDirectlyExcluded =
@@ -3057,184 +3064,120 @@ class _EventOfficeSelectionSheetState
                                     ? const Color(0xFFD94841)
                                     : AppPalette.muted;
 
-                                return InkWell(
-                                  borderRadius: BorderRadius.circular(18),
-                                  onTap: () => _toggleOffice(office.id),
-                                  child: Ink(
-                                    padding: const EdgeInsets.all(14),
-                                    decoration: BoxDecoration(
-                                      color: cardColor,
-                                      borderRadius: BorderRadius.circular(18),
-                                      border: Border.all(color: borderColor),
-                                    ),
-                                    child: Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Padding(
-                                          padding: const EdgeInsets.only(
-                                            top: 2,
+                                return Padding(
+                                  padding: EdgeInsets.only(
+                                    left: isBranchEntry ? 28 : 0,
+                                  ),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(18),
+                                    onTap: () => _toggleOffice(office.id),
+                                    child: Ink(
+                                      padding: const EdgeInsets.all(14),
+                                      decoration: BoxDecoration(
+                                        color: cardColor,
+                                        borderRadius: BorderRadius.circular(18),
+                                        border: Border.all(color: borderColor),
+                                      ),
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              top: 2,
+                                            ),
+                                            child: Icon(
+                                              leadingIcon,
+                                              color: leadingColor,
+                                            ),
                                           ),
-                                          child: Icon(
-                                            leadingIcon,
-                                            color: leadingColor,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                office.name,
-                                                style: Theme.of(
-                                                  context,
-                                                ).textTheme.titleSmall,
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                'Cod. ${office.code} | Nivel ${office.level}',
-                                                style: Theme.of(
-                                                  context,
-                                                ).textTheme.bodySmall,
-                                              ),
-                                              if (isDirectlyExcluded) ...[
-                                                const SizedBox(height: 4),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
                                                 Text(
-                                                  descendantsCount > 0
-                                                      ? 'Esta rama no ira al evento. Se excluiran automaticamente $descendantsCount oficinas hijas.'
-                                                      : 'Esta oficina no ira al evento aunque su oficina padre este seleccionada.',
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .bodySmall
-                                                      ?.copyWith(
-                                                        color: const Color(
-                                                          0xFFD94841,
-                                                        ),
-                                                      ),
+                                                  office.name,
+                                                  style: Theme.of(
+                                                    context,
+                                                  ).textTheme.titleSmall,
                                                 ),
-                                              ] else if (isInheritedOnly) ...[
                                                 const SizedBox(height: 4),
                                                 Text(
-                                                  'Ira al evento porque esta dentro de una oficina padre seleccionada. Toca solo si quieres que esta rama no vaya.',
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .bodySmall
-                                                      ?.copyWith(
-                                                        color: AppPalette.night,
-                                                      ),
-                                                ),
-                                              ] else if (isExcludedByParent) ...[
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  'Esta oficina ya quedo fuera por una rama padre. Si quieres dejarla excluida por separado, tocala tambien.',
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .bodySmall
-                                                      ?.copyWith(
-                                                        color: const Color(
-                                                          0xFFD94841,
-                                                        ),
-                                                      ),
-                                                ),
-                                              ] else if (descendantsCount >
-                                                  0) ...[
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  'Si la marcas, se agregan automaticamente $descendantsCount oficinas hijas de su rama.',
+                                                  'Cod. ${office.code} | Nivel ${office.level}',
                                                   style: Theme.of(
                                                     context,
                                                   ).textTheme.bodySmall,
                                                 ),
-                                              ],
-                                              if (branchOffices.isNotEmpty) ...[
-                                                const SizedBox(height: 8),
-                                                Container(
-                                                  width: double.infinity,
-                                                  padding: const EdgeInsets.all(
-                                                    10,
-                                                  ),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.white
-                                                        .withValues(
-                                                          alpha: 0.68,
+                                                if (isBranchEntry) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    'Rama de ${parentOffice.name}',
+                                                    style: Theme.of(context)
+                                                        .textTheme
+                                                        .bodySmall
+                                                        ?.copyWith(
+                                                          color:
+                                                              AppPalette.muted,
                                                         ),
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          12,
-                                                        ),
-                                                    border: Border.all(
-                                                      color: AppPalette.line,
-                                                    ),
                                                   ),
-                                                  child: Column(
-                                                    crossAxisAlignment:
-                                                        CrossAxisAlignment
-                                                            .start,
-                                                    children: [
-                                                      Text(
-                                                        'Ramas de esta oficina',
-                                                        style: Theme.of(context)
-                                                            .textTheme
-                                                            .bodySmall
-                                                            ?.copyWith(
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w700,
-                                                            ),
-                                                      ),
-                                                      const SizedBox(height: 6),
-                                                      for (final branchOffice
-                                                          in branchOffices)
-                                                        Padding(
-                                                          padding:
-                                                              const EdgeInsets.only(
-                                                                bottom: 5,
-                                                              ),
-                                                          child: _BranchOfficePreviewRow(
-                                                            office:
-                                                                branchOffice,
-                                                            isIncluded:
-                                                                expandedOfficeIds
-                                                                    .contains(
-                                                                      branchOffice
-                                                                          .id,
-                                                                    ),
-                                                            isExcluded:
-                                                                _draftExcludedOfficeIds
-                                                                    .contains(
-                                                                      branchOffice
-                                                                          .id,
-                                                                    ) ||
-                                                                (rawExpandedOfficeIds
-                                                                        .contains(
-                                                                          branchOffice
-                                                                              .id,
-                                                                        ) &&
-                                                                    !expandedOfficeIds
-                                                                        .contains(
-                                                                          branchOffice
-                                                                              .id,
-                                                                        )),
-                                                            willBeIncluded:
-                                                                !expandedOfficeIds
-                                                                    .contains(
-                                                                      branchOffice
-                                                                          .id,
-                                                                    ) &&
-                                                                !isDirectlyExcluded &&
-                                                                !isExcludedByParent,
+                                                ],
+                                                if (isDirectlyExcluded) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    descendantsCount > 0
+                                                        ? 'Esta rama no ira al evento. Se excluiran automaticamente $descendantsCount oficinas hijas.'
+                                                        : 'Esta oficina no ira al evento aunque su oficina padre este seleccionada.',
+                                                    style: Theme.of(context)
+                                                        .textTheme
+                                                        .bodySmall
+                                                        ?.copyWith(
+                                                          color: const Color(
+                                                            0xFFD94841,
                                                           ),
                                                         ),
-                                                    ],
                                                   ),
-                                                ),
+                                                ] else if (isInheritedOnly) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    'Ira al evento porque esta dentro de una oficina padre seleccionada. Toca solo si quieres que esta rama no vaya.',
+                                                    style: Theme.of(context)
+                                                        .textTheme
+                                                        .bodySmall
+                                                        ?.copyWith(
+                                                          color:
+                                                              AppPalette.night,
+                                                        ),
+                                                  ),
+                                                ] else if (isExcludedByParent) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    'Esta oficina ya quedo fuera por una rama padre. Si quieres dejarla excluida por separado, tocala tambien.',
+                                                    style: Theme.of(context)
+                                                        .textTheme
+                                                        .bodySmall
+                                                        ?.copyWith(
+                                                          color: const Color(
+                                                            0xFFD94841,
+                                                          ),
+                                                        ),
+                                                  ),
+                                                ] else if (descendantsCount >
+                                                    0) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    'Si la marcas, se agregan automaticamente $descendantsCount oficinas hijas de su rama.',
+                                                    style: Theme.of(
+                                                      context,
+                                                    ).textTheme.bodySmall,
+                                                  ),
+                                                ],
                                               ],
-                                            ],
+                                            ),
                                           ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 );
@@ -4792,65 +4735,40 @@ class _InfoChip extends StatelessWidget {
   }
 }
 
-class _BranchOfficePreviewRow extends StatelessWidget {
-  const _BranchOfficePreviewRow({
-    required this.office,
-    required this.isIncluded,
-    required this.isExcluded,
-    required this.willBeIncluded,
-  });
+const _defaultEventLocation = LatLng(-16.489689, -68.119293);
+
+class _OfficeSelectionEntry {
+  const _OfficeSelectionEntry({required this.office, this.parentOffice});
 
   final EventOffice office;
-  final bool isIncluded;
-  final bool isExcluded;
-  final bool willBeIncluded;
-
-  @override
-  Widget build(BuildContext context) {
-    final statusColor = isExcluded
-        ? const Color(0xFFD94841)
-        : isIncluded
-        ? const Color(0xFF2E7D32)
-        : AppPalette.muted;
-    final statusIcon = isExcluded
-        ? Icons.block_rounded
-        : isIncluded
-        ? Icons.check_circle_rounded
-        : Icons.add_circle_outline_rounded;
-    final statusLabel = isExcluded
-        ? 'Fuera'
-        : isIncluded
-        ? 'Ira'
-        : willBeIncluded
-        ? 'Se agregara'
-        : 'Rama';
-
-    return Row(
-      children: [
-        Icon(statusIcon, size: 16, color: statusColor),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-            office.displayLabel,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          statusLabel,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: statusColor,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ],
-    );
-  }
+  final EventOffice? parentOffice;
 }
 
-const _defaultEventLocation = LatLng(-16.489689, -68.119293);
+List<_OfficeSelectionEntry> _buildOfficeSelectionEntries(
+  List<EventOffice> filteredOffices,
+  List<EventOffice> allOffices,
+) {
+  final entries = <_OfficeSelectionEntry>[];
+  final insertedBranchOfficeIds = <int>{};
+
+  for (final office in filteredOffices) {
+    if (insertedBranchOfficeIds.contains(office.id)) {
+      continue;
+    }
+
+    entries.add(_OfficeSelectionEntry(office: office));
+
+    final branchOffices = _collectOfficeBranchOffices(office, allOffices);
+    for (final branchOffice in branchOffices) {
+      entries.add(
+        _OfficeSelectionEntry(office: branchOffice, parentOffice: office),
+      );
+      insertedBranchOfficeIds.add(branchOffice.id);
+    }
+  }
+
+  return entries;
+}
 
 List<EventOffice> _collectOfficeBranchOffices(
   EventOffice office,
