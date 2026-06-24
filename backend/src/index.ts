@@ -133,6 +133,8 @@ const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 const requestIdHeader = "X-Request-Id";
 const HEALTH_OFFICE_LEVEL = 11;
+const CONSULTANT_LINK_TYPE = "CONSULTOR";
+const TEMPORARY_LINK_TYPE = "EVENTUAL";
 
 type AuthenticatedUser = {
   id: number;
@@ -1155,7 +1157,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/usuarios") {
-      const requester = await assertCredentialsRequester(
+      const requester = await assertUserDirectoryRequester(
         authenticatedUser.email,
         "Solo un administrador o usuario de credenciales puede consultar credenciales.",
       );
@@ -1186,7 +1188,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/usuarios") {
-      const requester = await assertAdminRequester(
+      const requester = await assertUserManagerRequester(
         authenticatedUser.email,
         "Solo un administrador puede gestionar usuarios.",
       );
@@ -1203,6 +1205,7 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(400, "La unidad seleccionada no existe.");
       }
       assertManagedUserRoleAllowedForRequester(requester, input.rol);
+      assertScopedUserAdminCanManageUserInput(requester, input);
       assertManagedUserRoleOffice(input.rol, selectedOffice);
       assertHealthAdminCanUseOffice(requester, selectedOffice);
 
@@ -1318,7 +1321,7 @@ const server = http.createServer(async (request, response) => {
     const userId = readResourceId(url.pathname, "/api/usuarios/");
 
     if (request.method === "PUT" && userId != null) {
-      const requester = await assertAdminRequester(
+      const requester = await assertUserManagerRequester(
         authenticatedUser.email,
         "Solo un administrador puede gestionar usuarios.",
       );
@@ -1337,6 +1340,7 @@ const server = http.createServer(async (request, response) => {
           throw new HttpError(404, "No se encontro el usuario seleccionado.");
         }
         assertHealthAdminCanManageUser(requester, existingUser);
+        assertScopedUserAdminCanManageUser(requester, existingUser);
 
         if ("email" in input) {
           const managedInput = input as UpdateManagedUserInput;
@@ -1351,6 +1355,7 @@ const server = http.createServer(async (request, response) => {
             throw new HttpError(400, "La unidad seleccionada no existe.");
           }
           assertManagedUserRoleAllowedForRequester(requester, managedInput.rol);
+          assertScopedUserAdminCanManageUserInput(requester, managedInput);
           assertManagedUserRoleOffice(managedInput.rol, selectedOffice);
           assertHealthAdminCanUseOffice(requester, selectedOffice);
 
@@ -3333,6 +3338,14 @@ async function ensureRuntimeSchema() {
   `);
 
   await pool.query(`
+    ALTER TYPE "rol_usuario" ADD VALUE IF NOT EXISTS 'ADMIN_CONSULTORES'
+  `);
+
+  await pool.query(`
+    ALTER TYPE "rol_usuario" ADD VALUE IF NOT EXISTS 'ADMIN_EVENTUALES'
+  `);
+
+  await pool.query(`
     DO $$
     BEGIN
       IF NOT EXISTS (
@@ -5051,6 +5064,8 @@ function parseManagedUserInput(payload: unknown): ManagedUserInput {
   const requestedRole = readRequiredUppercaseChoice(body, "rol", [
     rol_usuario.ADMIN,
     rol_usuario.ADMIN_SALUD,
+    rol_usuario.ADMIN_CONSULTORES,
+    rol_usuario.ADMIN_EVENTUALES,
     rol_usuario.CONTROL,
     rol_usuario.CREDENCIALES,
     rol_usuario.ALMUERZO,
@@ -5092,6 +5107,8 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
   const requestedRole = readRequiredUppercaseChoice(body, "rol", [
     rol_usuario.ADMIN,
     rol_usuario.ADMIN_SALUD,
+    rol_usuario.ADMIN_CONSULTORES,
+    rol_usuario.ADMIN_EVENTUALES,
     rol_usuario.CONTROL,
     rol_usuario.CREDENCIALES,
     rol_usuario.ALMUERZO,
@@ -5768,6 +5785,33 @@ function isAdminRole(role: (typeof rol_usuario)[keyof typeof rol_usuario]) {
   return role === rol_usuario.ADMIN || role === rol_usuario.ADMIN_SALUD;
 }
 
+function isScopedUserAdminRole(
+  role: (typeof rol_usuario)[keyof typeof rol_usuario],
+) {
+  return (
+    role === rol_usuario.ADMIN_CONSULTORES ||
+    role === rol_usuario.ADMIN_EVENTUALES
+  );
+}
+
+function isUserManagerRole(role: (typeof rol_usuario)[keyof typeof rol_usuario]) {
+  return isAdminRole(role) || isScopedUserAdminRole(role);
+}
+
+function scopedUserAdminTipoVinculoForRole(
+  role: (typeof rol_usuario)[keyof typeof rol_usuario],
+) {
+  if (role === rol_usuario.ADMIN_CONSULTORES) {
+    return CONSULTANT_LINK_TYPE;
+  }
+
+  if (role === rol_usuario.ADMIN_EVENTUALES) {
+    return TEMPORARY_LINK_TYPE;
+  }
+
+  return null;
+}
+
 function isHealthAdminUser(user: { rol?: string | null } | null | undefined) {
   return user?.rol === rol_usuario.ADMIN_SALUD;
 }
@@ -5794,6 +5838,15 @@ function healthUserWhereForRequester(requester: any) {
 }
 
 function userDirectoryWhereForRequester(requester: any) {
+  const scopedTipoVinculo = scopedUserAdminTipoVinculoForRole(requester?.rol);
+
+  if (scopedTipoVinculo != null) {
+    return {
+      rol: rol_usuario.OPERADOR,
+      tipo_vinculo: scopedTipoVinculo,
+    };
+  }
+
   const healthWhere = healthUserWhereForRequester(requester);
 
   if (healthWhere != null) {
@@ -5904,6 +5957,17 @@ function assertManagedUserRoleAllowedForRequester(
   requester: any,
   role: (typeof rol_usuario)[keyof typeof rol_usuario],
 ) {
+  if (isScopedUserAdminRole(requester?.rol)) {
+    if (role !== rol_usuario.OPERADOR) {
+      throw new HttpError(
+        403,
+        "Este administrador solo puede gestionar usuarios funcionarios.",
+      );
+    }
+
+    return;
+  }
+
   if (!isHealthAdminUser(requester)) {
     return;
   }
@@ -5912,6 +5976,39 @@ function assertManagedUserRoleAllowedForRequester(
     throw new HttpError(
       403,
       "El administrador de salud no puede crear administradores generales.",
+    );
+  }
+}
+
+function assertScopedUserAdminCanManageUserInput(
+  requester: any,
+  input: Pick<ManagedUserInput | UpdateManagedUserInput, "rol" | "tipoVinculo">,
+) {
+  const scopedTipoVinculo = scopedUserAdminTipoVinculoForRole(requester?.rol);
+
+  if (scopedTipoVinculo == null) {
+    return;
+  }
+
+  if (input.rol !== rol_usuario.OPERADOR || input.tipoVinculo !== scopedTipoVinculo) {
+    throw new HttpError(
+      403,
+      `Este administrador solo puede gestionar funcionarios de tipo ${scopedTipoVinculo.toLowerCase()}.`,
+    );
+  }
+}
+
+function assertScopedUserAdminCanManageUser(requester: any, user: any) {
+  const scopedTipoVinculo = scopedUserAdminTipoVinculoForRole(requester?.rol);
+
+  if (scopedTipoVinculo == null) {
+    return;
+  }
+
+  if (user?.rol !== rol_usuario.OPERADOR || user?.tipo_vinculo !== scopedTipoVinculo) {
+    throw new HttpError(
+      403,
+      `Este administrador solo puede gestionar funcionarios de tipo ${scopedTipoVinculo.toLowerCase()}.`,
     );
   }
 }
@@ -5969,6 +6066,40 @@ async function assertAdminRequester(
   });
 
   if (!user || !isAdminRole(user.rol) || user.activo !== true) {
+    throw new HttpError(403, message);
+  }
+
+  return user;
+}
+
+async function assertUserManagerRequester(
+  email: string,
+  message = "Solo un administrador puede gestionar usuarios.",
+) {
+  const user = await prisma.usuarios.findUnique({
+    where: { email: email.toLowerCase() },
+  });
+
+  if (!user || !isUserManagerRole(user.rol) || user.activo !== true) {
+    throw new HttpError(403, message);
+  }
+
+  return user;
+}
+
+async function assertUserDirectoryRequester(
+  email: string,
+  message = "Solo un administrador o usuario de credenciales puede consultar credenciales.",
+) {
+  const user = await prisma.usuarios.findUnique({
+    where: { email: email.toLowerCase() },
+  });
+
+  if (
+    !user ||
+    (!isUserManagerRole(user.rol) && user.rol !== rol_usuario.CREDENCIALES) ||
+    user.activo !== true
+  ) {
     throw new HttpError(403, message);
   }
 

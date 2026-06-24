@@ -115,7 +115,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
 
     if (oldWidget.notificationsOpenToken != widget.notificationsOpenToken) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
+        if (mounted && !_currentUser.isScopedUserAdmin) {
           _openNotificationsPanel(openLatest: true);
         }
       });
@@ -160,6 +160,10 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
   }
 
   Future<void> _loadUnreadNotifications() async {
+    if (_currentUser.isScopedUserAdmin) {
+      return;
+    }
+
     try {
       final notifications = await dependencies.notificationsApiService
           .fetchReceivedNotifications();
@@ -179,6 +183,10 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
   }
 
   Future<void> _openNotificationsPanel({bool openLatest = false}) async {
+    if (_currentUser.isScopedUserAdmin) {
+      return;
+    }
+
     FocusManager.instance.primaryFocus?.unfocus();
     final selected = await showGeneralDialog<ReceivedNotification>(
       context: context,
@@ -386,7 +394,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 viewMode: UserEventsViewMode.attended,
               );
       case AppSection.users:
-        return _currentUser.isAdmin
+        return _currentUser.canManageUsers
             ? UsersScreen(currentUser: _currentUser)
             : SettingsScreen(
                 currentUser: _currentUser,
@@ -465,7 +473,10 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
   @override
   Widget build(BuildContext context) {
     final visibleSections = _visibleSectionsForUser(_currentUser);
-    final usePortalShell = !_currentUser.isAdmin && !_currentUser.isCredentials;
+    final usePortalShell =
+        !_currentUser.isAdmin &&
+        !_currentUser.isCredentials &&
+        !_currentUser.isScopedUserAdmin;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -501,7 +512,9 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 onSelected: _handleSectionSelection,
                 onBack: _handleSystemBack,
                 onNotifications: _openNotificationsPanel,
-                unreadNotifications: _unreadNotifications,
+                unreadNotifications: _currentUser.isScopedUserAdmin
+                    ? 0
+                    : _unreadNotifications,
                 lunchModeActive: _lunchScannerModeActive,
                 onLogout: _handleLogout,
                 child: animatedContent,
@@ -805,10 +818,11 @@ class _MobileTopBar extends StatelessWidget {
                   child: _BrandLogo(height: 56),
                 ),
               ),
-              _NotificationIconButton(
-                unreadCount: unreadNotifications,
-                onPressed: onNotifications,
-              ),
+              if (!currentUser.isScopedUserAdmin)
+                _NotificationIconButton(
+                  unreadCount: unreadNotifications,
+                  onPressed: onNotifications,
+                ),
               IconButton(
                 onPressed: onMenu,
                 tooltip: 'Menu',
@@ -2123,6 +2137,10 @@ class _UserAvatar extends StatelessWidget {
 }
 
 List<AppSection> _visibleSectionsForUser(AppUser user) {
+  if (user.isScopedUserAdmin) {
+    return const [AppSection.users];
+  }
+
   if (user.isAdmin) {
     return const [
       AppSection.home,
@@ -2223,6 +2241,10 @@ bool _isPermissionSection(AppSection section) {
 }
 
 AppSection _defaultSectionForUser(AppUser user) {
+  if (user.isScopedUserAdmin) {
+    return AppSection.users;
+  }
+
   if (user.isLunchControl) {
     return AppSection.lunchScanner;
   }

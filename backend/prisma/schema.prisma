@@ -295,6 +295,8 @@ enum estado_evento {
 enum rol_usuario {
   ADMIN
   ADMIN_SALUD
+  ADMIN_CONSULTORES
+  ADMIN_EVENTUALES
   CONTROL
   CREDENCIALES
   ALMUERZO

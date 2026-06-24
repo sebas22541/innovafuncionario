@@ -1,4 +1,13 @@
-enum AppUserRole { admin, adminHealth, control, credentials, lunch, external }
+enum AppUserRole {
+  admin,
+  adminHealth,
+  adminConsultants,
+  adminTemporary,
+  control,
+  credentials,
+  lunch,
+  external,
+}
 
 extension AppUserRoleX on AppUserRole {
   String get apiValue {
@@ -7,6 +16,10 @@ extension AppUserRoleX on AppUserRole {
         return 'ADMIN';
       case AppUserRole.adminHealth:
         return 'ADMIN_SALUD';
+      case AppUserRole.adminConsultants:
+        return 'ADMIN_CONSULTORES';
+      case AppUserRole.adminTemporary:
+        return 'ADMIN_EVENTUALES';
       case AppUserRole.control:
         return 'CONTROL';
       case AppUserRole.credentials:
@@ -24,6 +37,10 @@ extension AppUserRoleX on AppUserRole {
         return 'Administrador';
       case AppUserRole.adminHealth:
         return 'Admin (salud)';
+      case AppUserRole.adminConsultants:
+        return 'Admin (consultores)';
+      case AppUserRole.adminTemporary:
+        return 'Admin (eventuales)';
       case AppUserRole.control:
         return 'Control';
       case AppUserRole.credentials:
@@ -269,6 +286,14 @@ class AppUser {
 
   bool get isAdminHealth => role == AppUserRole.adminHealth;
 
+  bool get isAdminConsultants => role == AppUserRole.adminConsultants;
+
+  bool get isAdminTemporary => role == AppUserRole.adminTemporary;
+
+  bool get isScopedUserAdmin => isAdminConsultants || isAdminTemporary;
+
+  bool get canManageUsers => isAdmin || isScopedUserAdmin;
+
   bool get isControl => role == AppUserRole.control;
 
   bool get isCredentials => role == AppUserRole.credentials;
@@ -343,6 +368,14 @@ AppUserRole _readRole(dynamic value) {
 
   if (value == 'ADMIN_SALUD') {
     return AppUserRole.adminHealth;
+  }
+
+  if (value == 'ADMIN_CONSULTORES') {
+    return AppUserRole.adminConsultants;
+  }
+
+  if (value == 'ADMIN_EVENTUALES') {
+    return AppUserRole.adminTemporary;
   }
 
   if (value == 'CONTROL') {

@@ -43,7 +43,7 @@ class _UsersScreenState extends State<UsersScreen> {
   String? _errorMessage;
   int _currentPage = 0;
 
-  int get _adminCount => _users.where((user) => user.isAdmin).length;
+  int get _adminCount => _users.where((user) => user.canManageUsers).length;
   int get _controlCount => _users.where((user) => user.isControl).length;
   int get _credentialsCount =>
       _users.where((user) => user.isCredentials).length;
@@ -251,8 +251,11 @@ class _UsersScreenState extends State<UsersScreen> {
 
     final draft = await showDialog<_ManagedUserDraft>(
       context: context,
-      builder: (context) =>
-          _ManagedUserDialog(offices: _offices, cargos: _cargos),
+      builder: (context) => _ManagedUserDialog(
+        offices: _offices,
+        cargos: _cargos,
+        currentUser: widget.currentUser,
+      ),
     );
 
     if (draft == null) {
@@ -403,6 +406,7 @@ class _UsersScreenState extends State<UsersScreen> {
       builder: (context) => _ManagedUserDialog(
         offices: _offices,
         cargos: _cargos,
+        currentUser: widget.currentUser,
         initialUser: user,
       ),
     );
@@ -1422,6 +1426,8 @@ class _RoleChip extends StatelessWidget {
     final accentColor = switch (role) {
       AppUserRole.admin => AppPalette.orange,
       AppUserRole.adminHealth => AppPalette.orange,
+      AppUserRole.adminConsultants => AppPalette.orange,
+      AppUserRole.adminTemporary => AppPalette.orange,
       AppUserRole.control => AppPalette.night,
       AppUserRole.credentials => AppPalette.orange,
       AppUserRole.lunch => Colors.green.shade700,
@@ -1430,6 +1436,8 @@ class _RoleChip extends StatelessWidget {
     final backgroundColor = switch (role) {
       AppUserRole.admin => AppPalette.orangeSoft,
       AppUserRole.adminHealth => AppPalette.orangeSoft,
+      AppUserRole.adminConsultants => AppPalette.orangeSoft,
+      AppUserRole.adminTemporary => AppPalette.orangeSoft,
       AppUserRole.control => AppPalette.blueSoftStrong,
       AppUserRole.credentials => AppPalette.orangeSoft,
       AppUserRole.lunch => Colors.green.shade50,
@@ -1752,11 +1760,13 @@ class _ManagedUserDialog extends StatefulWidget {
   const _ManagedUserDialog({
     required this.offices,
     required this.cargos,
+    required this.currentUser,
     this.initialUser,
   });
 
   final List<OfficeOption> offices;
   final List<CargoOption> cargos;
+  final AppUser currentUser;
   final AppUser? initialUser;
 
   @override
@@ -1801,6 +1811,18 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   bool _hideConfirmPassword = true;
   bool _changePassword = false;
   bool get _isEditing => widget.initialUser != null;
+  bool get _isScopedUserAdmin => widget.currentUser.isScopedUserAdmin;
+  String? get _fixedTipoVinculo {
+    if (widget.currentUser.isAdminConsultants) {
+      return 'CONSULTOR';
+    }
+
+    if (widget.currentUser.isAdminTemporary) {
+      return 'EVENTUAL';
+    }
+
+    return null;
+  }
 
   @override
   void initState() {
@@ -1809,6 +1831,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     final user = widget.initialUser;
 
     if (user == null) {
+      _applyScopedUserAdminDefaults();
       return;
     }
 
@@ -1850,6 +1873,19 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _selectedSubcargo = _findInitialSubcargo(user);
     _subcargoController.text = _selectedSubcargo?.name ?? user.subcargo;
     _lugarController.text = user.lugar;
+    _applyScopedUserAdminDefaults();
+  }
+
+  void _applyScopedUserAdminDefaults() {
+    final fixedTipoVinculo = _fixedTipoVinculo;
+
+    if (!_isScopedUserAdmin || fixedTipoVinculo == null) {
+      return;
+    }
+
+    _selectedRole = AppUserRole.external;
+    _selectedTipoVinculo = fixedTipoVinculo;
+    _numeroItemController.clear();
   }
 
   @override
@@ -2097,6 +2133,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   Widget build(BuildContext context) {
     final roleLabel = _selectedRole.label.toLowerCase();
     final actionLabel = _isEditing ? 'Guardar cambios' : 'Crear usuario';
+    final fixedTipoVinculo = _fixedTipoVinculo;
 
     return Dialog(
       backgroundColor: Colors.white,
@@ -2144,71 +2181,42 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         label: 'Rol del sistema',
                         isRequired: true,
                         value: _selectedRole,
-                        items: const [
-                          DropdownMenuItem(
-                            value: AppUserRole.control,
-                            child: Text('Control'),
-                          ),
-                          DropdownMenuItem(
-                            value: AppUserRole.admin,
-                            child: Text('Administrador'),
-                          ),
-                          DropdownMenuItem(
-                            value: AppUserRole.adminHealth,
-                            child: Text('Admin (salud)'),
-                          ),
-                          DropdownMenuItem(
-                            value: AppUserRole.credentials,
-                            child: Text('Credenciales'),
-                          ),
-                          DropdownMenuItem(
-                            value: AppUserRole.lunch,
-                            child: Text('Almuerzo'),
-                          ),
-                          DropdownMenuItem(
-                            value: AppUserRole.external,
-                            child: Text('Funcionario'),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          if (value == null) {
-                            return;
-                          }
+                        items: _roleDropdownItemsForUser(widget.currentUser),
+                        onChanged: _isScopedUserAdmin
+                            ? (_) {}
+                            : (value) {
+                                if (value == null) {
+                                  return;
+                                }
 
-                          setState(() {
-                            _selectedRole = value;
-                          });
-                        },
+                                setState(() {
+                                  _selectedRole = value;
+                                });
+                              },
                       ),
                       const SizedBox(height: 14),
                       _DropdownField<String>(
                         label: 'Tipo de vinculacion',
                         isRequired: true,
                         value: _selectedTipoVinculo,
-                        items: const [
-                          DropdownMenuItem(value: 'ITEM', child: Text('Item')),
-                          DropdownMenuItem(
-                            value: 'EVENTUAL',
-                            child: Text('Eventual'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'CONSULTOR',
-                            child: Text('Consultor'),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          if (value == null) {
-                            return;
-                          }
+                        items: _tipoVinculoDropdownItemsForUser(
+                          widget.currentUser,
+                        ),
+                        onChanged: fixedTipoVinculo != null
+                            ? (_) {}
+                            : (value) {
+                                if (value == null) {
+                                  return;
+                                }
 
-                          setState(() {
-                            _selectedTipoVinculo = value;
+                                setState(() {
+                                  _selectedTipoVinculo = value;
 
-                            if (value != 'ITEM') {
-                              _numeroItemController.clear();
-                            }
-                          });
-                        },
+                                  if (value != 'ITEM') {
+                                    _numeroItemController.clear();
+                                  }
+                                });
+                              },
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -3242,15 +3250,68 @@ int _userRoleOrder(AppUserRole role) {
       return 0;
     case AppUserRole.adminHealth:
       return 1;
-    case AppUserRole.control:
+    case AppUserRole.adminConsultants:
       return 2;
-    case AppUserRole.credentials:
+    case AppUserRole.adminTemporary:
       return 3;
-    case AppUserRole.lunch:
+    case AppUserRole.control:
       return 4;
-    case AppUserRole.external:
+    case AppUserRole.credentials:
       return 5;
+    case AppUserRole.lunch:
+      return 6;
+    case AppUserRole.external:
+      return 7;
   }
+}
+
+List<DropdownMenuItem<AppUserRole>> _roleDropdownItemsForUser(AppUser user) {
+  if (user.isScopedUserAdmin) {
+    return const [
+      DropdownMenuItem(value: AppUserRole.external, child: Text('Funcionario')),
+    ];
+  }
+
+  return const [
+    DropdownMenuItem(value: AppUserRole.control, child: Text('Control')),
+    DropdownMenuItem(value: AppUserRole.admin, child: Text('Administrador')),
+    DropdownMenuItem(
+      value: AppUserRole.adminHealth,
+      child: Text('Admin (salud)'),
+    ),
+    DropdownMenuItem(
+      value: AppUserRole.adminConsultants,
+      child: Text('Admin (consultores)'),
+    ),
+    DropdownMenuItem(
+      value: AppUserRole.adminTemporary,
+      child: Text('Admin (eventuales)'),
+    ),
+    DropdownMenuItem(
+      value: AppUserRole.credentials,
+      child: Text('Credenciales'),
+    ),
+    DropdownMenuItem(value: AppUserRole.lunch, child: Text('Almuerzo')),
+    DropdownMenuItem(value: AppUserRole.external, child: Text('Funcionario')),
+  ];
+}
+
+List<DropdownMenuItem<String>> _tipoVinculoDropdownItemsForUser(AppUser user) {
+  if (user.isAdminConsultants) {
+    return const [
+      DropdownMenuItem(value: 'CONSULTOR', child: Text('Consultor')),
+    ];
+  }
+
+  if (user.isAdminTemporary) {
+    return const [DropdownMenuItem(value: 'EVENTUAL', child: Text('Eventual'))];
+  }
+
+  return const [
+    DropdownMenuItem(value: 'ITEM', child: Text('Item')),
+    DropdownMenuItem(value: 'EVENTUAL', child: Text('Eventual')),
+    DropdownMenuItem(value: 'CONSULTOR', child: Text('Consultor')),
+  ];
 }
 
 String _resolvedOfficeName(AppUser user) {
