@@ -26,13 +26,14 @@ services:
       - ./backend/.env.dev
     environment:
       TZ: America/La_Paz
+      PORT: "3000"
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?Defina CORS_ALLOWED_ORIGINS en backend/.env.dev antes de desplegar}
       PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:?Defina PAYLOAD_ENCRYPTION_KEY en backend/.env.dev antes de desplegar}
       PAYLOAD_RESPONSE_ENCRYPTION: ${PAYLOAD_RESPONSE_ENCRYPTION:-true}
       FIREBASE_SERVICE_ACCOUNT_JSON: ${FIREBASE_SERVICE_ACCOUNT_JSON:?Defina FIREBASE_SERVICE_ACCOUNT_JSON en backend/.env.dev antes de desplegar notificaciones}
       QR_DYNAMIC_TTL_SECONDS: ${QR_DYNAMIC_TTL_SECONDS:-1800}
     ports:
-      - "4015:4000"
+      - "4015:3000"
     volumes:
       - ./logs/backend-dev:/app/logs
 
