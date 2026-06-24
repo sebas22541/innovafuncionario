@@ -238,6 +238,8 @@ model usuarios {
   notificacion_tokens   notificacion_tokens[]
   celulares_asistencia  celulares_asistencia[] @relation("CelularUsuario")
   celulares_logout      celulares_asistencia[] @relation("CelularLogoutSolicitante")
+  notificaciones         notificaciones[]
+  notificacion_envios    notificacion_envios[]
 
   @@index([cargo_codigo], map: "idx_usuarios_cargo_codigo")
   @@index([subcargo_codigo], map: "idx_usuarios_subcargo_codigo")
@@ -255,6 +257,39 @@ model notificacion_tokens {
   usuarios   usuarios @relation(fields: [usuario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([usuario_id], map: "idx_notificacion_tokens_usuario_id")
+}
+
+model notificaciones {
+  id              Int       @id @default(autoincrement())
+  usuario_id      Int
+  tipo            String    @db.VarChar(60)
+  titulo          String    @db.VarChar(180)
+  cuerpo          String    @db.Text
+  destino_seccion String?   @db.VarChar(80)
+  salida_id       Int?
+  leida_en        DateTime? @db.Timestamptz(6)
+  created_at      DateTime  @default(now()) @db.Timestamptz(6)
+  usuarios        usuarios  @relation(fields: [usuario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([usuario_id, created_at], map: "idx_notificaciones_usuario_created")
+  @@index([usuario_id, leida_en], map: "idx_notificaciones_usuario_leida")
+}
+
+model notificacion_envios {
+  id                           Int      @id @default(autoincrement())
+  enviado_por_id               Int
+  titulo                       String   @db.VarChar(120)
+  cuerpo                       String   @db.Text
+  filtros                      Json     @default("{}")
+  destinatarios_solicitados    Int      @default(0)
+  enviados                     Int      @default(0)
+  fallidos                     Int      @default(0)
+  tokens_invalidos_removidos   Int      @default(0)
+  mensaje_resultado            String?  @db.Text
+  created_at                   DateTime @default(now()) @db.Timestamptz(6)
+  usuarios                     usuarios @relation(fields: [enviado_por_id], references: [id], onUpdate: NoAction)
+
+  @@index([created_at, id], map: "idx_notificacion_envios_created")
 }
 
 model celulares_asistencia {

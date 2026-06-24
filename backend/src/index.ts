@@ -5859,6 +5859,10 @@ function userDirectoryWhereForRequester(requester: any) {
     return healthWhere;
   }
 
+  if (requester?.rol === rol_usuario.ADMIN) {
+    return undefined;
+  }
+
   return {
     NOT: {
       OR: [
@@ -8680,15 +8684,35 @@ async function sendFirebaseNotification(input: SendNotificationInput, senderUser
     targetSection: "notifications",
     salidaId: null,
   });
-  const result = await sendFirebaseMulticastNotification(targets.tokens, {
-    title: input.title,
-    body: input.body,
-    data: {
-      source: "innovafuncionario",
-      type: "general",
-      targetSection: "notifications",
-    },
-  });
+  let result: {
+    requested: number;
+    sent: number;
+    failed: number;
+    removedInvalidTokens?: number;
+    message?: string;
+  };
+
+  try {
+    result = await sendFirebaseMulticastNotification(targets.tokens, {
+      title: input.title,
+      body: input.body,
+      data: {
+        source: "innovafuncionario",
+        type: "general",
+        targetSection: "notifications",
+      },
+    });
+  } catch (error) {
+    const mappedError = error instanceof HttpError ? error : mapFirebaseMessagingError(error);
+    result = {
+      requested: targets.tokens.length,
+      sent: 0,
+      failed: targets.tokens.length,
+      message: mappedError instanceof HttpError
+        ? mappedError.message
+        : getErrorMessage(mappedError),
+    };
+  }
 
   await saveSentNotification(input, senderUserId, result);
 

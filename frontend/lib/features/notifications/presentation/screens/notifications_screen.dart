@@ -233,7 +233,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       final message =
           result.message ??
           'Enviadas: ${result.sent}. Fallidas: ${result.failed}. Destinatarios: ${result.requested}.';
-      AppAlert.showSuccess(context, message);
+      if (result.sent == 0 && result.failed > 0) {
+        AppAlert.showWarning(context, message);
+      } else {
+        AppAlert.showSuccess(context, message);
+      }
       await _loadHistory();
     } on BackendApiException catch (error) {
       if (mounted) {
@@ -363,8 +367,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   onPrevious: _historyPage <= 1 || _isLoadingHistory
                       ? null
                       : () => _loadHistory(page: _historyPage - 1),
-                  onNext: _historyPage >= _historyTotalPages ||
-                          _isLoadingHistory
+                  onNext:
+                      _historyPage >= _historyTotalPages || _isLoadingHistory
                       ? null
                       : () => _loadHistory(page: _historyPage + 1),
                 ),
@@ -443,9 +447,7 @@ class _SentHistorySection extends StatelessWidget {
               const Spacer(),
               Text(
                 'Pagina $page de $totalPages',
-                style: textTheme.bodyMedium?.copyWith(
-                  color: AppPalette.muted,
-                ),
+                style: textTheme.bodyMedium?.copyWith(color: AppPalette.muted),
               ),
               const Spacer(),
               OutlinedButton.icon(
