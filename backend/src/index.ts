@@ -534,6 +534,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/logout") {
+      await markUserDevicesOffline(authenticatedUser.id);
       await revokeUserSessions(authenticatedUser.id);
 
       sendJson(response, 200, {
@@ -8515,16 +8516,33 @@ async function requestDeviceLogout(deviceId: string, requesterUserId: number) {
       UPDATE "celulares_asistencia"
       SET "logout_requested_at" = CURRENT_TIMESTAMP,
           "logout_requested_by_id" = $2,
+          "kiosk_enabled" = FALSE,
+          "last_seen_at" = CURRENT_TIMESTAMP - ($3::int * INTERVAL '1 millisecond'),
           "updated_at" = CURRENT_TIMESTAMP
       WHERE "device_id" = $1
       RETURNING "device_id"
     `,
-    [deviceId, requesterUserId],
+    [deviceId, requesterUserId, DEVICE_ONLINE_THRESHOLD_MS + 1000],
   );
 
   if (result.rowCount === 0) {
     throw new HttpError(404, "No se encontro el celular seleccionado.");
   }
+}
+
+async function markUserDevicesOffline(userId: number) {
+  await pool.query(
+    `
+      UPDATE "celulares_asistencia"
+      SET "logout_requested_at" = NULL,
+          "logout_requested_by_id" = NULL,
+          "kiosk_enabled" = FALSE,
+          "last_seen_at" = CURRENT_TIMESTAMP - ($2::int * INTERVAL '1 millisecond'),
+          "updated_at" = CURRENT_TIMESTAMP
+      WHERE "usuario_id" = $1
+    `,
+    [userId, DEVICE_ONLINE_THRESHOLD_MS + 1000],
+  );
 }
 
 function serializeManagedDevice(device: any) {
@@ -8558,6 +8576,7 @@ function serializeManagedDevice(device: any) {
     brightness: nullableNumber(device.brightness),
     kioskEnabled: device.kiosk_enabled === true,
     isOnline:
+      device.kiosk_enabled === true &&
       logoutRequestedAt == null &&
       Date.now() - lastSeenAt.getTime() <= DEVICE_ONLINE_THRESHOLD_MS,
     lastSeenAt: lastSeenAt.toISOString(),
