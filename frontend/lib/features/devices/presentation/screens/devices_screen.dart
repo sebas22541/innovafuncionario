@@ -105,7 +105,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Cerrar sesion del celular'),
         content: Text(
-          'Se cerrara la sesion de ${device.userName} cuando el celular vuelva a conectarse.',
+          'Se cerrara la sesion de ${device.userName} en este celular.',
         ),
         actions: [
           TextButton(
@@ -141,6 +141,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final onlineCount = _devices.where((device) => device.isOnline).length;
     final lowBatteryCount = _devices.where((device) {
       final batteryLevel = device.batteryLevel;
       return batteryLevel != null && batteryLevel <= 20;
@@ -165,7 +166,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                   ),
                   _SummaryChip(
                     label: 'Conectados',
-                    value: '${_devices.length}',
+                    value: '$onlineCount',
                   ),
                   _SummaryChip(
                     label: 'Bateria baja',

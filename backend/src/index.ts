@@ -522,6 +522,9 @@ const server = http.createServer(async (request, response) => {
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);
+      if (user.rol === rol_usuario.ALMUERZO) {
+        await revokeUserSessions(user.id);
+      }
       const authToken = await createAuthToken(user);
 
       sendJson(response, 200, {
@@ -8378,74 +8381,98 @@ async function registerDeviceHeartbeat(
   userId: number,
   input: DeviceHeartbeatInput,
 ) {
-  const result = await pool.query<{ force_logout: boolean }>(
-    `
-      INSERT INTO "celulares_asistencia" (
-        "device_id",
-        "usuario_id",
-        "platform",
-        "manufacturer",
-        "model",
-        "android_sdk",
-        "battery_level",
-        "is_charging",
-        "brightness",
-        "kiosk_enabled",
-        "last_seen_at",
-        "updated_at"
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      ON CONFLICT ("device_id") DO UPDATE SET
-        "usuario_id" = EXCLUDED."usuario_id",
-        "platform" = EXCLUDED."platform",
-        "manufacturer" = EXCLUDED."manufacturer",
-        "model" = EXCLUDED."model",
-        "android_sdk" = EXCLUDED."android_sdk",
-        "battery_level" = EXCLUDED."battery_level",
-        "is_charging" = EXCLUDED."is_charging",
-        "brightness" = EXCLUDED."brightness",
-        "kiosk_enabled" = EXCLUDED."kiosk_enabled",
-        "last_seen_at" = CURRENT_TIMESTAMP,
-        "updated_at" = CURRENT_TIMESTAMP
-      RETURNING "logout_requested_at" IS NOT NULL AS "force_logout"
-    `,
-    [
-      input.deviceId,
-      userId,
-      input.platform,
-      input.manufacturer,
-      input.model,
-      input.androidSdk,
-      input.batteryLevel,
-      input.isCharging,
-      input.brightness,
-      input.kioskEnabled,
-    ],
-  );
-  const forceLogout = result.rows[0]?.force_logout === true;
+  const client = await pool.connect();
 
-  if (forceLogout) {
-    await pool.query(
+  try {
+    await client.query("BEGIN");
+
+    const result = await client.query<{ force_logout: boolean }>(
       `
-        UPDATE "celulares_asistencia"
-        SET "logout_requested_at" = NULL,
-            "logout_requested_by_id" = NULL,
-            "updated_at" = CURRENT_TIMESTAMP
-        WHERE "device_id" = $1
+        INSERT INTO "celulares_asistencia" (
+          "device_id",
+          "usuario_id",
+          "platform",
+          "manufacturer",
+          "model",
+          "android_sdk",
+          "battery_level",
+          "is_charging",
+          "brightness",
+          "kiosk_enabled",
+          "last_seen_at",
+          "updated_at"
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT ("device_id") DO UPDATE SET
+          "usuario_id" = EXCLUDED."usuario_id",
+          "platform" = EXCLUDED."platform",
+          "manufacturer" = EXCLUDED."manufacturer",
+          "model" = EXCLUDED."model",
+          "android_sdk" = EXCLUDED."android_sdk",
+          "battery_level" = EXCLUDED."battery_level",
+          "is_charging" = EXCLUDED."is_charging",
+          "brightness" = EXCLUDED."brightness",
+          "kiosk_enabled" = EXCLUDED."kiosk_enabled",
+          "last_seen_at" = CURRENT_TIMESTAMP,
+          "updated_at" = CURRENT_TIMESTAMP
+        RETURNING "logout_requested_at" IS NOT NULL AS "force_logout"
       `,
-      [input.deviceId],
+      [
+        input.deviceId,
+        userId,
+        input.platform,
+        input.manufacturer,
+        input.model,
+        input.androidSdk,
+        input.batteryLevel,
+        input.isCharging,
+        input.brightness,
+        input.kioskEnabled,
+      ],
     );
-  }
+    const forceLogout = result.rows[0]?.force_logout === true;
 
-  return {
-    forceLogout,
-  };
+    await client.query(
+      `
+        DELETE FROM "celulares_asistencia"
+        WHERE "usuario_id" = $1
+          AND "device_id" <> $2
+      `,
+      [userId, input.deviceId],
+    );
+
+    if (forceLogout) {
+      await client.query(
+        `
+          UPDATE "celulares_asistencia"
+          SET "logout_requested_at" = NULL,
+              "logout_requested_by_id" = NULL,
+              "kiosk_enabled" = FALSE,
+              "last_seen_at" = CURRENT_TIMESTAMP - ($2::int * INTERVAL '1 millisecond'),
+              "updated_at" = CURRENT_TIMESTAMP
+          WHERE "device_id" = $1
+        `,
+        [input.deviceId, DEVICE_ONLINE_THRESHOLD_MS + 1000],
+      );
+    }
+
+    await client.query("COMMIT");
+
+    return {
+      forceLogout,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function loadManagedDevices() {
   const result = await pool.query(
     `
-      SELECT
+      SELECT DISTINCT ON (c."usuario_id")
         c."device_id",
         c."usuario_id",
         c."platform",
@@ -8467,13 +8494,19 @@ async function loadManagedDevices() {
       FROM "celulares_asistencia" c
       INNER JOIN "usuarios" u ON u."id" = c."usuario_id"
       WHERE u."rol" = 'ALMUERZO'
-        AND c."last_seen_at" >= CURRENT_TIMESTAMP - ($1::int * INTERVAL '1 millisecond')
-      ORDER BY c."last_seen_at" DESC, c."id" DESC
+      ORDER BY c."usuario_id", c."last_seen_at" DESC, c."id" DESC
     `,
-    [DEVICE_ONLINE_THRESHOLD_MS],
   );
 
-  return result.rows.map(serializeManagedDevice);
+  return result.rows
+    .map(serializeManagedDevice)
+    .sort((left, right) => {
+      if (left.isOnline !== right.isOnline) {
+        return left.isOnline ? -1 : 1;
+      }
+
+      return right.lastSeenAt.localeCompare(left.lastSeenAt);
+    });
 }
 
 async function requestDeviceLogout(deviceId: string, requesterUserId: number) {
@@ -8498,6 +8531,11 @@ function serializeManagedDevice(device: any) {
   const lastSeenAt = device.last_seen_at instanceof Date
     ? device.last_seen_at
     : new Date(device.last_seen_at);
+  const logoutRequestedAt = device.logout_requested_at instanceof Date
+    ? device.logout_requested_at
+    : device.logout_requested_at == null
+      ? null
+      : new Date(device.logout_requested_at);
   const userName = buildUserDisplayName({
     nombre_completo: device.nombre_completo,
     nombres: device.nombres,
@@ -8519,14 +8557,11 @@ function serializeManagedDevice(device: any) {
     isCharging: typeof device.is_charging === "boolean" ? device.is_charging : null,
     brightness: nullableNumber(device.brightness),
     kioskEnabled: device.kiosk_enabled === true,
-    isOnline: Date.now() - lastSeenAt.getTime() <= DEVICE_ONLINE_THRESHOLD_MS,
+    isOnline:
+      logoutRequestedAt == null &&
+      Date.now() - lastSeenAt.getTime() <= DEVICE_ONLINE_THRESHOLD_MS,
     lastSeenAt: lastSeenAt.toISOString(),
-    logoutRequestedAt:
-      device.logout_requested_at instanceof Date
-        ? device.logout_requested_at.toISOString()
-        : device.logout_requested_at == null
-          ? null
-          : new Date(device.logout_requested_at).toISOString(),
+    logoutRequestedAt: logoutRequestedAt?.toISOString() ?? null,
   };
 }
 
