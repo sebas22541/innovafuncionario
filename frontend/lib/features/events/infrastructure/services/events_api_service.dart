@@ -391,6 +391,7 @@ class EventsApiService {
         'asistencia.nombreCompleto',
       ),
       note: _readString(source['observacion'], 'asistencia.observacion'),
+      numeroItem: _readNullableString(source['numeroItem']),
       registeredAt: DateTime.parse(
         _readString(source['registradoEn'], 'asistencia.registradoEn'),
       ).toLocal(),

@@ -9842,6 +9842,7 @@ function serializeAttendanceRecord(attendance: any) {
     oficinaId: resolveLinkedOfficeId(linkedUser),
     oficinaCodigo: resolveLinkedOfficeCode(linkedUser),
     ci: linkedUser?.ci ?? attendance.personas.ci ?? null,
+    numeroItem: linkedUser?.numero_item ?? null,
     tipoVinculo: linkedUser?.tipo_vinculo ?? null,
     unidad: officeName,
     cargo: resolveEffectiveJobTitleName(linkedUser),

@@ -2755,6 +2755,7 @@ List<List<String>> _buildEventAbsenteePdfRows(
 List<String> _buildEventExcelHeaders(EventRecord event) {
   return [
     'Fecha',
+    'Item',
     'CI',
     'Nombre completo',
     'Tipo',
@@ -2767,18 +2768,12 @@ List<String> _buildEventExcelHeaders(EventRecord event) {
 List<List<Object?>> _buildEventExcelRows(EventRecord event) {
   final controls = _sortedEventControls(event.controls);
   final rows = <List<Object?>>[];
+  final entries = _sortEventRosterEntriesByItem([
+    ...event.attended,
+    ...event.observed,
+  ]);
 
-  for (final entry in _sortEventRosterEntries(event.attended)) {
-    rows.add(
-      _buildEventAttendanceExcelRow(
-        event: event,
-        entry: entry,
-        controls: controls,
-      ),
-    );
-  }
-
-  for (final entry in _sortEventRosterEntries(event.observed)) {
+  for (final entry in entries) {
     rows.add(
       _buildEventAttendanceExcelRow(
         event: event,
@@ -2803,6 +2798,7 @@ List<Object?> _buildEventAttendanceExcelRow({
 
   return [
     _formatDateOnly(event.date),
+    entry.numeroItem?.trim() ?? '',
     entry.ci?.trim().isNotEmpty == true ? entry.ci!.trim() : '',
     entry.fullName,
     _eventRosterTipoLabel(entry.tipoVinculo),
@@ -3091,6 +3087,26 @@ List<EventRosterEntry> _sortEventRosterEntries(List<EventRosterEntry> entries) {
     }
 
     return left.registeredAt.compareTo(right.registeredAt);
+  });
+
+  return sortedEntries;
+}
+
+List<EventRosterEntry> _sortEventRosterEntriesByItem(
+  List<EventRosterEntry> entries,
+) {
+  final sortedEntries = [...entries];
+
+  sortedEntries.sort((left, right) {
+    final leftItem = _personnelItemSortValue(left.numeroItem ?? '');
+    final rightItem = _personnelItemSortValue(right.numeroItem ?? '');
+    final itemComparison = leftItem.compareTo(rightItem);
+
+    if (itemComparison != 0) {
+      return itemComparison;
+    }
+
+    return left.fullName.toLowerCase().compareTo(right.fullName.toLowerCase());
   });
 
   return sortedEntries;

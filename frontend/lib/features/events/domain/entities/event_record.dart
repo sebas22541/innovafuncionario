@@ -90,6 +90,7 @@ class EventRosterEntry {
     this.attendedControlsCount = 0,
     this.observedControlsCount = 0,
     this.ci,
+    this.numeroItem,
     this.tipoVinculo,
     this.officeName,
     this.jobTitle,
@@ -106,6 +107,7 @@ class EventRosterEntry {
   final int attendedControlsCount;
   final int observedControlsCount;
   final String? ci;
+  final String? numeroItem;
   final String? tipoVinculo;
   final String? officeName;
   final String? jobTitle;
