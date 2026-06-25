@@ -2788,18 +2788,6 @@ List<List<Object?>> _buildEventExcelRows(EventRecord event) {
     );
   }
 
-  for (final entry in _sortEventAbsenteeEntries(event.absentees)) {
-    rows.add([
-      _formatDateOnly(event.date),
-      entry.ci?.trim().isNotEmpty == true ? entry.ci!.trim() : '',
-      entry.fullName,
-      _eventRosterTipoLabel(entry.tipoVinculo),
-      entry.officeName ?? '',
-      entry.jobTitle ?? '',
-      for (final _ in controls) '',
-    ]);
-  }
-
   return rows;
 }
 
@@ -2808,9 +2796,10 @@ List<Object?> _buildEventAttendanceExcelRow({
   required EventRosterEntry entry,
   required List<EventControl> controls,
 }) {
-  final controlsById = {
-    for (final control in entry.controls) control.controlId: control,
-  };
+  final controlsById = _resolveEventExcelControlsById(
+    entry: entry,
+    controls: controls,
+  );
 
   return [
     _formatDateOnly(event.date),
@@ -2824,6 +2813,35 @@ List<Object?> _buildEventAttendanceExcelRow({
           ? ''
           : _formatTime(controlsById[control.id]!.registeredAt),
   ];
+}
+
+Map<int, EventAttendanceControl> _resolveEventExcelControlsById({
+  required EventRosterEntry entry,
+  required List<EventControl> controls,
+}) {
+  final controlsById = {
+    for (final control in entry.controls) control.controlId: control,
+  };
+
+  if (entry.controls.length != 1 || controls.length < 2) {
+    return controlsById;
+  }
+
+  final onlyControl = entry.controls.single;
+  final firstControl = controls.first;
+  final secondControl = controls[1];
+
+  if (onlyControl.controlId != firstControl.id ||
+      !_isSecondEventControlTime(onlyControl.registeredAt)) {
+    return controlsById;
+  }
+
+  return {secondControl.id: onlyControl};
+}
+
+bool _isSecondEventControlTime(DateTime registeredAt) {
+  return registeredAt.hour > 10 ||
+      (registeredAt.hour == 10 && registeredAt.minute >= 30);
 }
 
 List<EventControl> _sortedEventControls(List<EventControl> controls) {
