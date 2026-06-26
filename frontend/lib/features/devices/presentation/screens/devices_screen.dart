@@ -139,6 +139,25 @@ class _DevicesScreenState extends State<DevicesScreen> {
     }
   }
 
+  Future<void> _requestLogin(ManagedDevice device) async {
+    try {
+      await dependencies.devicesApiService.requestLogin(device.deviceId);
+      if (!mounted) {
+        return;
+      }
+
+      AppAlert.showSuccess(
+        context,
+        'Inicio habilitado. Abre la app en el celular para reconectar.',
+      );
+      await _load();
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible habilitar el inicio.');
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final onlineCount = _devices.where((device) => device.isOnline).length;
@@ -164,10 +183,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                     'Celulares',
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
-                  _SummaryChip(
-                    label: 'Conectados',
-                    value: '$onlineCount',
-                  ),
+                  _SummaryChip(label: 'Conectados', value: '$onlineCount'),
                   _SummaryChip(
                     label: 'Bateria baja',
                     value: '$lowBatteryCount',
@@ -219,6 +235,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                           child: _DeviceCard(
                             device: device,
                             onLogout: () => _requestLogout(device),
+                            onLogin: () => _requestLogin(device),
                           ),
                         ),
                     ],
@@ -231,6 +248,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                       _DeviceCard(
                         device: device,
                         onLogout: () => _requestLogout(device),
+                        onLogin: () => _requestLogin(device),
                       ),
                       const SizedBox(height: 12),
                     ],
@@ -245,10 +263,15 @@ class _DevicesScreenState extends State<DevicesScreen> {
 }
 
 class _DeviceCard extends StatelessWidget {
-  const _DeviceCard({required this.device, required this.onLogout});
+  const _DeviceCard({
+    required this.device,
+    required this.onLogout,
+    required this.onLogin,
+  });
 
   final ManagedDevice device;
   final VoidCallback onLogout;
+  final VoidCallback onLogin;
 
   @override
   Widget build(BuildContext context) {
@@ -257,6 +280,8 @@ class _DeviceCard extends StatelessWidget {
     final statusColor = device.isOnline
         ? Colors.green.shade700
         : Colors.red.shade700;
+    final canRequestLogout =
+        device.isOnline && device.logoutRequestedAt == null;
 
     return Card(
       child: Padding(
@@ -323,9 +348,13 @@ class _DeviceCard extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: onLogout,
-                icon: const Icon(Icons.logout_rounded),
-                label: const Text('Cerrar sesion'),
+                onPressed: canRequestLogout ? onLogout : onLogin,
+                icon: Icon(
+                  canRequestLogout ? Icons.logout_rounded : Icons.login_rounded,
+                ),
+                label: Text(
+                  canRequestLogout ? 'Cerrar sesion' : 'Iniciar sesion',
+                ),
               ),
             ),
           ],

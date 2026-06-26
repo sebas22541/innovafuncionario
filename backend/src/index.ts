@@ -588,6 +588,28 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    const deviceLoginMatch = /^\/api\/celulares\/([^/]+)\/iniciar-sesion$/.exec(
+      url.pathname,
+    );
+    if (request.method === "POST" && deviceLoginMatch) {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede iniciar sesiones de celulares.",
+      );
+      const deviceId = decodeURIComponent(deviceLoginMatch[1] ?? "").trim();
+
+      if (deviceId.length < 8 || deviceId.length > 120) {
+        throw new HttpError(400, "El celular seleccionado no es valido.");
+      }
+
+      await requestDeviceLogin(deviceId);
+
+      sendJson(response, 200, {
+        data: { requested: true },
+      });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/auth/me") {
       const user = await prisma.usuarios.findUnique({
         where: { id: authenticatedUser.id },
@@ -8523,6 +8545,24 @@ async function requestDeviceLogout(deviceId: string, requesterUserId: number) {
       RETURNING "device_id"
     `,
     [deviceId, requesterUserId, DEVICE_ONLINE_THRESHOLD_MS + 1000],
+  );
+
+  if (result.rowCount === 0) {
+    throw new HttpError(404, "No se encontro el celular seleccionado.");
+  }
+}
+
+async function requestDeviceLogin(deviceId: string) {
+  const result = await pool.query(
+    `
+      UPDATE "celulares_asistencia"
+      SET "logout_requested_at" = NULL,
+          "logout_requested_by_id" = NULL,
+          "updated_at" = CURRENT_TIMESTAMP
+      WHERE "device_id" = $1
+      RETURNING "device_id"
+    `,
+    [deviceId],
   );
 
   if (result.rowCount === 0) {

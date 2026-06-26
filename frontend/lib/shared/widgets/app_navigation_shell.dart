@@ -39,6 +39,7 @@ class AppNavigationShell extends StatefulWidget {
     this.onCurrentUserChanged,
     this.onSectionChanged,
     required this.onLogout,
+    required this.onRemoteLogout,
   });
 
   final AppUser currentUser;
@@ -49,6 +50,7 @@ class AppNavigationShell extends StatefulWidget {
   final ValueChanged<AppUser>? onCurrentUserChanged;
   final ValueChanged<AppSection>? onSectionChanged;
   final VoidCallback onLogout;
+  final VoidCallback onRemoteLogout;
 
   @override
   State<AppNavigationShell> createState() => _AppNavigationShellState();
@@ -320,10 +322,20 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       }
 
       _isRemoteLogoutHandling = true;
-      _handleLogout();
+      _handleRemoteLogout();
     } catch (_) {
       // El monitoreo no debe bloquear el escaner si el backend no responde.
     }
+  }
+
+  void _handleRemoteLogout() {
+    _deviceHeartbeatTimer?.cancel();
+    _deviceHeartbeatTimer = null;
+    KioskModeService.disableLunchKiosk().whenComplete(() {
+      if (mounted) {
+        widget.onRemoteLogout();
+      }
+    });
   }
 
   void _handleLogout() {

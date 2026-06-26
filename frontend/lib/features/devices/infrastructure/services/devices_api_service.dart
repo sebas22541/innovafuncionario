@@ -31,6 +31,13 @@ class DevicesApiService {
       const {},
     );
   }
+
+  Future<void> requestLogin(String deviceId) async {
+    await _apiClient.postJson(
+      '/api/celulares/${Uri.encodeComponent(deviceId)}/iniciar-sesion',
+      const {},
+    );
+  }
 }
 
 class DeviceHeartbeatResponse {

@@ -112,6 +112,19 @@ class _QrWebAppState extends State<QrWebApp> {
     });
   }
 
+  void _handleRemoteLogout() async {
+    await FirebaseNotificationsService.unregisterCurrentDevice();
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _currentUser = null;
+      _initialSection = null;
+    });
+  }
+
   void _handleCurrentUserChanged(AppUser user) async {
     await SessionStore.saveUser(user);
 
@@ -177,6 +190,7 @@ class _QrWebAppState extends State<QrWebApp> {
                       onCurrentUserChanged: _handleCurrentUserChanged,
                       onSectionChanged: SessionStore.saveSection,
                       onLogout: _handleLogout,
+                      onRemoteLogout: _handleRemoteLogout,
                     ),
             ),
     );
