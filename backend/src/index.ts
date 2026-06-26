@@ -602,10 +602,14 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(400, "El celular seleccionado no es valido.");
       }
 
-      await requestDeviceLogin(deviceId);
+      const loginRequest = await requestDeviceLogin(deviceId);
+      const wakeResult = await sendDeviceLoginCommand(
+        loginRequest.userId,
+        deviceId,
+      );
 
       sendJson(response, 200, {
-        data: { requested: true },
+        data: { requested: true, wake: wakeResult },
       });
       return;
     }
@@ -8553,21 +8557,27 @@ async function requestDeviceLogout(deviceId: string, requesterUserId: number) {
 }
 
 async function requestDeviceLogin(deviceId: string) {
-  const result = await pool.query(
+  const result = await pool.query<{ usuario_id: number }>(
     `
       UPDATE "celulares_asistencia"
       SET "logout_requested_at" = NULL,
           "logout_requested_by_id" = NULL,
           "updated_at" = CURRENT_TIMESTAMP
       WHERE "device_id" = $1
-      RETURNING "device_id"
+      RETURNING "usuario_id"
     `,
     [deviceId],
   );
 
-  if (result.rowCount === 0) {
+  const row = result.rows[0];
+
+  if (row == null) {
     throw new HttpError(404, "No se encontro el celular seleccionado.");
   }
+
+  return {
+    userId: Number(row.usuario_id),
+  };
 }
 
 async function markUserDevicesOffline(userId: number) {
@@ -8903,6 +8913,88 @@ async function sendFirebaseMulticastNotification(
           source: "innovafuncionario",
           ...(input.data ?? {}),
         },
+      });
+
+      sent += batchResult.successCount;
+      failed += batchResult.failureCount;
+      batchResult.responses.forEach((item, index) => {
+        const code = item.error?.code;
+
+        if (
+          code === "messaging/registration-token-not-registered" ||
+          code === "messaging/invalid-registration-token"
+        ) {
+          invalidTokens.push(tokenChunk[index]);
+        }
+      });
+    }
+  } catch (error) {
+    throw mapFirebaseMessagingError(error);
+  }
+
+  if (invalidTokens.length > 0) {
+    await removeNotificationTokens(invalidTokens);
+  }
+
+  return {
+    requested: tokens.length,
+    sent,
+    failed,
+    removedInvalidTokens: invalidTokens.length,
+  };
+}
+
+async function sendDeviceLoginCommand(userId: number, deviceId: string) {
+  const targets = await loadNotificationTokensForUser(userId);
+
+  return sendFirebaseDataMulticastMessage(targets, {
+    source: "innovafuncionario",
+    type: "device_login",
+    action: "open_app",
+    deviceId,
+  });
+}
+
+async function loadNotificationTokensForUser(userId: number) {
+  const result = await pool.query<{ token: string }>(
+    `
+      SELECT DISTINCT "token"
+      FROM "notificacion_tokens"
+      WHERE "usuario_id" = $1
+        AND "platform" = 'ANDROID'
+    `,
+    [userId],
+  );
+
+  return result.rows.map((row) => row.token);
+}
+
+async function sendFirebaseDataMulticastMessage(
+  tokens: string[],
+  data: Record<string, string>,
+) {
+  if (tokens.length === 0) {
+    return {
+      requested: 0,
+      sent: 0,
+      failed: 0,
+      message: "No hay token push registrado para este celular.",
+    };
+  }
+
+  const messaging = getFirebaseMessagingClient();
+  let sent = 0;
+  let failed = 0;
+  const invalidTokens: string[] = [];
+
+  try {
+    for (const tokenChunk of chunkArray(tokens, 500)) {
+      const batchResult = await messaging.sendEachForMulticast({
+        tokens: tokenChunk,
+        android: {
+          priority: "high",
+        },
+        data,
       });
 
       sent += batchResult.successCount;

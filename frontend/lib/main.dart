@@ -41,6 +41,7 @@ class _QrWebAppState extends State<QrWebApp> {
     FirebaseNotificationsService.configureNavigation(
       onOpenNotifications: _openNotificationsFromNotification,
       onNotificationsChanged: _handleNotificationsChanged,
+      onDeviceLoginRequested: _restoreSession,
     );
     _restoreSession();
   }
@@ -113,8 +114,6 @@ class _QrWebAppState extends State<QrWebApp> {
   }
 
   void _handleRemoteLogout() async {
-    await FirebaseNotificationsService.unregisterCurrentDevice();
-
     if (!mounted) {
       return;
     }

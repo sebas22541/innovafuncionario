@@ -25,20 +25,29 @@ class FirebaseNotificationsService {
   static String? _registeredPlatform;
   static VoidCallback? _openNotifications;
   static VoidCallback? _notificationsChanged;
+  static VoidCallback? _deviceLoginRequested;
   static bool _initialized = false;
   static bool _initialMessageChecked = false;
   static bool _pendingNotificationsOpen = false;
+  static bool _pendingDeviceLogin = false;
 
   static void configureNavigation({
     required VoidCallback onOpenNotifications,
     required VoidCallback onNotificationsChanged,
+    required VoidCallback onDeviceLoginRequested,
   }) {
     _openNotifications = onOpenNotifications;
     _notificationsChanged = onNotificationsChanged;
+    _deviceLoginRequested = onDeviceLoginRequested;
 
     if (_pendingNotificationsOpen) {
       _pendingNotificationsOpen = false;
       onOpenNotifications();
+    }
+
+    if (_pendingDeviceLogin) {
+      _pendingDeviceLogin = false;
+      onDeviceLoginRequested();
     }
 
     if (_initialized) {
@@ -138,6 +147,11 @@ class FirebaseNotificationsService {
     _foregroundMessageSubscription ??= FirebaseMessaging.onMessage.listen((
       message,
     ) {
+      if (_isDeviceLoginMessage(message)) {
+        _handleDeviceLoginRequest();
+        return;
+      }
+
       if (message.data['source'] == 'innovafuncionario') {
         _notificationsChanged?.call();
       }
@@ -156,6 +170,11 @@ class FirebaseNotificationsService {
   }
 
   static void _handleNotificationTap(RemoteMessage message) {
+    if (_isDeviceLoginMessage(message)) {
+      _handleDeviceLoginRequest();
+      return;
+    }
+
     if (message.data['source'] != 'innovafuncionario') {
       return;
     }
@@ -169,6 +188,23 @@ class FirebaseNotificationsService {
     }
 
     notificationCallback();
+  }
+
+  static bool _isDeviceLoginMessage(RemoteMessage message) {
+    return message.data['source'] == 'innovafuncionario' &&
+        message.data['type'] == 'device_login' &&
+        message.data['action'] == 'open_app';
+  }
+
+  static void _handleDeviceLoginRequest() {
+    final callback = _deviceLoginRequested;
+
+    if (callback == null) {
+      _pendingDeviceLogin = true;
+      return;
+    }
+
+    callback();
   }
 }
 
