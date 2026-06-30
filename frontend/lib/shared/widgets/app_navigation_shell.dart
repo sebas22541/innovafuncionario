@@ -1359,7 +1359,10 @@ class _MobileNavigationDrawerState extends State<_MobileNavigationDrawer> {
   @override
   void initState() {
     super.initState();
-    _isAttendanceExpanded = _isAttendanceSection(widget.selectedSection);
+    _isAttendanceExpanded = _isAttendanceSectionForUser(
+      widget.currentUser,
+      widget.selectedSection,
+    );
     _isPermissionsExpanded = _isPermissionSection(widget.selectedSection);
   }
 
@@ -1367,7 +1370,10 @@ class _MobileNavigationDrawerState extends State<_MobileNavigationDrawer> {
   void didUpdateWidget(covariant _MobileNavigationDrawer oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    if (_isAttendanceSection(widget.selectedSection) &&
+    if (_isAttendanceSectionForUser(
+          widget.currentUser,
+          widget.selectedSection,
+        ) &&
         oldWidget.selectedSection != widget.selectedSection) {
       _isAttendanceExpanded = true;
     }
@@ -1381,7 +1387,9 @@ class _MobileNavigationDrawerState extends State<_MobileNavigationDrawer> {
   @override
   Widget build(BuildContext context) {
     final attendanceSections = widget.visibleSections
-        .where(_isAttendanceSection)
+        .where(
+          (section) => _isAttendanceSectionForUser(widget.currentUser, section),
+        )
         .toList(growable: false);
     final permissionSections = widget.visibleSections
         .where(_isPermissionSection)
@@ -1389,7 +1397,7 @@ class _MobileNavigationDrawerState extends State<_MobileNavigationDrawer> {
     final leadingSections = widget.visibleSections
         .where(
           (section) =>
-              !_isAttendanceSection(section) &&
+              !_isAttendanceSectionForUser(widget.currentUser, section) &&
               !_isPermissionSection(section) &&
               section != AppSection.settings,
         )
@@ -1397,7 +1405,10 @@ class _MobileNavigationDrawerState extends State<_MobileNavigationDrawer> {
     final settingsSections = widget.visibleSections
         .where((section) => section == AppSection.settings)
         .toList(growable: false);
-    final isAttendanceSelected = _isAttendanceSection(widget.selectedSection);
+    final isAttendanceSelected = _isAttendanceSectionForUser(
+      widget.currentUser,
+      widget.selectedSection,
+    );
     final isPermissionsSelected = _isPermissionSection(widget.selectedSection);
 
     return Drawer(
@@ -1609,7 +1620,10 @@ class _DesktopSidebarState extends State<_DesktopSidebar> {
   @override
   void initState() {
     super.initState();
-    _isAttendanceExpanded = _isAttendanceSection(widget.selectedSection);
+    _isAttendanceExpanded = _isAttendanceSectionForUser(
+      widget.currentUser,
+      widget.selectedSection,
+    );
     _isPermissionsExpanded = _isPermissionSection(widget.selectedSection);
   }
 
@@ -1617,7 +1631,10 @@ class _DesktopSidebarState extends State<_DesktopSidebar> {
   void didUpdateWidget(covariant _DesktopSidebar oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    if (_isAttendanceSection(widget.selectedSection) &&
+    if (_isAttendanceSectionForUser(
+          widget.currentUser,
+          widget.selectedSection,
+        ) &&
         oldWidget.selectedSection != widget.selectedSection) {
       _isAttendanceExpanded = true;
     }
@@ -1632,7 +1649,9 @@ class _DesktopSidebarState extends State<_DesktopSidebar> {
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final attendanceSections = widget.visibleSections
-        .where(_isAttendanceSection)
+        .where(
+          (section) => _isAttendanceSectionForUser(widget.currentUser, section),
+        )
         .toList(growable: false);
     final permissionSections = widget.visibleSections
         .where(_isPermissionSection)
@@ -1640,7 +1659,7 @@ class _DesktopSidebarState extends State<_DesktopSidebar> {
     final leadingSections = widget.visibleSections
         .where(
           (section) =>
-              !_isAttendanceSection(section) &&
+              !_isAttendanceSectionForUser(widget.currentUser, section) &&
               !_isPermissionSection(section) &&
               section != AppSection.settings,
         )
@@ -1648,7 +1667,10 @@ class _DesktopSidebarState extends State<_DesktopSidebar> {
     final trailingSections = widget.visibleSections
         .where((section) => section == AppSection.settings)
         .toList(growable: false);
-    final isAttendanceSelected = _isAttendanceSection(widget.selectedSection);
+    final isAttendanceSelected = _isAttendanceSectionForUser(
+      widget.currentUser,
+      widget.selectedSection,
+    );
     final isPermissionsSelected = _isPermissionSection(widget.selectedSection);
 
     return Container(
@@ -2223,6 +2245,14 @@ bool _isAttendanceSection(AppSection section) {
     case AppSection.settings:
       return false;
   }
+}
+
+bool _isAttendanceSectionForUser(AppUser user, AppSection section) {
+  if (user.isScopedUserAdmin && section == AppSection.credentials) {
+    return false;
+  }
+
+  return _isAttendanceSection(section);
 }
 
 bool _isPermissionSection(AppSection section) {
