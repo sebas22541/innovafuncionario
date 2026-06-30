@@ -221,15 +221,12 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       return;
     }
 
-    await _openNotificationDetail(selected);
-
-    if (!mounted) {
+    if (selected.targetSection == AppSection.exitPermitRequests.storageKey) {
+      _handleSectionSelection(AppSection.exitPermitRequests);
       return;
     }
 
-    if (selected.targetSection == AppSection.exitPermitRequests.storageKey) {
-      _handleSectionSelection(AppSection.exitPermitRequests);
-    }
+    await _openNotificationDetail(selected);
   }
 
   Future<void> _openNotificationDetail(
@@ -422,7 +419,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 onLogout: widget.onLogout,
               );
       case AppSection.credentials:
-        return _currentUser.isAdmin || _currentUser.isCredentials
+        return _currentUser.canManageUsers || _currentUser.isCredentials
             ? CredentialsScreen(currentUser: _currentUser)
             : SettingsScreen(
                 currentUser: _currentUser,
@@ -2150,7 +2147,7 @@ class _UserAvatar extends StatelessWidget {
 
 List<AppSection> _visibleSectionsForUser(AppUser user) {
   if (user.isScopedUserAdmin) {
-    return const [AppSection.users];
+    return const [AppSection.users, AppSection.credentials];
   }
 
   if (user.isAdmin) {

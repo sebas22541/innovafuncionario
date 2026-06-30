@@ -289,7 +289,7 @@ class _UsersScreenState extends State<UsersScreen> {
         subcargoCodigo: _nullableCargoCode(draft.subcargo),
         unidad: draft.office.name,
         cargo: draft.cargo.name,
-        subcargo: draft.subcargo?.name ?? '',
+        subcargo: _formatSubcargoName(draft.subcargo?.name ?? ''),
         lugar: draft.lugar,
         numeroItem: draft.numeroItem,
         activo: draft.activo,
@@ -449,7 +449,7 @@ class _UsersScreenState extends State<UsersScreen> {
         subcargoCodigo: _nullableCargoCode(draft.subcargo),
         unidad: draft.office.name,
         cargo: draft.cargo.name,
-        subcargo: draft.subcargo?.name ?? '',
+        subcargo: _formatSubcargoName(draft.subcargo?.name ?? ''),
         lugar: draft.lugar,
         numeroItem: draft.numeroItem,
         activo: draft.activo,
@@ -1895,7 +1895,9 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _selectedCargo = _findInitialCargo(user);
     _cargoController.text = _selectedCargo?.name ?? user.cargo;
     _selectedSubcargo = _findInitialSubcargo(user);
-    _subcargoController.text = _selectedSubcargo?.name ?? user.subcargo;
+    _subcargoController.text = _formatSubcargoName(
+      _selectedSubcargo?.name ?? user.subcargo,
+    );
     _lugarController.text = user.lugar;
     _applyScopedUserAdminDefaults();
   }
@@ -2006,7 +2008,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
 
     setState(() {
       _selectedSubcargo = cargo;
-      _subcargoController.text = cargo.name;
+      _subcargoController.text = _formatSubcargoName(cargo.name);
     });
   }
 
@@ -2476,7 +2478,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                       Text(
                         _selectedSubcargo == null
                             ? 'Si se asigna, este cargo contara para permisos y solicitudes.'
-                            : 'Funcion actual: ${_selectedSubcargo!.name}',
+                            : 'Funcion actual: ${_formatSubcargoName(_selectedSubcargo!.name)}',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: _selectedSubcargo == null
                               ? null
@@ -3202,12 +3204,12 @@ class _CargoSelectionSheet extends StatefulWidget {
 }
 
 const _subcargoGroupOptions = [
-  CargoOption(code: '', name: 'Tecnico'),
-  CargoOption(code: '', name: 'Jefe de division'),
-  CargoOption(code: '', name: 'Jefe de departamento'),
-  CargoOption(code: '', name: 'Director'),
-  CargoOption(code: '', name: 'Secretario municipal'),
-  CargoOption(code: '', name: 'Sub alcalde'),
+  CargoOption(code: '', name: 'TECNICO'),
+  CargoOption(code: '', name: 'JEFE DE DIVISION'),
+  CargoOption(code: '', name: 'JEFE DE DEPARTAMENTO'),
+  CargoOption(code: '', name: 'DIRECTOR'),
+  CargoOption(code: '', name: 'SECRETARIO MUNICIPAL'),
+  CargoOption(code: '', name: 'SUB ALCALDE'),
 ];
 
 class _CargoSelectionSheetState extends State<_CargoSelectionSheet> {
@@ -3319,7 +3321,7 @@ class _CargoSelectionSheetState extends State<_CargoSelectionSheet> {
                                 const SizedBox(height: 6),
                                 Text(
                                   cargo.code.trim().isEmpty
-                                      ? 'Funcion agrupada'
+                                      ? cargo.name
                                       : 'Codigo ${cargo.code}',
                                   style: Theme.of(context).textTheme.bodySmall,
                                 ),
@@ -3509,15 +3511,15 @@ CargoOption? _subcargoGroupForName(String value) {
   }
 
   if (normalized.contains('secretar')) {
-    return _subcargoGroupByName('Secretario municipal');
+    return _subcargoGroupByName('SECRETARIO MUNICIPAL');
   }
 
   if (compact.contains('subalcald')) {
-    return _subcargoGroupByName('Sub alcalde');
+    return _subcargoGroupByName('SUB ALCALDE');
   }
 
   if (normalized.contains('director') || normalized.contains('direcctor')) {
-    return _subcargoGroupByName('Director');
+    return _subcargoGroupByName('DIRECTOR');
   }
 
   if (normalized.contains('jefe') &&
@@ -3526,21 +3528,21 @@ CargoOption? _subcargoGroupForName(String value) {
           normalized.contains('dpto') ||
           compact.contains('jefedepto') ||
           compact.contains('jefedpto'))) {
-    return _subcargoGroupByName('Jefe de departamento');
+    return _subcargoGroupByName('JEFE DE DEPARTAMENTO');
   }
 
   if (normalized.contains('jefe') &&
       (normalized.contains('division') ||
           normalized.contains('divicion') ||
           compact.contains('jefediv'))) {
-    return _subcargoGroupByName('Jefe de division');
+    return _subcargoGroupByName('JEFE DE DIVISION');
   }
 
   if (normalized.contains('tecnico') ||
       normalized.contains('profesional') ||
       normalized.contains('profecional') ||
       normalized.contains('auxiliar')) {
-    return _subcargoGroupByName('Tecnico');
+    return _subcargoGroupByName('TECNICO');
   }
 
   return null;
@@ -3554,6 +3556,10 @@ CargoOption? _subcargoGroupByName(String name) {
   }
 
   return null;
+}
+
+String _formatSubcargoName(String value) {
+  return value.trim().toUpperCase();
 }
 
 bool _requiresLugarForCargo(CargoOption? cargo) {

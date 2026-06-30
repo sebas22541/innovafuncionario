@@ -6167,7 +6167,7 @@ async function assertCredentialsRequester(
 
   if (
     !user ||
-    (!isAdminRole(user.rol) && user.rol !== rol_usuario.CREDENCIALES) ||
+    (!isUserManagerRole(user.rol) && user.rol !== rol_usuario.CREDENCIALES) ||
     user.activo !== true
   ) {
     throw new HttpError(403, message);

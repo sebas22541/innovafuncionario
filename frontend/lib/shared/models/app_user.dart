@@ -290,7 +290,8 @@ class AppUser {
 
   bool get isAdminTemporary => role == AppUserRole.adminTemporary;
 
-  bool get isScopedUserAdmin => isAdminConsultants || isAdminTemporary;
+  bool get isScopedUserAdmin =>
+      isAdminHealth || isAdminConsultants || isAdminTemporary;
 
   bool get canManageUsers => isAdmin || isScopedUserAdmin;
 
