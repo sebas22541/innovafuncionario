@@ -116,14 +116,14 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
   }
 
   void _search() {
-    final ciQuery = _ciController.text.trim().toLowerCase();
+    final query = _normalizeSearchText(_ciController.text);
     final selectedOffice = _selectedOffice();
     final selectedCargo = _selectedCargo();
 
-    if (ciQuery.isEmpty && selectedOffice == null && selectedCargo == null) {
+    if (query.isEmpty && selectedOffice == null && selectedCargo == null) {
       AppAlert.showError(
         context,
-        'Ingresa un CI, selecciona una oficina o selecciona un cargo.',
+        'Ingresa un dato de busqueda, selecciona una oficina o selecciona un cargo.',
       );
       setState(() {
         _hasSearched = false;
@@ -138,14 +138,14 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
       _currentPage = 0;
       _results = _users
           .where((user) {
-            final matchesCi =
-                ciQuery.isEmpty || user.ci.toLowerCase().contains(ciQuery);
+            final matchesQuery =
+                query.isEmpty || _userMatchesSearchQuery(user, query);
             final matchesOffice =
                 selectedOffice == null || _matchesOffice(user, selectedOffice);
             final matchesCargo =
                 selectedCargo == null || _matchesCargo(user, selectedCargo);
 
-            return matchesCi && matchesOffice && matchesCargo;
+            return matchesQuery && matchesOffice && matchesCargo;
           })
           .toList(growable: false);
     });
@@ -338,7 +338,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Filtra por carnet de identidad, oficina o cargo para descargar la credencial del funcionario.',
+                    'Filtra por CI, nombre, apellido, usuario, item, cargo u oficina para descargar la credencial del funcionario.',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 18),
@@ -444,7 +444,8 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
         key: ValueKey('empty-search'),
         icon: Icons.manage_search_rounded,
         title: 'Realiza una busqueda',
-        message: 'Ingresa un CI, selecciona una oficina o selecciona un cargo.',
+        message:
+            'Ingresa CI, nombre, apellido, cargo, oficina, item o selecciona un filtro.',
       );
     }
 
@@ -517,9 +518,9 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
     return TextField(
       controller: _ciController,
       decoration: const InputDecoration(
-        labelText: 'Buscar por CI',
-        hintText: 'Ej. 1234567',
-        prefixIcon: Icon(Icons.credit_card_rounded),
+        labelText: 'Busqueda general',
+        hintText: 'CI, nombre, apellido, cargo, oficina o item',
+        prefixIcon: Icon(Icons.manage_search_rounded),
       ),
       textInputAction: TextInputAction.search,
       onSubmitted: (_) => _search(),
@@ -1716,6 +1717,35 @@ List<AppUser> _replaceUser(List<AppUser> users, AppUser updatedUser) {
       .toList(growable: false);
 }
 
+bool _userMatchesSearchQuery(AppUser user, String query) {
+  final searchableText = _searchableTextForUser(user);
+
+  if (searchableText.contains(query)) {
+    return true;
+  }
+
+  final tokens = query
+      .split(' ')
+      .where((token) => token.trim().isNotEmpty)
+      .toList(growable: false);
+
+  return tokens.isNotEmpty &&
+      tokens.every((token) => searchableText.contains(token));
+}
+
+String _searchableTextForUser(AppUser user) {
+  return _normalizeSearchText(
+    '${user.ci} ${user.celular} ${user.fullName} ${user.nombreCompleto} '
+    '${user.primerApellido} ${user.segundoApellido} ${user.tercerApellido} '
+    '${user.email} ${user.numeroItem} ${user.tipoVinculo} '
+    '${user.cargoCodigo ?? ''} ${user.cargo} '
+    '${user.subcargoCodigo ?? ''} ${user.subcargo} '
+    '${user.cargoEfectivoCodigo ?? ''} ${user.cargoEfectivo} '
+    '${user.officeCode ?? ''} ${user.officeName ?? ''} ${user.unidad} '
+    '${user.primaryOfficeName ?? ''} ${user.commissionOfficeName ?? ''}',
+  );
+}
+
 Uri? _tryParseCredentialPhotoUri(String? photoSource) {
   if (photoSource == null || photoSource.isEmpty) {
     return null;
@@ -1747,11 +1777,13 @@ Uint8List? _tryDecodeCredentialPhotoBytes(String? photoSource) {
 }
 
 bool _matchesOffice(AppUser user, OfficeOption office) {
-  final effectiveOfficeId = user.hasCommission
-      ? user.commissionOfficeId ?? user.officeId
-      : user.primaryOfficeId ?? user.officeId;
+  final userOfficeIds = {
+    user.officeId,
+    user.primaryOfficeId,
+    user.commissionOfficeId,
+  };
 
-  if (effectiveOfficeId == office.id) {
+  if (userOfficeIds.contains(office.id)) {
     return true;
   }
 
@@ -1763,27 +1795,41 @@ bool _matchesOffice(AppUser user, OfficeOption office) {
   }
 
   final selectedOfficeName = _normalizeExactOfficeValue(office.name);
-  final userOfficeName = _normalizeExactOfficeValue(
-    user.hasCommission
-        ? user.commissionOfficeName ?? ''
-        : user.primaryOfficeName ?? user.officeName ?? user.unidad,
-  );
+  final userOfficeNames = [
+    user.officeName ?? '',
+    user.primaryOfficeName ?? '',
+    user.commissionOfficeName ?? '',
+    user.unidad,
+  ].map(_normalizeExactOfficeValue);
 
-  return selectedOfficeName.isNotEmpty && userOfficeName == selectedOfficeName;
+  return selectedOfficeName.isNotEmpty &&
+      userOfficeNames.any((name) => name == selectedOfficeName);
 }
 
 bool _matchesCargo(AppUser user, CargoOption cargo) {
   final selectedCargoCode = cargo.code.trim().toUpperCase();
-  final userCargoCode = (user.effectiveCargoCode ?? '').trim().toUpperCase();
+  final userCargoCodes = {
+    (user.cargoCodigo ?? '').trim().toUpperCase(),
+    (user.subcargoCodigo ?? '').trim().toUpperCase(),
+    (user.cargoEfectivoCodigo ?? '').trim().toUpperCase(),
+    (user.effectiveCargoCode ?? '').trim().toUpperCase(),
+  };
 
-  if (selectedCargoCode.isNotEmpty && userCargoCode == selectedCargoCode) {
+  if (selectedCargoCode.isNotEmpty &&
+      userCargoCodes.contains(selectedCargoCode)) {
     return true;
   }
 
   final selectedCargoName = _normalizeSearchText(cargo.name);
-  final userCargoName = _normalizeSearchText(user.effectiveCargo);
+  final userCargoNames = [
+    user.cargo,
+    user.subcargo,
+    user.cargoEfectivo,
+    user.effectiveCargo,
+  ].map(_normalizeSearchText);
 
-  return selectedCargoName.isNotEmpty && userCargoName == selectedCargoName;
+  return selectedCargoName.isNotEmpty &&
+      userCargoNames.any((name) => name == selectedCargoName);
 }
 
 bool _officeTextLooksSimilar(String value, String query) {

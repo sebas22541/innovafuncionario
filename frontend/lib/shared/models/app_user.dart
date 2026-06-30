@@ -294,6 +294,8 @@ class AppUser {
 
   bool get canManageUsers => isAdmin || isScopedUserAdmin;
 
+  bool get canEditUsers => role == AppUserRole.admin;
+
   bool get isControl => role == AppUserRole.control;
 
   bool get isCredentials => role == AppUserRole.credentials;
@@ -317,6 +319,10 @@ class AppUser {
     final sub = subcargoCodigo?.trim();
     if (sub != null && sub.isNotEmpty) {
       return sub;
+    }
+
+    if (subcargo.trim().isNotEmpty) {
+      return null;
     }
 
     final base = cargoCodigo?.trim();

@@ -940,9 +940,13 @@ const server = http.createServer(async (request, response) => {
           { id: "asc" },
         ],
       });
+      const reviewableSalidas = await filterReviewableExitPermits(
+        approver,
+        salidas,
+      );
 
       sendJson(response, 200, {
-        data: salidas.map(serializeExitPermit),
+        data: reviewableSalidas.map(serializeExitPermit),
       });
       return;
     }
@@ -982,9 +986,16 @@ const server = http.createServer(async (request, response) => {
           { id: "asc" },
         ],
       });
+      const visibleSalidas =
+        requester != null &&
+        isExitPermitApproverUser(requester) &&
+        !isAdminUser(authenticatedUser) &&
+        !onlyOwnExitPermits
+          ? await filterReviewableExitPermits(requester, salidas)
+          : salidas;
 
       sendJson(response, 200, {
-        data: salidas.map(serializeExitPermit),
+        data: visibleSalidas.map(serializeExitPermit),
       });
       return;
     }
@@ -1056,7 +1067,7 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(404, "No se encontro la salida seleccionada.");
       }
 
-      assertCanReviewExitPermit(approver, salida);
+      await assertCanReviewExitPermit(approver, salida);
 
       if (salida.estado !== estado_salida.PENDIENTE) {
         throw new HttpError(409, "Esta salida ya fue revisada.");
@@ -6120,7 +6131,7 @@ async function assertUserManagerRequester(
     where: { email: email.toLowerCase() },
   });
 
-  if (!user || !isUserManagerRole(user.rol) || user.activo !== true) {
+  if (!user || user.rol !== rol_usuario.ADMIN || user.activo !== true) {
     throw new HttpError(403, message);
   }
 
@@ -6217,43 +6228,19 @@ function assertExitPermitApprover(user: any) {
   }
 }
 
-function assertCanReviewExitPermit(approver: any, salida: any) {
-  const approverOfficeId = resolveLinkedOfficeId(approver);
-  const applicant = salida.usuarios;
-  const applicantIsChief = isChiefExitPermitApplicant(applicant);
-  const applicantIsDirector = isDirectorExitPermitApprover(applicant);
-
-  if (isDirectorExitPermitApprover(approver)) {
-    if (!applicantIsChief || !isApplicantInDirectorScope(approver, applicant)) {
-      throw new HttpError(
-        403,
-        "Solo puedes revisar salidas de jefes bajo tu direccion.",
-      );
-    }
-
-    if (salida.usuario_id === approver.id) {
-      throw new HttpError(403, "No puedes revisar tu propia salida.");
-    }
-
-    return;
-  }
-
-  if (
-    approverOfficeId == null ||
-    salida.solicitante_oficina_id == null ||
-    approverOfficeId !== salida.solicitante_oficina_id ||
-    applicantIsChief ||
-    applicantIsDirector
-  ) {
-    throw new HttpError(
-      403,
-      "Solo puedes revisar salidas de funcionarios de tu misma oficina.",
-    );
-  }
-
+async function assertCanReviewExitPermit(approver: any, salida: any) {
   if (salida.usuario_id === approver.id) {
     throw new HttpError(403, "No puedes revisar tu propia salida.");
   }
+
+  if (await canReviewExitPermit(approver, salida, salida.usuarios)) {
+    return;
+  }
+
+  throw new HttpError(
+    403,
+    "Solo puedes revisar salidas asignadas a tu nivel jerarquico.",
+  );
 }
 
 function buildExitPermitReviewWhere(
@@ -6271,10 +6258,16 @@ function buildExitPermitReviewWhere(
     return {
       ...baseWhere,
       usuarios: {
-        AND: [
-          buildEffectiveChiefJobTitleUserWhere(),
-          { OR: buildDirectorOfficeScopeUserFilters(directionCode) },
-        ],
+        OR: buildOfficeCodeScopeUserFilters(directionCode),
+      },
+    };
+  }
+
+  if (isSeniorExitPermitApprover(approver)) {
+    return {
+      ...baseWhere,
+      usuarios: {
+        OR: buildOfficeCodeScopeUserFilters(resolveLinkedOfficeCode(approver)),
       },
     };
   }
@@ -6470,7 +6463,8 @@ function isExitPermitApproverUser(user: any) {
       resolveEffectiveJobTitleName(user),
       resolveEffectiveJobTitleCode(user),
     ) ||
-      isDirectorExitPermitApprover(user)) &&
+      isDirectorExitPermitApprover(user) ||
+      isSeniorExitPermitApprover(user)) &&
     resolveLinkedOfficeId(user) != null
   );
 }
@@ -6498,6 +6492,20 @@ function isDirectorJobTitle(value: string | null | undefined) {
   return normalized.includes("director") || normalized.includes("direcctor");
 }
 
+function isSeniorExitPermitApprover(user: any) {
+  return (
+    isSeniorJobTitle(resolveEffectiveJobTitleName(user)) &&
+    normalizeOptionalText(resolveLinkedOfficeCode(user)) != null
+  );
+}
+
+function isSeniorJobTitle(value: string | null | undefined) {
+  const normalized = normalizeTextForComparison(value);
+  const compact = normalized.replace(/[^a-z0-9]+/g, "");
+
+  return normalized.includes("secretar") || compact.includes("subalcald");
+}
+
 function resolveDirectorOfficeCode(user: any) {
   const officeCode = normalizeOptionalText(resolveLinkedOfficeCode(user));
 
@@ -6508,8 +6516,10 @@ function resolveDirectorOfficeCode(user: any) {
   return officeCode;
 }
 
-function buildDirectorOfficeScopeUserFilters(directionCode: string | null) {
-  if (directionCode == null) {
+function buildOfficeCodeScopeUserFilters(officeCode: string | null | undefined) {
+  const normalizedCode = normalizeOptionalText(officeCode);
+
+  if (normalizedCode == null) {
     return [];
   }
 
@@ -6517,19 +6527,21 @@ function buildDirectorOfficeScopeUserFilters(directionCode: string | null) {
     {
       oficinas: {
         cod: {
-          startsWith: `${directionCode}.`,
+          startsWith: `${normalizedCode}.`,
         },
       },
     },
     {
       oficina_comision: {
         cod: {
-          startsWith: `${directionCode}.`,
+          startsWith: `${normalizedCode}.`,
         },
       },
     },
   ];
 }
+
+const buildDirectorOfficeScopeUserFilters = buildOfficeCodeScopeUserFilters;
 
 function buildEffectiveChiefJobTitleUserWhere(): Prisma.usuariosWhereInput {
   return {
@@ -9072,9 +9084,13 @@ async function loadExitPermitApproverNotificationTargets(salida: any) {
     where: candidateWhere,
     include: userWithOfficeInclude,
   });
-  const approverIds = candidates
-    .filter((approver) => canReviewExitPermit(approver, salida, applicant))
-    .map((approver) => approver.id);
+  const approverIds: number[] = [];
+
+  for (const approver of candidates) {
+    if (await canReviewExitPermit(approver, salida, applicant)) {
+      approverIds.push(approver.id);
+    }
+  }
 
   if (approverIds.length === 0) {
     return { userIds: [] as number[], tokens: [] as string[] };
@@ -9142,60 +9158,14 @@ async function createReceivedNotifications(
 }
 
 function buildExitPermitNotificationCandidateWhere(salida: any) {
-  const applicant = salida.usuarios;
-
-  if (isChiefExitPermitApplicant(applicant)) {
-    const applicantOfficeCode = normalizeOptionalText(
-      resolveLinkedOfficeCode(applicant),
-    );
-    const directionCode = applicantOfficeCode?.split(".")[0] ?? null;
-
-    if (directionCode == null) {
-      return null;
-    }
-
-    return {
-      id: { not: salida.usuario_id },
-      activo: true,
-      rol: rol_usuario.OPERADOR,
-      AND: [
-        buildEffectiveDirectorJobTitleUserWhere(),
-        {
-          OR: [
-            {
-              oficinas: {
-                cod: directionCode,
-              },
-            },
-            {
-              oficina_comision: {
-                cod: directionCode,
-              },
-            },
-          ],
-        },
-      ],
-    };
-  }
-
-  const applicantOfficeId = salida.solicitante_oficina_id;
-
-  if (applicantOfficeId == null) {
-    return null;
-  }
-
   return {
     id: { not: salida.usuario_id },
     activo: true,
     rol: rol_usuario.OPERADOR,
-    OR: [
-      { oficina_id: applicantOfficeId },
-      { oficina_comision_id: applicantOfficeId },
-    ],
   };
 }
 
-function canReviewExitPermit(approver: any, salida: any, applicant: any) {
+async function canReviewExitPermit(approver: any, salida: any, applicant: any) {
   const approverOfficeId = resolveLinkedOfficeId(approver);
   const applicantIsChief = isChiefExitPermitApplicant(applicant);
   const applicantIsDirector = isDirectorExitPermitApprover(applicant);
@@ -9205,7 +9175,25 @@ function canReviewExitPermit(approver: any, salida: any, applicant: any) {
   }
 
   if (isDirectorExitPermitApprover(approver)) {
-    return applicantIsChief && isApplicantInDirectorScope(approver, applicant);
+    if (!isApplicantInDirectorScope(approver, applicant)) {
+      return false;
+    }
+
+    if (applicantIsChief) {
+      return true;
+    }
+
+    if (applicantIsDirector || isSeniorExitPermitApprover(applicant)) {
+      return false;
+    }
+
+    return !(await hasActiveChiefInEffectiveOffice(
+      salida.solicitante_oficina_id,
+    ));
+  }
+
+  if (isSeniorExitPermitApprover(approver)) {
+    return canSeniorReviewExitPermit(approver, salida, applicant);
   }
 
   return (
@@ -9215,6 +9203,136 @@ function canReviewExitPermit(approver: any, salida: any, applicant: any) {
     !applicantIsChief &&
     !applicantIsDirector
   );
+}
+
+async function filterReviewableExitPermits(approver: any, salidas: any[]) {
+  const result: any[] = [];
+
+  for (const salida of salidas) {
+    if (await canReviewExitPermit(approver, salida, salida.usuarios)) {
+      result.push(salida);
+    }
+  }
+
+  return result;
+}
+
+async function canSeniorReviewExitPermit(
+  approver: any,
+  salida: any,
+  applicant: any,
+) {
+  const seniorOfficeCode = normalizeOptionalText(resolveLinkedOfficeCode(approver));
+  const applicantOfficeCode = normalizeOptionalText(resolveLinkedOfficeCode(applicant));
+
+  if (
+    seniorOfficeCode == null ||
+    applicantOfficeCode == null ||
+    !applicantOfficeCode.startsWith(`${seniorOfficeCode}.`)
+  ) {
+    return false;
+  }
+
+  const directionCode = resolveChildOfficeCodeUnderParent(
+    applicantOfficeCode,
+    seniorOfficeCode,
+  );
+
+  if (directionCode == null) {
+    return false;
+  }
+
+  if (await hasActiveDirectorInEffectiveOfficeCode(directionCode)) {
+    return false;
+  }
+
+  if (isDirectorExitPermitApprover(applicant) || isSeniorExitPermitApprover(applicant)) {
+    return false;
+  }
+
+  if (isChiefExitPermitApplicant(applicant)) {
+    return true;
+  }
+
+  return !(await hasActiveChiefInEffectiveOffice(salida.solicitante_oficina_id));
+}
+
+function resolveChildOfficeCodeUnderParent(
+  officeCode: string,
+  parentCode: string,
+) {
+  if (!officeCode.startsWith(`${parentCode}.`)) {
+    return null;
+  }
+
+  const remainingParts = officeCode
+    .slice(parentCode.length + 1)
+    .split(".")
+    .filter((part) => part.length > 0);
+
+  if (remainingParts.length === 0) {
+    return null;
+  }
+
+  return `${parentCode}.${remainingParts[0]}`;
+}
+
+async function hasActiveChiefInEffectiveOffice(officeId: number | null | undefined) {
+  if (officeId == null) {
+    return false;
+  }
+
+  const result = await pool.query<{ exists: number }>(
+    `
+      SELECT 1 AS "exists"
+      FROM "usuarios" u
+      WHERE u."activo" = TRUE
+        AND u."rol" = $2
+        AND COALESCE(u."oficina_comision_id", u."oficina_id") = $1
+        AND (
+          CASE
+            WHEN NULLIF(TRIM(u."subcargo_codigo"), '') IS NOT NULL THEN NULLIF(TRIM(u."subcargo_codigo"), '')
+            WHEN NULLIF(TRIM(u."subcargo"), '') IS NOT NULL THEN NULL
+            ELSE NULLIF(TRIM(u."cargo_codigo"), '')
+          END = ANY($3::text[])
+          OR LOWER(COALESCE(NULLIF(TRIM(u."subcargo"), ''), u."cargo", '')) LIKE '%jefe%'
+        )
+      LIMIT 1
+    `,
+    [officeId, rol_usuario.OPERADOR, Array.from(EXIT_PERMIT_CHIEF_CARGO_CODES)],
+  );
+
+  return result.rows.length > 0;
+}
+
+async function hasActiveDirectorInEffectiveOfficeCode(
+  officeCode: string | null | undefined,
+) {
+  const normalizedCode = normalizeOptionalText(officeCode);
+
+  if (normalizedCode == null) {
+    return false;
+  }
+
+  const result = await pool.query<{ exists: number }>(
+    `
+      SELECT 1 AS "exists"
+      FROM "usuarios" u
+      JOIN "oficinas" o
+        ON o."id" = COALESCE(u."oficina_comision_id", u."oficina_id")
+      WHERE u."activo" = TRUE
+        AND u."rol" = $2
+        AND o."cod" = $1
+        AND (
+          LOWER(COALESCE(NULLIF(TRIM(u."subcargo"), ''), u."cargo", '')) LIKE '%director%'
+          OR LOWER(COALESCE(NULLIF(TRIM(u."subcargo"), ''), u."cargo", '')) LIKE '%direcctor%'
+        )
+      LIMIT 1
+    `,
+    [normalizedCode, rol_usuario.OPERADOR],
+  );
+
+  return result.rows.length > 0;
 }
 
 async function loadNotificationTargets(input: SendNotificationInput) {
@@ -9871,11 +9989,17 @@ function resolveCommissionOfficeName(linkedUser: any) {
 }
 
 function resolveEffectiveJobTitleCode(user: any) {
-  return (
-    normalizeOptionalText(user?.subcargo_codigo) ??
-    normalizeOptionalText(user?.cargo_codigo) ??
-    null
-  );
+  const subcargoCode = normalizeOptionalText(user?.subcargo_codigo);
+
+  if (subcargoCode != null) {
+    return subcargoCode;
+  }
+
+  if (normalizeOptionalText(user?.subcargo) != null) {
+    return null;
+  }
+
+  return normalizeOptionalText(user?.cargo_codigo) ?? null;
 }
 
 function resolveEffectiveJobTitleName(user: any) {

@@ -2465,7 +2465,9 @@ bool _isExitPermitApproverUser(AppUser user) {
 
   return (cargoCodigo != null && bossCodes.contains(cargoCodigo)) ||
       cargo.contains('jefe') ||
-      _isDirectorExitPermitUser(user);
+      _isDirectorExitPermitUser(user) ||
+      cargo.contains('secretar') ||
+      cargo.replaceAll(RegExp(r'[^a-z0-9]+'), '').contains('subalcald');
 }
 
 bool _isDirectorExitPermitUser(AppUser user) {

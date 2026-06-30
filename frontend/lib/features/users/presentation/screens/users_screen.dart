@@ -44,6 +44,7 @@ class _UsersScreenState extends State<UsersScreen> {
   int _currentPage = 0;
 
   int get _adminCount => _users.where((user) => user.canManageUsers).length;
+  bool get _canEditUsers => widget.currentUser.canEditUsers;
   int get _controlCount => _users.where((user) => user.isControl).length;
   int get _credentialsCount =>
       _users.where((user) => user.isCredentials).length;
@@ -241,6 +242,10 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 
   Future<void> _openCreateDialog() async {
+    if (!_canEditUsers) {
+      return;
+    }
+
     if (_isCreating || !await _ensureReferenceData()) {
       return;
     }
@@ -281,7 +286,7 @@ class _UsersScreenState extends State<UsersScreen> {
         oficinaId: draft.office.id,
         oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
-        subcargoCodigo: draft.subcargo?.code,
+        subcargoCodigo: _nullableCargoCode(draft.subcargo),
         unidad: draft.office.name,
         cargo: draft.cargo.name,
         subcargo: draft.subcargo?.name ?? '',
@@ -327,6 +332,10 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 
   Future<void> _toggleUserActive(AppUser user) async {
+    if (!_canEditUsers) {
+      return;
+    }
+
     final userId = user.id;
 
     if (userId == null || _updatingUserIds.contains(userId)) {
@@ -408,10 +417,11 @@ class _UsersScreenState extends State<UsersScreen> {
         cargos: _cargos,
         currentUser: widget.currentUser,
         initialUser: user,
+        readOnly: !_canEditUsers,
       ),
     );
 
-    if (draft == null) {
+    if (draft == null || !_canEditUsers) {
       return;
     }
 
@@ -436,7 +446,7 @@ class _UsersScreenState extends State<UsersScreen> {
         oficinaId: draft.office.id,
         oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
-        subcargoCodigo: draft.subcargo?.code,
+        subcargoCodigo: _nullableCargoCode(draft.subcargo),
         unidad: draft.office.name,
         cargo: draft.cargo.name,
         subcargo: draft.subcargo?.name ?? '',
@@ -749,34 +759,36 @@ class _UsersScreenState extends State<UsersScreen> {
                     ],
                   ),
                   const SizedBox(height: 18),
-                  ElevatedButton.icon(
-                    onPressed: (_isCreating || _isLoadingReferenceData)
-                        ? null
-                        : _openCreateDialog,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppPalette.orange,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
+                  if (_canEditUsers) ...[
+                    ElevatedButton.icon(
+                      onPressed: (_isCreating || _isLoadingReferenceData)
+                          ? null
+                          : _openCreateDialog,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppPalette.orange,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                      ),
+                      icon: (_isCreating || _isLoadingReferenceData)
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.person_add_alt_1_rounded),
+                      label: Text(
+                        _isCreating
+                            ? 'Creando usuario...'
+                            : _isLoadingReferenceData
+                            ? 'Cargando datos...'
+                            : 'Crear usuario',
+                      ),
                     ),
-                    icon: (_isCreating || _isLoadingReferenceData)
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.person_add_alt_1_rounded),
-                    label: Text(
-                      _isCreating
-                          ? 'Creando usuario...'
-                          : _isLoadingReferenceData
-                          ? 'Cargando datos...'
-                          : 'Crear usuario',
-                    ),
-                  ),
-                  const SizedBox(height: 16),
+                    const SizedBox(height: 16),
+                  ],
                   TextField(
                     controller: _searchController,
                     onChanged: _handleSearchChanged,
@@ -873,6 +885,7 @@ class _UsersScreenState extends State<UsersScreen> {
                     user: user,
                     isUpdating:
                         user.id != null && _updatingUserIds.contains(user.id),
+                    canEditUsers: _canEditUsers,
                     onEdit: () => _openEditDialog(user),
                     onToggleActive: () => _toggleUserActive(user),
                   ),
@@ -1136,12 +1149,14 @@ class _UserListCard extends StatelessWidget {
   const _UserListCard({
     required this.user,
     required this.isUpdating,
+    required this.canEditUsers,
     required this.onEdit,
     required this.onToggleActive,
   });
 
   final AppUser user;
   final bool isUpdating;
+  final bool canEditUsers;
   final VoidCallback onEdit;
   final VoidCallback onToggleActive;
 
@@ -1198,37 +1213,45 @@ class _UserListCard extends StatelessWidget {
                         ),
                         visualDensity: VisualDensity.compact,
                       ),
-                      icon: const Icon(Icons.edit_outlined, size: 16),
-                      label: const Text('Editar'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: isUpdating ? null : onToggleActive,
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                        side: BorderSide(
-                          color: user.activo
-                              ? const Color(0xFFD94841)
-                              : AppPalette.orange,
-                        ),
-                        visualDensity: VisualDensity.compact,
+                      icon: Icon(
+                        canEditUsers
+                            ? Icons.edit_outlined
+                            : Icons.visibility_outlined,
+                        size: 16,
                       ),
-                      icon: isUpdating
-                          ? const SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : Icon(
-                              user.activo
-                                  ? Icons.block_outlined
-                                  : Icons.check_circle_outline_rounded,
-                              size: 16,
-                            ),
-                      label: Text(user.activo ? 'Desactivar' : 'Activar'),
+                      label: Text(canEditUsers ? 'Editar' : 'Ver'),
                     ),
+                    if (canEditUsers)
+                      OutlinedButton.icon(
+                        onPressed: isUpdating ? null : onToggleActive,
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
+                          ),
+                          side: BorderSide(
+                            color: user.activo
+                                ? const Color(0xFFD94841)
+                                : AppPalette.orange,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        icon: isUpdating
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Icon(
+                                user.activo
+                                    ? Icons.block_outlined
+                                    : Icons.check_circle_outline_rounded,
+                                size: 16,
+                              ),
+                        label: Text(user.activo ? 'Desactivar' : 'Activar'),
+                      ),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -1251,12 +1274,10 @@ class _UserListCard extends StatelessWidget {
                         value: user.primaryOfficeName!,
                       ),
                     _UserMeta(label: 'Cargo', value: user.cargo),
-                    if (user.subcargo.trim().isNotEmpty)
-                      _UserMeta(label: 'Subcargo', value: user.subcargo),
                     if (user.cargoEfectivo.trim().isNotEmpty &&
                         user.cargoEfectivo != user.cargo)
                       _UserMeta(
-                        label: 'Cargo efectivo',
+                        label: 'Cargo interino',
                         value: user.cargoEfectivo,
                       ),
                     if (user.lugar.trim().isNotEmpty)
@@ -1762,12 +1783,14 @@ class _ManagedUserDialog extends StatefulWidget {
     required this.cargos,
     required this.currentUser,
     this.initialUser,
+    this.readOnly = false,
   });
 
   final List<OfficeOption> offices;
   final List<CargoOption> cargos;
   final AppUser currentUser;
   final AppUser? initialUser;
+  final bool readOnly;
 
   @override
   State<_ManagedUserDialog> createState() => _ManagedUserDialogState();
@@ -1811,6 +1834,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   bool _hideConfirmPassword = true;
   bool _changePassword = false;
   bool get _isEditing => widget.initialUser != null;
+  bool get _isReadOnly => widget.readOnly;
   bool get _isScopedUserAdmin => widget.currentUser.isScopedUserAdmin;
   String? get _fixedTipoVinculo {
     if (widget.currentUser.isAdminConsultants) {
@@ -1908,6 +1932,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   }
 
   Future<void> _pickOffice() async {
+    if (_isReadOnly) {
+      return;
+    }
+
     final office = await showModalBottomSheet<OfficeOption>(
       context: context,
       isScrollControlled: true,
@@ -1929,6 +1957,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   }
 
   Future<void> _pickCargo() async {
+    if (_isReadOnly) {
+      return;
+    }
+
     final cargo = await showModalBottomSheet<CargoOption>(
       context: context,
       isScrollControlled: true,
@@ -1954,12 +1986,16 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   }
 
   Future<void> _pickSubcargo() async {
+    if (_isReadOnly) {
+      return;
+    }
+
     final cargo = await showModalBottomSheet<CargoOption>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => _CargoSelectionSheet(
-        cargos: widget.cargos,
+        cargos: _subcargoGroupOptions,
         selectedCargo: _selectedSubcargo,
       ),
     );
@@ -1975,6 +2011,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   }
 
   void _clearSubcargo() {
+    if (_isReadOnly) {
+      return;
+    }
+
     setState(() {
       _selectedSubcargo = null;
       _subcargoController.clear();
@@ -1982,6 +2022,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   }
 
   Future<void> _pickCommissionOffice() async {
+    if (_isReadOnly) {
+      return;
+    }
+
     final office = await showModalBottomSheet<OfficeOption>(
       context: context,
       isScrollControlled: true,
@@ -2038,17 +2082,22 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
 
   CargoOption? _findInitialSubcargo(AppUser user) {
     final subcargoCode = user.subcargoCodigo?.trim().toUpperCase();
+    final groupedByName = _subcargoGroupForName(user.subcargo);
+
+    if (groupedByName != null) {
+      return groupedByName;
+    }
 
     for (final cargo in widget.cargos) {
       if (subcargoCode != null &&
           subcargoCode.isNotEmpty &&
           cargo.code.trim().toUpperCase() == subcargoCode) {
-        return cargo;
+        return _subcargoGroupForName(cargo.name) ?? cargo;
       }
 
       if (user.subcargo.trim().isNotEmpty &&
           cargo.name.toLowerCase() == user.subcargo.toLowerCase()) {
-        return cargo;
+        return _subcargoGroupForName(cargo.name) ?? cargo;
       }
     }
 
@@ -2056,6 +2105,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   }
 
   Future<void> _pickPhoto() async {
+    if (_isReadOnly) {
+      return;
+    }
+
     final file = await _imagePicker.pickImage(
       source: ImageSource.gallery,
       imageQuality: 80,
@@ -2080,6 +2133,11 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   }
 
   void _submit() {
+    if (_isReadOnly) {
+      Navigator.of(context).pop();
+      return;
+    }
+
     final form = _formKey.currentState;
 
     if (form == null || !form.validate()) {
@@ -2132,7 +2190,11 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   @override
   Widget build(BuildContext context) {
     final roleLabel = _selectedRole.label.toLowerCase();
-    final actionLabel = _isEditing ? 'Guardar cambios' : 'Crear usuario';
+    final actionLabel = _isReadOnly
+        ? 'Cerrar'
+        : _isEditing
+        ? 'Guardar cambios'
+        : 'Crear usuario';
     final fixedTipoVinculo = _fixedTipoVinculo;
 
     return Dialog(
@@ -2150,7 +2212,11 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                 children: [
                   Expanded(
                     child: Text(
-                      _isEditing ? 'Editar $roleLabel' : 'Crear $roleLabel',
+                      _isReadOnly
+                          ? 'Ver $roleLabel'
+                          : _isEditing
+                          ? 'Editar $roleLabel'
+                          : 'Crear $roleLabel',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                   ),
@@ -2171,7 +2237,9 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        _isEditing
+                        _isReadOnly
+                            ? 'Consulta los datos del usuario. Este rol no puede modificar informacion desde esta pantalla.'
+                            : _isEditing
                             ? 'Actualiza los datos del usuario y guarda los cambios.'
                             : 'Completa los datos del usuario. El acceso se creara automaticamente con CI como usuario y primer apellido + CI como contrasena inicial.',
                         style: Theme.of(context).textTheme.bodyMedium,
@@ -2182,7 +2250,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         isRequired: true,
                         value: _selectedRole,
                         items: _roleDropdownItemsForUser(widget.currentUser),
-                        onChanged: _isScopedUserAdmin
+                        enabled: !_isReadOnly,
+                        onChanged: _isReadOnly || _isScopedUserAdmin
                             ? (_) {}
                             : (value) {
                                 if (value == null) {
@@ -2202,7 +2271,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         items: _tipoVinculoDropdownItemsForUser(
                           widget.currentUser,
                         ),
-                        onChanged: fixedTipoVinculo != null
+                        enabled: !_isReadOnly,
+                        onChanged: _isReadOnly || fixedTipoVinculo != null
                             ? (_) {}
                             : (value) {
                                 if (value == null) {
@@ -2225,7 +2295,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         hint: 'Ingresa el carnet de identidad',
                         isRequired: true,
                         validator: _requiredValidator('Ingresa el CI.'),
-                        onChanged: (_) => setState(() {}),
+                        readOnly: _isReadOnly,
+                        onChanged: _isReadOnly ? null : (_) => setState(() {}),
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -2237,6 +2308,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         validator: _requiredValidator(
                           'Ingresa el numero de celular.',
                         ),
+                        readOnly: _isReadOnly,
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -2245,6 +2317,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         hint: 'Ingresa los nombres',
                         isRequired: true,
                         validator: _requiredValidator('Ingresa los nombres.'),
+                        readOnly: _isReadOnly,
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -2255,7 +2328,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         validator: _requiredValidator(
                           'Ingresa el primer apellido.',
                         ),
-                        onChanged: (_) => setState(() {}),
+                        readOnly: _isReadOnly,
+                        onChanged: _isReadOnly ? null : (_) => setState(() {}),
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -2268,6 +2342,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                           }
                           return null;
                         },
+                        readOnly: _isReadOnly,
                       ),
                       const SizedBox(height: 14),
                       _FormField(
@@ -2275,6 +2350,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         label: 'Tercer apellido (opcional)',
                         hint: 'Ingresa el tercer apellido si aplica',
                         validator: (_) => null,
+                        readOnly: _isReadOnly,
                       ),
                       const SizedBox(height: 14),
                       _PickerField(
@@ -2287,6 +2363,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         validator: _requiredValidator(
                           'Selecciona una unidad valida.',
                         ),
+                        enabled: !_isReadOnly,
                       ),
                       const SizedBox(height: 8),
                       Text(
@@ -2308,16 +2385,18 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         contentPadding: EdgeInsets.zero,
                         controlAffinity: ListTileControlAffinity.leading,
                         title: const Text('Comision'),
-                        onChanged: (value) {
-                          setState(() {
-                            _hasCommission = value ?? false;
+                        onChanged: _isReadOnly
+                            ? null
+                            : (value) {
+                                setState(() {
+                                  _hasCommission = value ?? false;
 
-                            if (!_hasCommission) {
-                              _selectedCommissionOffice = null;
-                              _commissionOfficeController.clear();
-                            }
-                          });
-                        },
+                                  if (!_hasCommission) {
+                                    _selectedCommissionOffice = null;
+                                    _commissionOfficeController.clear();
+                                  }
+                                });
+                              },
                       ),
                       if (_hasCommission) ...[
                         const SizedBox(height: 10),
@@ -2331,6 +2410,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                           validator: _requiredValidator(
                             'Selecciona la oficina de comision.',
                           ),
+                          enabled: !_isReadOnly,
                         ),
                         const SizedBox(height: 8),
                         Text(
@@ -2359,6 +2439,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         validator: _requiredValidator(
                           'Selecciona un cargo valido.',
                         ),
+                        enabled: !_isReadOnly,
                       ),
                       const SizedBox(height: 8),
                       Text(
@@ -2381,7 +2462,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         hint: 'Opcional: selecciona el cargo que cumple ahora',
                         icon: Icons.assignment_ind_outlined,
                         onTap: _pickSubcargo,
-                        suffixIcon: _selectedSubcargo == null
+                        enabled: !_isReadOnly,
+                        suffixIcon: _selectedSubcargo == null || _isReadOnly
                             ? null
                             : IconButton(
                                 tooltip: 'Quitar subcargo',
@@ -2412,6 +2494,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                           hint: 'Ingresa el lugar al que pertenece',
                           isRequired: true,
                           validator: _requiredValidator('Ingresa el lugar.'),
+                          readOnly: _isReadOnly,
                         ),
                       ],
                       if (_selectedTipoVinculo == 'ITEM') ...[
@@ -2424,6 +2507,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                           validator: _requiredValidator(
                             'Ingresa el numero item.',
                           ),
+                          readOnly: _isReadOnly,
                         ),
                       ],
                       const SizedBox(height: 14),
@@ -2438,31 +2522,36 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                             child: Text('Inactivo'),
                           ),
                         ],
-                        onChanged: (value) {
-                          if (value == null) {
-                            return;
-                          }
+                        enabled: !_isReadOnly,
+                        onChanged: _isReadOnly
+                            ? (_) {}
+                            : (value) {
+                                if (value == null) {
+                                  return;
+                                }
 
-                          setState(() {
-                            _selectedActivo = value;
-                          });
-                        },
+                                setState(() {
+                                  _selectedActivo = value;
+                                });
+                              },
                       ),
-                      const SizedBox(height: 14),
-                      _PhotoPickerField(
-                        photoBytes: _photoBytes,
-                        existingPhotoSource: widget.initialUser?.fotoUrl,
-                        isRequired: !_isEditing,
-                        showError: _showPhotoError,
-                        onPickPhoto: _pickPhoto,
-                      ),
-                      const SizedBox(height: 14),
-                      _AccessInfoCard(
-                        isEditing: _isEditing,
-                        ci: _ciController.text,
-                        primerApellido: _primerApellidoController.text,
-                      ),
-                      if (_isEditing) ...[
+                      if (!_isReadOnly) ...[
+                        const SizedBox(height: 14),
+                        _PhotoPickerField(
+                          photoBytes: _photoBytes,
+                          existingPhotoSource: widget.initialUser?.fotoUrl,
+                          isRequired: !_isEditing,
+                          showError: _showPhotoError,
+                          onPickPhoto: _pickPhoto,
+                        ),
+                        const SizedBox(height: 14),
+                        _AccessInfoCard(
+                          isEditing: _isEditing,
+                          ci: _ciController.text,
+                          primerApellido: _primerApellidoController.text,
+                        ),
+                      ],
+                      if (_isEditing && !_isReadOnly) ...[
                         const SizedBox(height: 12),
                         CheckboxListTile(
                           value: _changePassword,
@@ -2687,6 +2776,7 @@ class _FormField extends StatelessWidget {
     this.onFieldSubmitted,
     this.keyboardType,
     this.isRequired = false,
+    this.readOnly = false,
   });
 
   final TextEditingController controller;
@@ -2699,6 +2789,7 @@ class _FormField extends StatelessWidget {
   final ValueChanged<String>? onFieldSubmitted;
   final TextInputType? keyboardType;
   final bool isRequired;
+  final bool readOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -2706,6 +2797,7 @@ class _FormField extends StatelessWidget {
       controller: controller,
       keyboardType: keyboardType,
       obscureText: obscureText,
+      readOnly: readOnly,
       validator: validator,
       onChanged: onChanged,
       onFieldSubmitted: onFieldSubmitted,
@@ -2725,6 +2817,7 @@ class _DropdownField<T> extends StatelessWidget {
     required this.items,
     required this.onChanged,
     this.isRequired = false,
+    this.enabled = true,
   });
 
   final String label;
@@ -2732,13 +2825,14 @@ class _DropdownField<T> extends StatelessWidget {
   final List<DropdownMenuItem<T>> items;
   final ValueChanged<T?> onChanged;
   final bool isRequired;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
     return DropdownButtonFormField<T>(
       initialValue: value,
       items: items,
-      onChanged: onChanged,
+      onChanged: enabled ? onChanged : null,
       decoration: InputDecoration(
         label: _RequiredFieldLabel(label: label, isRequired: isRequired),
       ),
@@ -2756,6 +2850,7 @@ class _PickerField extends StatelessWidget {
     required this.validator,
     this.isRequired = false,
     this.suffixIcon,
+    this.enabled = true,
   });
 
   final TextEditingController controller;
@@ -2766,6 +2861,7 @@ class _PickerField extends StatelessWidget {
   final String? Function(String?) validator;
   final bool isRequired;
   final Widget? suffixIcon;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -2787,10 +2883,12 @@ class _PickerField extends StatelessWidget {
             const SizedBox(height: 8),
             InkWell(
               borderRadius: BorderRadius.circular(18),
-              onTap: () async {
-                await onTap();
-                state.didChange(controller.text);
-              },
+              onTap: enabled
+                  ? () async {
+                      await onTap();
+                      state.didChange(controller.text);
+                    }
+                  : null,
               child: Ink(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 16,
@@ -2818,7 +2916,11 @@ class _PickerField extends StatelessWidget {
                                   ?.copyWith(color: AppPalette.muted),
                             ),
                     ),
-                    suffixIcon ?? Icon(icon, color: AppPalette.orange),
+                    suffixIcon ??
+                        Icon(
+                          icon,
+                          color: enabled ? AppPalette.orange : AppPalette.muted,
+                        ),
                   ],
                 ),
               ),
@@ -3099,6 +3201,15 @@ class _CargoSelectionSheet extends StatefulWidget {
   State<_CargoSelectionSheet> createState() => _CargoSelectionSheetState();
 }
 
+const _subcargoGroupOptions = [
+  CargoOption(code: '', name: 'Tecnico'),
+  CargoOption(code: '', name: 'Jefe de division'),
+  CargoOption(code: '', name: 'Jefe de departamento'),
+  CargoOption(code: '', name: 'Director'),
+  CargoOption(code: '', name: 'Secretario municipal'),
+  CargoOption(code: '', name: 'Sub alcalde'),
+];
+
 class _CargoSelectionSheetState extends State<_CargoSelectionSheet> {
   final TextEditingController _searchController = TextEditingController();
 
@@ -3172,8 +3283,13 @@ class _CargoSelectionSheetState extends State<_CargoSelectionSheet> {
                       separatorBuilder: (_, _) => const SizedBox(height: 8),
                       itemBuilder: (context, index) {
                         final cargo = filteredCargos[index];
+                        final selectedCargo = widget.selectedCargo;
                         final isSelected =
-                            widget.selectedCargo?.code == cargo.code;
+                            selectedCargo != null &&
+                            (cargo.code.trim().isEmpty
+                                ? selectedCargo.name.toLowerCase() ==
+                                      cargo.name.toLowerCase()
+                                : selectedCargo.code == cargo.code);
 
                         return InkWell(
                           borderRadius: BorderRadius.circular(18),
@@ -3202,7 +3318,9 @@ class _CargoSelectionSheetState extends State<_CargoSelectionSheet> {
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
-                                  'Codigo ${cargo.code}',
+                                  cargo.code.trim().isEmpty
+                                      ? 'Funcion agrupada'
+                                      : 'Codigo ${cargo.code}',
                                   style: Theme.of(context).textTheme.bodySmall,
                                 ),
                               ],
@@ -3375,6 +3493,67 @@ bool _userMatchesCargo(AppUser user, CargoOption cargo) {
       (userCargo == expectedName ||
           userSubcargo == expectedName ||
           userEffectiveCargo == expectedName);
+}
+
+String? _nullableCargoCode(CargoOption? cargo) {
+  final code = cargo?.code.trim();
+  return code == null || code.isEmpty ? null : code;
+}
+
+CargoOption? _subcargoGroupForName(String value) {
+  final normalized = _normalizeSearchText(value);
+  final compact = normalized.replaceAll(RegExp(r'[^a-z0-9]+'), '');
+
+  if (normalized.isEmpty) {
+    return null;
+  }
+
+  if (normalized.contains('secretar')) {
+    return _subcargoGroupByName('Secretario municipal');
+  }
+
+  if (compact.contains('subalcald')) {
+    return _subcargoGroupByName('Sub alcalde');
+  }
+
+  if (normalized.contains('director') || normalized.contains('direcctor')) {
+    return _subcargoGroupByName('Director');
+  }
+
+  if (normalized.contains('jefe') &&
+      (normalized.contains('departamento') ||
+          normalized.contains('depto') ||
+          normalized.contains('dpto') ||
+          compact.contains('jefedepto') ||
+          compact.contains('jefedpto'))) {
+    return _subcargoGroupByName('Jefe de departamento');
+  }
+
+  if (normalized.contains('jefe') &&
+      (normalized.contains('division') ||
+          normalized.contains('divicion') ||
+          compact.contains('jefediv'))) {
+    return _subcargoGroupByName('Jefe de division');
+  }
+
+  if (normalized.contains('tecnico') ||
+      normalized.contains('profesional') ||
+      normalized.contains('profecional') ||
+      normalized.contains('auxiliar')) {
+    return _subcargoGroupByName('Tecnico');
+  }
+
+  return null;
+}
+
+CargoOption? _subcargoGroupByName(String name) {
+  for (final option in _subcargoGroupOptions) {
+    if (option.name == name) {
+      return option;
+    }
+  }
+
+  return null;
 }
 
 bool _requiresLugarForCargo(CargoOption? cargo) {
