@@ -800,11 +800,11 @@ class _AuthFormCard extends StatelessWidget {
         _AuthField(
           controller: celularController,
           label: 'Celular',
-          hint: 'Celular',
-          isRequired: true,
+          hint: 'Celular (opcional)',
+          isRequired: false,
           keyboardType: TextInputType.phone,
           textInputAction: TextInputAction.next,
-          validator: _requiredValidator('Ingresa tu numero de celular.'),
+          validator: (_) => null,
         ),
         const SizedBox(height: 12),
         _DropdownField<String>(

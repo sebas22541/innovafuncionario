@@ -2685,7 +2685,7 @@ type RegisterUserInput = {
   segundoApellido: string | null;
   tercerApellido: string | null;
   ci: string;
-  celular: string;
+  celular: string | null;
   tipoVinculo: string;
   unidad: string | null;
   oficinaId: number | null;
@@ -5080,7 +5080,7 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
     segundoApellido: readOptionalString(body, "segundoApellido", 0, 80),
     tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
     ci: readRequiredString(body, "ci", 3, 30),
-    celular: readRequiredString(body, "celular", 5, 30),
+    celular: readOptionalString(body, "celular", 5, 30),
     tipoVinculo,
     unidad,
     oficinaId,
@@ -5176,7 +5176,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     segundoApellido: readOptionalString(body, "segundoApellido", 0, 80),
     tercerApellido: readOptionalString(body, "tercerApellido", 0, 80),
     ci,
-    celular: readRequiredString(body, "celular", 5, 30),
+    celular: readOptionalString(body, "celular", 5, 30),
     tipoVinculo,
     unidad,
     oficinaId,

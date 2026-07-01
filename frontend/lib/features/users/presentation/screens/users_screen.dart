@@ -2304,12 +2304,10 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                       _FormField(
                         controller: _celularController,
                         label: 'Celular',
-                        hint: 'Ingresa el numero de celular',
-                        isRequired: true,
+                        hint: 'Ingresa el numero de celular (opcional)',
+                        isRequired: false,
                         keyboardType: TextInputType.phone,
-                        validator: _requiredValidator(
-                          'Ingresa el numero de celular.',
-                        ),
+                        validator: (_) => null,
                         readOnly: _isReadOnly,
                       ),
                       const SizedBox(height: 14),
