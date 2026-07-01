@@ -4487,13 +4487,7 @@ function resolvePorteroLugar(
     return null;
   }
 
-  const normalizedLugar = normalizeOptionalText(lugar);
-
-  if (normalizedLugar == null) {
-    throw new HttpError(400, "Debes ingresar el lugar del cargo seleccionado.");
-  }
-
-  return normalizedLugar;
+  return normalizeOptionalText(lugar);
 }
 
 function matchesCargoSelection(

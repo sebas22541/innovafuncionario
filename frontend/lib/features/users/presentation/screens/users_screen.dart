@@ -2493,9 +2493,9 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                         _FormField(
                           controller: _lugarController,
                           label: 'Lugar',
-                          hint: 'Ingresa el lugar al que pertenece',
-                          isRequired: true,
-                          validator: _requiredValidator('Ingresa el lugar.'),
+                          hint: 'Ingresa el lugar (opcional)',
+                          isRequired: false,
+                          validator: (_) => null,
                           readOnly: _isReadOnly,
                         ),
                       ],
