@@ -927,11 +927,11 @@ const server = http.createServer(async (request, response) => {
       }
 
       assertExitPermitApprover(approver);
-      const reviewWhere = buildExitPermitReviewWhere(approver, {
-        onlyPending: true,
-      });
       const salidas = await prisma.salidas.findMany({
-        where: reviewWhere,
+        where: {
+          estado: estado_salida.PENDIENTE,
+          usuario_id: { not: approver.id },
+        },
         include: exitPermitApplicantInclude,
         orderBy: [
           { fecha_permiso: "asc" },

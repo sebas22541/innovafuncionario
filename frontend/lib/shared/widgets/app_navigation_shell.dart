@@ -36,6 +36,8 @@ class AppNavigationShell extends StatefulWidget {
     this.sectionRequestToken = 0,
     this.notificationsRefreshToken = 0,
     this.notificationsOpenToken = 0,
+    this.exitPermitRequestId,
+    this.exitPermitRequestToken = 0,
     this.onCurrentUserChanged,
     this.onSectionChanged,
     required this.onLogout,
@@ -47,6 +49,8 @@ class AppNavigationShell extends StatefulWidget {
   final int sectionRequestToken;
   final int notificationsRefreshToken;
   final int notificationsOpenToken;
+  final int? exitPermitRequestId;
+  final int exitPermitRequestToken;
   final ValueChanged<AppUser>? onCurrentUserChanged;
   final ValueChanged<AppSection>? onSectionChanged;
   final VoidCallback onLogout;
@@ -64,6 +68,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
   bool _isRemoteLogoutHandling = false;
   int _lunchScannerBackToken = 0;
   int _unreadNotifications = 0;
+  int? _exitPermitRequestId;
+  int _exitPermitRequestToken = 0;
   Timer? _deviceHeartbeatTimer;
 
   @override
@@ -74,6 +80,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       _currentUser,
       widget.initialSection,
     );
+    _exitPermitRequestId = widget.exitPermitRequestId;
+    _exitPermitRequestToken = widget.exitPermitRequestToken;
     _loadUnreadNotifications();
     _syncLunchKioskMode();
     _syncDeviceHeartbeat();
@@ -121,6 +129,11 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
           _openNotificationsPanel(openLatest: true);
         }
       });
+    }
+
+    if (oldWidget.exitPermitRequestToken != widget.exitPermitRequestToken) {
+      _exitPermitRequestId = widget.exitPermitRequestId;
+      _exitPermitRequestToken = widget.exitPermitRequestToken;
     }
   }
 
@@ -222,11 +235,26 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
     }
 
     if (selected.targetSection == AppSection.exitPermitRequests.storageKey) {
-      _handleSectionSelection(AppSection.exitPermitRequests);
+      _openExitPermitRequest(selected.exitPermitId);
       return;
     }
 
     await _openNotificationDetail(selected);
+  }
+
+  void _openExitPermitRequest(int? exitPermitId) {
+    if (!_visibleSectionsForUser(
+      _currentUser,
+    ).contains(AppSection.exitPermitRequests)) {
+      return;
+    }
+
+    setState(() {
+      _selectedSection = AppSection.exitPermitRequests;
+      _exitPermitRequestId = exitPermitId;
+      _exitPermitRequestToken++;
+    });
+    widget.onSectionChanged?.call(AppSection.exitPermitRequests);
   }
 
   Future<void> _openNotificationDetail(
@@ -433,7 +461,11 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       case AppSection.myExitPermits:
         return MyExitPermitsScreen(currentUser: _currentUser);
       case AppSection.exitPermitRequests:
-        return ExitPermitRequestsScreen(currentUser: _currentUser);
+        return ExitPermitRequestsScreen(
+          currentUser: _currentUser,
+          requestedPermitId: _exitPermitRequestId,
+          requestToken: _exitPermitRequestToken,
+        );
       case AppSection.lunches:
         return const LunchesAdminScreen();
       case AppSection.lunchScanner:

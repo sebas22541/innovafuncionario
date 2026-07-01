@@ -23,15 +23,26 @@ class ExitPermitsScreen extends StatefulWidget {
 }
 
 class ExitPermitRequestsScreen extends StatelessWidget {
-  const ExitPermitRequestsScreen({super.key, required this.currentUser});
+  const ExitPermitRequestsScreen({
+    super.key,
+    required this.currentUser,
+    this.requestedPermitId,
+    this.requestToken = 0,
+  });
 
   final AppUser currentUser;
+  final int? requestedPermitId;
+  final int requestToken;
 
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
-      child: _ExitPermitApprovalsList(currentUser: currentUser),
+      child: _ExitPermitApprovalsList(
+        currentUser: currentUser,
+        requestedPermitId: requestedPermitId,
+        requestToken: requestToken,
+      ),
     );
   }
 }
@@ -457,9 +468,15 @@ class _FuncionarioExitPermitsListState
 }
 
 class _ExitPermitApprovalsList extends StatefulWidget {
-  const _ExitPermitApprovalsList({required this.currentUser});
+  const _ExitPermitApprovalsList({
+    required this.currentUser,
+    this.requestedPermitId,
+    this.requestToken = 0,
+  });
 
   final AppUser currentUser;
+  final int? requestedPermitId;
+  final int requestToken;
 
   @override
   State<_ExitPermitApprovalsList> createState() =>
@@ -471,11 +488,21 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
   bool _isLoading = true;
   int? _reviewingId;
   String? _errorMessage;
+  int? _handledRequestToken;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ExitPermitApprovalsList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.requestToken != widget.requestToken) {
+      _load();
+    }
   }
 
   Future<void> _load() async {
@@ -495,6 +522,7 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
       setState(() {
         _records = records;
       });
+      _openRequestedPermit(records);
     } on BackendApiException catch (error) {
       if (mounted) {
         setState(() {
@@ -516,6 +544,36 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
         });
       }
     }
+  }
+
+  void _openRequestedPermit(List<ExitPermitRecord> records) {
+    final requestedPermitId = widget.requestedPermitId;
+
+    if (requestedPermitId == null ||
+        _handledRequestToken == widget.requestToken) {
+      return;
+    }
+
+    _handledRequestToken = widget.requestToken;
+    final requestedRecord = records
+        .where((record) => record.id == requestedPermitId)
+        .firstOrNull;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+
+      if (requestedRecord == null) {
+        _showMessage(
+          'La solicitud ya fue revisada o no está disponible.',
+          isError: true,
+        );
+        return;
+      }
+
+      _openReviewDialog(requestedRecord);
+    });
   }
 
   Future<void> _review(ExitPermitRecord record, ExitPermitStatus status) async {

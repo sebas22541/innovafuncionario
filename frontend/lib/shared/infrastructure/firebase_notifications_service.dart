@@ -6,6 +6,20 @@ import 'package:flutter/foundation.dart';
 
 import '../../injection_container.dart';
 
+class ForegroundPushNotification {
+  const ForegroundPushNotification({
+    required this.title,
+    required this.body,
+    required this.targetSection,
+    required this.exitPermitId,
+  });
+
+  final String title;
+  final String body;
+  final String? targetSection;
+  final int? exitPermitId;
+}
+
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   if (!_supportsFirebaseMessaging) {
@@ -23,26 +37,32 @@ class FirebaseNotificationsService {
   static StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
   static String? _registeredToken;
   static String? _registeredPlatform;
-  static VoidCallback? _openNotifications;
+  static ValueChanged<ForegroundPushNotification>? _openNotification;
   static VoidCallback? _notificationsChanged;
   static VoidCallback? _deviceLoginRequested;
+  static ValueChanged<ForegroundPushNotification>?
+  _foregroundNotificationReceived;
   static bool _initialized = false;
   static bool _initialMessageChecked = false;
-  static bool _pendingNotificationsOpen = false;
+  static ForegroundPushNotification? _pendingNotificationOpen;
   static bool _pendingDeviceLogin = false;
 
   static void configureNavigation({
-    required VoidCallback onOpenNotifications,
+    required ValueChanged<ForegroundPushNotification> onOpenNotification,
     required VoidCallback onNotificationsChanged,
     required VoidCallback onDeviceLoginRequested,
+    required ValueChanged<ForegroundPushNotification>
+    onForegroundNotificationReceived,
   }) {
-    _openNotifications = onOpenNotifications;
+    _openNotification = onOpenNotification;
     _notificationsChanged = onNotificationsChanged;
     _deviceLoginRequested = onDeviceLoginRequested;
+    _foregroundNotificationReceived = onForegroundNotificationReceived;
 
-    if (_pendingNotificationsOpen) {
-      _pendingNotificationsOpen = false;
-      onOpenNotifications();
+    final pendingNotification = _pendingNotificationOpen;
+    if (pendingNotification != null) {
+      _pendingNotificationOpen = null;
+      onOpenNotification(pendingNotification);
     }
 
     if (_pendingDeviceLogin) {
@@ -154,6 +174,7 @@ class FirebaseNotificationsService {
 
       if (message.data['source'] == 'innovafuncionario') {
         _notificationsChanged?.call();
+        _foregroundNotificationReceived?.call(_parseNotification(message));
       }
     });
 
@@ -180,14 +201,26 @@ class FirebaseNotificationsService {
     }
 
     _notificationsChanged?.call();
-    final notificationCallback = _openNotifications;
+    final notification = _parseNotification(message);
+    final notificationCallback = _openNotification;
 
     if (notificationCallback == null) {
-      _pendingNotificationsOpen = true;
+      _pendingNotificationOpen = notification;
       return;
     }
 
-    notificationCallback();
+    notificationCallback(notification);
+  }
+
+  static ForegroundPushNotification _parseNotification(RemoteMessage message) {
+    return ForegroundPushNotification(
+      title: message.notification?.title?.trim().isNotEmpty == true
+          ? message.notification!.title!.trim()
+          : 'Nueva notificación',
+      body: message.notification?.body?.trim() ?? '',
+      targetSection: _readOptionalText(message.data['targetSection']),
+      exitPermitId: int.tryParse(message.data['salidaId'] ?? ''),
+    );
   }
 
   static bool _isDeviceLoginMessage(RemoteMessage message) {
@@ -206,6 +239,11 @@ class FirebaseNotificationsService {
 
     callback();
   }
+}
+
+String? _readOptionalText(String? value) {
+  final normalized = value?.trim();
+  return normalized == null || normalized.isEmpty ? null : normalized;
 }
 
 bool get _supportsFirebaseMessaging {

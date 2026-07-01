@@ -28,9 +28,13 @@ class QrWebApp extends StatefulWidget {
 }
 
 class _QrWebAppState extends State<QrWebApp> {
+  final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
+      GlobalKey<ScaffoldMessengerState>();
   AppUser? _currentUser;
   AppSection? _initialSection;
-  final int _sectionRequestToken = 0;
+  int _sectionRequestToken = 0;
+  int? _exitPermitRequestId;
+  int _exitPermitRequestToken = 0;
   int _notificationsRefreshToken = 0;
   int _notificationsOpenToken = 0;
   bool _isRestoringSession = true;
@@ -39,9 +43,10 @@ class _QrWebAppState extends State<QrWebApp> {
   void initState() {
     super.initState();
     FirebaseNotificationsService.configureNavigation(
-      onOpenNotifications: _openNotificationsFromNotification,
+      onOpenNotification: _openPushNotification,
       onNotificationsChanged: _handleNotificationsChanged,
       onDeviceLoginRequested: _restoreSession,
+      onForegroundNotificationReceived: _showForegroundNotification,
     );
     _restoreSession();
   }
@@ -73,7 +78,7 @@ class _QrWebAppState extends State<QrWebApp> {
 
     setState(() {
       _currentUser = user;
-      _initialSection = section;
+      _initialSection ??= section;
       _isRestoringSession = false;
     });
   }
@@ -89,6 +94,7 @@ class _QrWebAppState extends State<QrWebApp> {
     setState(() {
       _currentUser = user;
       _initialSection = null;
+      _exitPermitRequestId = null;
     });
   }
 
@@ -110,6 +116,7 @@ class _QrWebAppState extends State<QrWebApp> {
     setState(() {
       _currentUser = null;
       _initialSection = null;
+      _exitPermitRequestId = null;
     });
   }
 
@@ -121,6 +128,7 @@ class _QrWebAppState extends State<QrWebApp> {
     setState(() {
       _currentUser = null;
       _initialSection = null;
+      _exitPermitRequestId = null;
     });
   }
 
@@ -146,20 +154,70 @@ class _QrWebAppState extends State<QrWebApp> {
     });
   }
 
-  void _openNotificationsFromNotification() {
+  void _openPushNotification(ForegroundPushNotification notification) {
     if (!mounted) {
       return;
     }
 
+    final targetSection = parseAppSection(notification.targetSection);
+
     setState(() {
-      _notificationsOpenToken++;
       _notificationsRefreshToken++;
+
+      if (targetSection == AppSection.exitPermitRequests) {
+        _initialSection = targetSection;
+        _sectionRequestToken++;
+        _exitPermitRequestId = notification.exitPermitId;
+        _exitPermitRequestToken++;
+      } else {
+        _notificationsOpenToken++;
+      }
     });
+  }
+
+  void _showForegroundNotification(ForegroundPushNotification notification) {
+    if (!mounted || _currentUser == null) {
+      return;
+    }
+
+    final messenger = _scaffoldMessengerKey.currentState;
+
+    if (messenger == null) {
+      return;
+    }
+
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 8),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                notification.title,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              if (notification.body.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(notification.body),
+              ],
+            ],
+          ),
+          action: SnackBarAction(
+            label: 'Ver',
+            textColor: Colors.white,
+            onPressed: () => _openPushNotification(notification),
+          ),
+        ),
+      );
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      scaffoldMessengerKey: _scaffoldMessengerKey,
       title: 'QR Asistencia',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
@@ -186,6 +244,8 @@ class _QrWebAppState extends State<QrWebApp> {
                       sectionRequestToken: _sectionRequestToken,
                       notificationsRefreshToken: _notificationsRefreshToken,
                       notificationsOpenToken: _notificationsOpenToken,
+                      exitPermitRequestId: _exitPermitRequestId,
+                      exitPermitRequestToken: _exitPermitRequestToken,
                       onCurrentUserChanged: _handleCurrentUserChanged,
                       onSectionChanged: SessionStore.saveSection,
                       onLogout: _handleLogout,
