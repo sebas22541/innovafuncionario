@@ -6314,7 +6314,7 @@ function buildExitPermitListWhere(
 
   if (requester != null && isExitPermitApproverUser(requester)) {
     return {
-      ...buildExitPermitReviewWhere(requester),
+      usuario_id: { not: requester.id },
       ...(fechaPermiso == null ? {} : { fecha_permiso: fechaPermiso }),
     };
   }

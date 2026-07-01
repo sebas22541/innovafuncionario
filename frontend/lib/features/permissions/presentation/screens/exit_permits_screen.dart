@@ -484,7 +484,9 @@ class _ExitPermitApprovalsList extends StatefulWidget {
 }
 
 class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
-  List<ExitPermitRecord> _records = const [];
+  DateTime _selectedDate = DateTime.now();
+  List<ExitPermitRecord> _pendingRecords = const [];
+  List<ExitPermitRecord> _dailyRecords = const [];
   bool _isLoading = true;
   int? _reviewingId;
   String? _errorMessage;
@@ -505,6 +507,23 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
     }
   }
 
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 1),
+    );
+
+    if (picked != null) {
+      setState(() {
+        _selectedDate = picked;
+      });
+      await _load();
+    }
+  }
+
   Future<void> _load() async {
     setState(() {
       _isLoading = true;
@@ -512,28 +531,39 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
     });
 
     try {
-      final records = await dependencies.exitPermitsApiService
-          .fetchPendingExitPermits();
+      final results = await Future.wait([
+        dependencies.exitPermitsApiService.fetchPendingExitPermits(),
+        dependencies.exitPermitsApiService.fetchExitPermitsByDate(
+          _selectedDate,
+        ),
+      ]);
+      final pendingRecords = results[0];
+      final dailyRecords = results[1]
+          .where((record) => record.status != ExitPermitStatus.pending)
+          .toList(growable: false);
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _records = records;
+        _pendingRecords = pendingRecords;
+        _dailyRecords = dailyRecords;
       });
-      _openRequestedPermit(records);
+      _openRequestedPermit([...pendingRecords, ...dailyRecords]);
     } on BackendApiException catch (error) {
       if (mounted) {
         setState(() {
-          _records = const [];
+          _pendingRecords = const [];
+          _dailyRecords = const [];
           _errorMessage = error.message;
         });
       }
     } catch (_) {
       if (mounted) {
         setState(() {
-          _records = const [];
+          _pendingRecords = const [];
+          _dailyRecords = const [];
           _errorMessage = 'No fue posible cargar las salidas de tu oficina.';
         });
       }
@@ -656,6 +686,11 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
                   'Solicitudes recibidas',
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
+                _PickerButton(
+                  icon: Icons.calendar_month_rounded,
+                  label: _formatDate(_selectedDate),
+                  onTap: _pickDate,
+                ),
                 OutlinedButton.icon(
                   onPressed: _isLoading ? null : _load,
                   icon: const Icon(Icons.refresh_rounded),
@@ -673,14 +708,44 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
               )
             else if (_errorMessage != null)
               Text(_errorMessage!)
-            else if (_records.isEmpty)
-              const Text('No tienes solicitudes pendientes.')
-            else
-              _ExitPermitOfficeTable(
-                records: _records,
-                reviewingId: _reviewingId,
-                onOpen: (record) => _openReviewDialog(record),
+            else ...[
+              Text(
+                'Pendientes de revisión (${_pendingRecords.length})',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
+              const SizedBox(height: 10),
+              if (_pendingRecords.isEmpty)
+                const Text('No tienes solicitudes pendientes.')
+              else
+                _ExitPermitOfficeTable(
+                  records: _pendingRecords,
+                  reviewingId: _reviewingId,
+                  onOpen: (record) => _openReviewDialog(record),
+                ),
+              const SizedBox(height: 20),
+              Text(
+                'Seguimiento del día (${_dailyRecords.length})',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Solicitudes aprobadas o rechazadas para el ${_formatDate(_selectedDate)}.',
+                style: const TextStyle(color: AppPalette.muted),
+              ),
+              const SizedBox(height: 10),
+              if (_dailyRecords.isEmpty)
+                const Text('No revisaste solicitudes para esta fecha.')
+              else
+                _ExitPermitOfficeTable(
+                  records: _dailyRecords,
+                  reviewingId: _reviewingId,
+                  onOpen: (record) => _openReviewDialog(record),
+                ),
+            ],
           ],
         ),
       ),
@@ -1138,8 +1203,8 @@ class _MyExitPermitCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           _SummaryRow(label: 'Fecha', value: _formatDate(record.permitDate)),
-          _SummaryRow(label: 'Salida', value: _formatDepartureTime(record)),
-          _SummaryRow(label: 'Llegada', value: _formatArrivalTime(record)),
+          _SummaryRow(label: 'Salida', value: _formatEmployeeDeparture(record)),
+          _SummaryRow(label: 'Llegada', value: _formatEmployeeArrival(record)),
           _SummaryRow(label: 'Descripcion', value: record.description),
           if (record.status == ExitPermitStatus.approved) ...[
             const SizedBox(height: 10),
@@ -1219,11 +1284,27 @@ class _ExitPermitOfficeTable extends StatelessWidget {
                 child: Row(
                   children: [
                     Expanded(
-                      child: Text(
-                        record.applicantFullName,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            record.applicantFullName,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            _movementStatusText(record),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _movementStatusColor(record),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -1480,13 +1561,92 @@ String _formatDate(DateTime date) {
 String _formatDepartureTime(ExitPermitRecord record) {
   final departure = record.startTime.trim();
 
-  return departure.isEmpty ? 'pendiente' : departure;
+  if (departure.isNotEmpty) {
+    return departure;
+  }
+
+  return switch (record.status) {
+    ExitPermitStatus.approved => 'No registró salida',
+    ExitPermitStatus.pending => 'Pendiente de aprobación',
+    ExitPermitStatus.rejected => 'No disponible',
+  };
 }
 
 String _formatArrivalTime(ExitPermitRecord record) {
   final arrival = record.arrivalTime.trim();
 
-  return arrival.isEmpty ? 'pendiente' : arrival;
+  if (arrival.isNotEmpty) {
+    return arrival;
+  }
+
+  if (record.status != ExitPermitStatus.approved) {
+    return 'No disponible';
+  }
+
+  return record.startTime.trim().isEmpty
+      ? 'Pendiente de salida'
+      : 'No registró llegada';
+}
+
+String _formatEmployeeDeparture(ExitPermitRecord record) {
+  final departure = record.startTime.trim();
+
+  if (departure.isNotEmpty) {
+    return departure;
+  }
+
+  return record.status == ExitPermitStatus.approved
+      ? 'No registraste salida'
+      : 'No disponible';
+}
+
+String _formatEmployeeArrival(ExitPermitRecord record) {
+  final arrival = record.arrivalTime.trim();
+
+  if (arrival.isNotEmpty) {
+    return arrival;
+  }
+
+  if (record.status != ExitPermitStatus.approved) {
+    return 'No disponible';
+  }
+
+  return record.startTime.trim().isEmpty
+      ? 'Primero debes registrar tu salida'
+      : 'No registraste llegada';
+}
+
+String _movementStatusText(ExitPermitRecord record) {
+  if (record.status == ExitPermitStatus.pending) {
+    return 'Pendiente de aprobación';
+  }
+
+  if (record.status == ExitPermitStatus.rejected) {
+    return 'Solicitud rechazada';
+  }
+
+  if (record.startTime.trim().isEmpty) {
+    return 'No registró salida';
+  }
+
+  if (record.arrivalTime.trim().isEmpty) {
+    return 'Salió ${record.startTime} · No registró llegada';
+  }
+
+  return 'Retornó ${record.arrivalTime}';
+}
+
+Color _movementStatusColor(ExitPermitRecord record) {
+  if (record.status == ExitPermitStatus.rejected) {
+    return Colors.red.shade700;
+  }
+
+  if (record.status == ExitPermitStatus.approved &&
+      record.arrivalTime.trim().isNotEmpty) {
+    return Colors.green.shade700;
+  }
+
+  return AppPalette.muted;
 }
 
 String _formatDateTime(DateTime date) {
