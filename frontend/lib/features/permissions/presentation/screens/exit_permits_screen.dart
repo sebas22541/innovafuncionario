@@ -444,9 +444,7 @@ class _FuncionarioExitPermitsListState
               Column(
                 children: [
                   for (final record in _records) ...[
-                    _MyExitPermitCard(
-                      record: record,
-                    ),
+                    _MyExitPermitCard(record: record),
                     const SizedBox(height: 12),
                   ],
                 ],
@@ -469,7 +467,6 @@ class _ExitPermitApprovalsList extends StatefulWidget {
 }
 
 class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
-  DateTime _selectedDate = DateTime.now();
   List<ExitPermitRecord> _records = const [];
   bool _isLoading = true;
   int? _reviewingId;
@@ -481,23 +478,6 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
     _load();
   }
 
-  Future<void> _pickDate() async {
-    final now = DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate,
-      firstDate: DateTime(now.year - 1),
-      lastDate: DateTime(now.year + 1),
-    );
-
-    if (picked != null) {
-      setState(() {
-        _selectedDate = picked;
-      });
-      await _load();
-    }
-  }
-
   Future<void> _load() async {
     setState(() {
       _isLoading = true;
@@ -506,7 +486,7 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
 
     try {
       final records = await dependencies.exitPermitsApiService
-          .fetchExitPermitsByDate(_selectedDate);
+          .fetchPendingExitPermits();
 
       if (!mounted) {
         return;
@@ -603,8 +583,6 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
 
   @override
   Widget build(BuildContext context) {
-    final isDirector = _isDirectorUser(widget.currentUser);
-
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(18),
@@ -620,12 +598,6 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
                   'Solicitudes recibidas',
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
-                if (!isDirector)
-                  _PickerButton(
-                    icon: Icons.calendar_month_rounded,
-                    label: _formatDate(_selectedDate),
-                    onTap: _pickDate,
-                  ),
                 OutlinedButton.icon(
                   onPressed: _isLoading ? null : _load,
                   icon: const Icon(Icons.refresh_rounded),
@@ -644,11 +616,7 @@ class _ExitPermitApprovalsListState extends State<_ExitPermitApprovalsList> {
             else if (_errorMessage != null)
               Text(_errorMessage!)
             else if (_records.isEmpty)
-              Text(
-                isDirector
-                    ? 'No tienes solicitudes recibidas.'
-                    : 'No hay solicitudes recibidas en esta fecha.',
-              )
+              const Text('No tienes solicitudes pendientes.')
             else
               _ExitPermitOfficeTable(
                 records: _records,
@@ -1082,9 +1050,7 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
 }
 
 class _MyExitPermitCard extends StatelessWidget {
-  const _MyExitPermitCard({
-    required this.record,
-  });
+  const _MyExitPermitCard({required this.record});
 
   final ExitPermitRecord record;
 
