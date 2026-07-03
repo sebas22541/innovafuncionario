@@ -40,6 +40,7 @@ class _UsersScreenState extends State<UsersScreen> {
   List<AppUser>? _filteredUsersCache;
   OfficeOption? _selectedFilterOffice;
   CargoOption? _selectedFilterCargo;
+  AppUserRole? _selectedFilterRole;
   String? _errorMessage;
   int _currentPage = 0;
 
@@ -60,6 +61,15 @@ class _UsersScreenState extends State<UsersScreen> {
     final query = _searchQuery;
     final selectedOffice = _selectedFilterOffice;
     final selectedCargo = _selectedFilterCargo;
+    final selectedRole = _selectedFilterRole;
+
+    if (selectedRole != null) {
+      final filteredUsers = _users
+          .where((user) => user.role == selectedRole)
+          .toList(growable: false);
+      _filteredUsersCache = filteredUsers;
+      return filteredUsers;
+    }
 
     if (selectedCargo != null) {
       final filteredUsers = _users
@@ -147,6 +157,7 @@ class _UsersScreenState extends State<UsersScreen> {
       setState(() {
         _searchQuery = nextQuery;
         _selectedFilterCargo = null;
+        _selectedFilterRole = null;
         _currentPage = 0;
         _invalidateUserFilters();
       });
@@ -640,6 +651,7 @@ class _UsersScreenState extends State<UsersScreen> {
     setState(() {
       _selectedFilterOffice = office;
       _selectedFilterCargo = null;
+      _selectedFilterRole = null;
       _currentPage = 0;
       _invalidateUserFilters();
     });
@@ -671,8 +683,25 @@ class _UsersScreenState extends State<UsersScreen> {
     setState(() {
       _selectedFilterCargo = cargo;
       _selectedFilterOffice = null;
+      _selectedFilterRole = null;
       _searchController.clear();
       _searchQuery = '';
+      _currentPage = 0;
+      _invalidateUserFilters();
+    });
+  }
+
+  void _selectFilterRole(AppUserRole? role) {
+    _searchDebounce?.cancel();
+
+    setState(() {
+      _selectedFilterRole = role;
+      if (role != null) {
+        _selectedFilterOffice = null;
+        _selectedFilterCargo = null;
+        _searchController.clear();
+        _searchQuery = '';
+      }
       _currentPage = 0;
       _invalidateUserFilters();
     });
@@ -835,6 +864,11 @@ class _UsersScreenState extends State<UsersScreen> {
                               _invalidateUserFilters();
                             });
                           },
+                  ),
+                  const SizedBox(height: 12),
+                  _RoleFilterField(
+                    selectedRole: _selectedFilterRole,
+                    onChanged: _selectFilterRole,
                   ),
                   if (_errorMessage != null) ...[
                     const SizedBox(height: 14),
@@ -1773,6 +1807,38 @@ class _CargoFilterField extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _RoleFilterField extends StatelessWidget {
+  const _RoleFilterField({required this.selectedRole, required this.onChanged});
+
+  final AppUserRole? selectedRole;
+  final ValueChanged<AppUserRole?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButtonFormField<AppUserRole?>(
+      key: ValueKey(selectedRole),
+      initialValue: selectedRole,
+      decoration: const InputDecoration(
+        labelText: 'Filtrar por rol',
+        prefixIcon: Icon(Icons.manage_accounts_outlined),
+      ),
+      items: [
+        const DropdownMenuItem<AppUserRole?>(
+          value: null,
+          child: Text('Todos los roles'),
+        ),
+        ...AppUserRole.values.map(
+          (role) => DropdownMenuItem<AppUserRole?>(
+            value: role,
+            child: Text(role.label),
+          ),
+        ),
+      ],
+      onChanged: onChanged,
     );
   }
 }

@@ -96,6 +96,8 @@ class EventsApiService {
             (control) => {
               if (control.id != null) 'id': control.id,
               'nombre': control.name,
+              'horaInicio': control.startTime,
+              'horaFin': control.endTime,
             },
           )
           .toList(growable: false),
@@ -131,6 +133,8 @@ class EventsApiService {
             (control) => {
               if (control.id != null) 'id': control.id,
               'nombre': control.name,
+              'horaInicio': control.startTime,
+              'horaFin': control.endTime,
             },
           )
           .toList(growable: false),
@@ -437,6 +441,8 @@ class EventsApiService {
       id: _readInt(source['id'], 'control.id'),
       name: _readString(source['nombre'], 'control.nombre'),
       order: _readInt(source['orden'], 'control.orden'),
+      startTime: _readNullableString(source['horaInicio']),
+      endTime: _readNullableString(source['horaFin']),
     );
   }
 

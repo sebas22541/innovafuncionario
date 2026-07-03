@@ -881,6 +881,10 @@ class _ControlRegistrationCard extends StatelessWidget {
     final isSubmittingObserved = submittingActionKey == observedKey;
     final isBusy = submittingActionKey != null;
     final hasExistingRecord = existingControl != null;
+    final isWithinTimeWindow = _isWithinControlTimeWindow(
+      control,
+      DateTime.now(),
+    );
     final isExistingAttended = existingControl?.isAttended == true;
     final statusAccent = hasExistingRecord
         ? isExistingAttended
@@ -904,6 +908,16 @@ class _ControlRegistrationCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(control.name, style: Theme.of(context).textTheme.titleMedium),
+          if (control.hasTimeWindow) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Horario permitido: ${control.timeWindowLabel}',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppPalette.muted,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           if (hasExistingRecord)
             Container(
@@ -944,6 +958,23 @@ class _ControlRegistrationCard extends StatelessWidget {
                     ),
                   ),
                 ],
+              ),
+            )
+          else if (!isWithinTimeWindow)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppPalette.orangeSoft,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppPalette.line),
+              ),
+              child: Text(
+                'Este control solo permite registrar asistencia de ${control.timeWindowLabel}.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppPalette.night,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             )
           else if (allowAttended)
@@ -1003,4 +1034,37 @@ class _ControlRegistrationCard extends StatelessWidget {
       ),
     );
   }
+}
+
+bool _isWithinControlTimeWindow(EventControl control, DateTime now) {
+  if (!control.hasTimeWindow) {
+    return true;
+  }
+
+  final currentTime = now.hour * 60 + now.minute;
+  final startTime = _timeTextToMinutes(control.startTime);
+  final endTime = _timeTextToMinutes(control.endTime);
+
+  if (startTime == null || endTime == null) {
+    return false;
+  }
+
+  return currentTime >= startTime && currentTime <= endTime;
+}
+
+int? _timeTextToMinutes(String? value) {
+  final match = RegExp(r'^(\d{2}):(\d{2})$').firstMatch(value ?? '');
+  final hour = int.tryParse(match?.group(1) ?? '');
+  final minute = int.tryParse(match?.group(2) ?? '');
+
+  if (hour == null ||
+      minute == null ||
+      hour < 0 ||
+      hour > 23 ||
+      minute < 0 ||
+      minute > 59) {
+    return null;
+  }
+
+  return hour * 60 + minute;
 }

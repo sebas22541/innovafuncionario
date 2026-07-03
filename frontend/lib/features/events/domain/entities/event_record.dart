@@ -5,18 +5,34 @@ class EventControl {
     required this.id,
     required this.name,
     required this.order,
+    this.startTime,
+    this.endTime,
   });
 
   final int id;
   final String name;
   final int order;
+  final String? startTime;
+  final String? endTime;
+
+  bool get hasTimeWindow => startTime != null && endTime != null;
+
+  String get timeWindowLabel =>
+      hasTimeWindow ? '$startTime a $endTime' : 'Sin restriccion horaria';
 }
 
 class EventControlDraft {
-  const EventControlDraft({required this.name, this.id});
+  const EventControlDraft({
+    required this.name,
+    required this.startTime,
+    required this.endTime,
+    this.id,
+  });
 
   final int? id;
   final String name;
+  final String startTime;
+  final String endTime;
 }
 
 class EventAttendanceControl {

@@ -2112,6 +2112,9 @@ const server = http.createServer(async (request, response) => {
         );
       }
 
+      const registeredAt = new Date();
+      assertControlRegistrationWindow(evento, selectedControl, registeredAt);
+
       const persona = isCiRegistration
         ? await findPersonByCi(input.ci!)
         : await resolvePersonByQrValue(scannedValue, lookupCode);
@@ -2123,7 +2126,6 @@ const server = http.createServer(async (request, response) => {
       await assertPersonCanAttendEvent(persona, evento);
 
       const operador = await assertEventOperator(authenticatedUser.id);
-      const registeredAt = new Date();
       const resolvedObservation = buildAttendanceObservation(input);
       const qrSnapshot = buildAttendanceQrSnapshot(
         persona,
@@ -2545,6 +2547,8 @@ type EventControlInput = {
   id: number | null;
   nombre: string;
   orden: number;
+  horaInicio: string;
+  horaFin: string;
 };
 
 type ExpandedEventOffice = {
@@ -3351,6 +3355,12 @@ function safeEqualText(left: string, right: string) {
 
 async function ensureRuntimeSchema() {
   await pool.query(`
+    ALTER TABLE "evento_controles"
+      ADD COLUMN IF NOT EXISTS "hora_inicio" VARCHAR(5),
+      ADD COLUMN IF NOT EXISTS "hora_fin" VARCHAR(5)
+  `);
+
+  await pool.query(`
     ALTER TABLE "usuarios"
     ADD COLUMN IF NOT EXISTS "oficina_comision_id" INTEGER
   `);
@@ -4107,11 +4117,22 @@ function parseEventControlsInput(source: JsonRecord): EventControlInput[] {
 
   return rawControls.map((item, index) => {
     const control = expectRecord(item);
+    const horaInicio = readRequiredTimeText(control, "horaInicio");
+    const horaFin = readRequiredTimeText(control, "horaFin");
+
+    if (horaInicio >= horaFin) {
+      throw new HttpError(
+        400,
+        `La hora final del control ${index + 1} debe ser posterior a la hora inicial.`,
+      );
+    }
 
     return {
       id: readOptionalInt(control, "id"),
       nombre: readRequiredString(control, "nombre", 2, 120),
       orden: index + 1,
+      horaInicio,
+      horaFin,
     };
   });
 }
@@ -4207,6 +4228,8 @@ async function createEventControls(
       evento_id: eventId,
       nombre: control.nombre,
       orden: control.orden,
+      hora_inicio: control.horaInicio,
+      hora_fin: control.horaFin,
     })),
   });
 }
@@ -4241,6 +4264,8 @@ async function getEventAttendanceContext(eventId: number) {
           id: true,
           nombre: true,
           orden: true,
+          hora_inicio: true,
+          hora_fin: true,
         },
         orderBy: {
           orden: "asc",
@@ -4400,6 +4425,8 @@ async function syncEventControls(
         data: {
           nombre: control.nombre,
           orden: control.orden,
+          hora_inicio: control.horaInicio,
+          hora_fin: control.horaFin,
           updated_at: new Date(),
         },
       });
@@ -4411,6 +4438,8 @@ async function syncEventControls(
         evento_id: eventId,
         nombre: control.nombre,
         orden: control.orden,
+        hora_inicio: control.horaInicio,
+        hora_fin: control.horaFin,
       },
     });
   }
@@ -7561,6 +7590,51 @@ function formatTimeInAppTimeZone(date: Date) {
   }).format(date);
 }
 
+function assertControlRegistrationWindow(
+  event: { fecha_evento: Date },
+  control: {
+    nombre: string;
+    hora_inicio?: string | null;
+    hora_fin?: string | null;
+  },
+  registeredAt: Date,
+) {
+  const startTime = control.hora_inicio ?? null;
+  const endTime = control.hora_fin ?? null;
+
+  // Los controles creados antes de esta funcionalidad no tienen rango.
+  if (startTime == null && endTime == null) {
+    return;
+  }
+
+  if (
+    startTime == null ||
+    endTime == null ||
+    !isValidTimeText(startTime) ||
+    !isValidTimeText(endTime)
+  ) {
+    throw new HttpError(
+      409,
+      `El control "${control.nombre}" no tiene un rango horario valido.`,
+    );
+  }
+
+  const eventDate = formatDateInAppTimeZone(event.fecha_evento);
+  const currentDate = formatDateInAppTimeZone(registeredAt);
+  const currentTime = formatTimeInAppTimeZone(registeredAt);
+
+  if (
+    currentDate !== eventDate ||
+    currentTime < startTime ||
+    currentTime > endTime
+  ) {
+    throw new HttpError(
+      409,
+      `El control "${control.nombre}" solo permite registrar asistencia de ${startTime} a ${endTime}.`,
+    );
+  }
+}
+
 function buildQrLookupCandidates(scannedValue: string, providedLookupCode?: string) {
   // Orden de candidatos:
   // 1. lookupCode extraido del payload/URL/texto.
@@ -9596,11 +9670,15 @@ function serializeEventControl(control: {
   id: number;
   nombre: string;
   orden: number;
+  hora_inicio?: string | null;
+  hora_fin?: string | null;
 }) {
   return {
     id: control.id,
     nombre: control.nombre,
     orden: control.orden,
+    horaInicio: control.hora_inicio ?? null,
+    horaFin: control.hora_fin ?? null,
   };
 }
 

@@ -1266,10 +1266,17 @@ class _CreateEventDialog extends StatefulWidget {
 }
 
 class _EditableEventControl {
-  _EditableEventControl({required this.controller, this.id});
+  _EditableEventControl({
+    required this.controller,
+    required this.startTime,
+    required this.endTime,
+    this.id,
+  });
 
   final int? id;
   final TextEditingController controller;
+  TimeOfDay startTime;
+  TimeOfDay endTime;
 }
 
 class _EventOfficeSelectionResult {
@@ -1364,19 +1371,32 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
         selection.officeId: selection.jobTitleCodes.toSet(),
     };
     final initialControls = widget.initialEvent?.controls ?? const [];
+    final defaultControlEndTime = _addMinutesToTime(_selectedStartTime, 15);
     _controls = initialControls.isEmpty
         ? [
             _EditableEventControl(
               controller: TextEditingController(text: 'Primer control'),
+              startTime: _selectedStartTime,
+              endTime: defaultControlEndTime,
             ),
           ]
         : initialControls
-              .map(
-                (control) => _EditableEventControl(
+              .map((control) {
+                final controlStartTime = _parseTimeOfDay(
+                  control.startTime,
+                  _selectedStartTime,
+                );
+
+                return _EditableEventControl(
                   id: control.id,
                   controller: TextEditingController(text: control.name),
-                ),
-              )
+                  startTime: controlStartTime,
+                  endTime: _parseTimeOfDay(
+                    control.endTime,
+                    _addMinutesToTime(controlStartTime, 15),
+                  ),
+                );
+              })
               .toList(growable: true);
 
     if (widget.initialEvent == null) {
@@ -1563,14 +1583,40 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
   }
 
   void _addControl() {
+    final suggestedStartTime = _controls.isEmpty
+        ? _selectedStartTime
+        : _controls.last.endTime;
+
     setState(() {
       _controls.add(
         _EditableEventControl(
           controller: TextEditingController(
             text: 'Control ${_controls.length + 1}',
           ),
+          startTime: suggestedStartTime,
+          endTime: _addMinutesToTime(suggestedStartTime, 15),
         ),
       );
+    });
+  }
+
+  Future<void> _pickControlTime(int index, {required bool isStartTime}) async {
+    final control = _controls[index];
+    final pickedTime = await showTimePicker(
+      context: context,
+      initialTime: isStartTime ? control.startTime : control.endTime,
+    );
+
+    if (pickedTime == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      if (isStartTime) {
+        control.startTime = pickedTime;
+      } else {
+        control.endTime = pickedTime;
+      }
     });
   }
 
@@ -1592,6 +1638,8 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
           (control) => EventControlDraft(
             id: control.id,
             name: control.controller.text.trim(),
+            startTime: _formatTimeOfDay(control.startTime),
+            endTime: _formatTimeOfDay(control.endTime),
           ),
         )
         .toList(growable: false);
@@ -1609,6 +1657,11 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
         trimmedAddress.isEmpty ||
         !hasAudienceSelection ||
         controls.any((control) => control.name.isEmpty) ||
+        _controls.any(
+          (control) =>
+              _timeOfDayToMinutes(control.endTime) <=
+              _timeOfDayToMinutes(control.startTime),
+        ) ||
         _selectedLocation == null) {
       setState(() {
         _showValidation = true;
@@ -2385,7 +2438,7 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Agrega todos los controles que tendra este evento. Cada control tendra sus propios botones de Asistio y Observado al escanear el QR.',
+                        'Agrega los controles y define el rango horario en el que se permitira registrar asistencia para cada uno.',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                       const SizedBox(height: 8),
@@ -2398,9 +2451,16 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                             color:
                                 _showValidation &&
                                     _controls.any(
-                                      (control) => control.controller.text
-                                          .trim()
-                                          .isEmpty,
+                                      (control) =>
+                                          control.controller.text
+                                              .trim()
+                                              .isEmpty ||
+                                          _timeOfDayToMinutes(
+                                                control.endTime,
+                                              ) <=
+                                              _timeOfDayToMinutes(
+                                                control.startTime,
+                                              ),
                                     )
                                 ? const Color(0xFFD94841)
                                 : AppPalette.line,
@@ -2461,6 +2521,56 @@ class _CreateEventDialogState extends State<_CreateEventDialog> {
                                             : null,
                                       ),
                                     ),
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: OutlinedButton.icon(
+                                            onPressed: () => _pickControlTime(
+                                              index,
+                                              isStartTime: true,
+                                            ),
+                                            icon: const Icon(
+                                              Icons.schedule_rounded,
+                                            ),
+                                            label: Text(
+                                              'Desde ${_formatTimeOfDay(_controls[index].startTime)}',
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: OutlinedButton.icon(
+                                            onPressed: () => _pickControlTime(
+                                              index,
+                                              isStartTime: false,
+                                            ),
+                                            icon: const Icon(
+                                              Icons.schedule_rounded,
+                                            ),
+                                            label: Text(
+                                              'Hasta ${_formatTimeOfDay(_controls[index].endTime)}',
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    if (_showValidation &&
+                                        _timeOfDayToMinutes(
+                                              _controls[index].endTime,
+                                            ) <=
+                                            _timeOfDayToMinutes(
+                                              _controls[index].startTime,
+                                            )) ...[
+                                      const SizedBox(height: 8),
+                                      const Text(
+                                        'La hora final debe ser posterior a la hora inicial.',
+                                        style: TextStyle(
+                                          color: Color(0xFFD94841),
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -5039,4 +5149,29 @@ String _formatTimeOfDay(TimeOfDay time) {
   final minute = time.minute.toString().padLeft(2, '0');
 
   return '$hour:$minute';
+}
+
+int _timeOfDayToMinutes(TimeOfDay time) => time.hour * 60 + time.minute;
+
+TimeOfDay _addMinutesToTime(TimeOfDay time, int minutes) {
+  final totalMinutes = (_timeOfDayToMinutes(time) + minutes) % (24 * 60);
+
+  return TimeOfDay(hour: totalMinutes ~/ 60, minute: totalMinutes % 60);
+}
+
+TimeOfDay _parseTimeOfDay(String? value, TimeOfDay fallback) {
+  final match = RegExp(r'^(\d{2}):(\d{2})$').firstMatch(value ?? '');
+  final hour = int.tryParse(match?.group(1) ?? '');
+  final minute = int.tryParse(match?.group(2) ?? '');
+
+  if (hour == null ||
+      minute == null ||
+      hour < 0 ||
+      hour > 23 ||
+      minute < 0 ||
+      minute > 59) {
+    return fallback;
+  }
+
+  return TimeOfDay(hour: hour, minute: minute);
 }

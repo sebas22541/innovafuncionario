@@ -142,6 +142,8 @@ model evento_controles {
   evento_id            Int
   nombre               String                 @db.VarChar(120)
   orden                Int
+  hora_inicio          String?                @db.VarChar(5)
+  hora_fin             String?                @db.VarChar(5)
   created_at           DateTime               @default(now()) @db.Timestamptz(6)
   updated_at           DateTime               @default(now()) @db.Timestamptz(6)
   asistencia_controles asistencia_controles[]
