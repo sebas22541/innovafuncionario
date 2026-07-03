@@ -202,7 +202,7 @@ class _RolePortalShellState extends State<RolePortalShell> {
         borderRadius: borderRadius,
         child: Scaffold(
           key: _scaffoldKey,
-          resizeToAvoidBottomInset: false,
+          resizeToAvoidBottomInset: true,
           backgroundColor: _isHome ? Colors.white : AppPalette.night,
           drawerScrimColor: Colors.black.withValues(alpha: 0.28),
           drawer: isLunchControl

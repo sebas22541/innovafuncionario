@@ -321,14 +321,22 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.sizeOf(context).width < 600;
+
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 12 : 20,
+        isMobile ? 12 : 20,
+        isMobile ? 12 : 20,
+        24,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Card(
             child: Padding(
-              padding: const EdgeInsets.all(22),
+              padding: EdgeInsets.all(isMobile ? 16 : 22),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -371,31 +379,54 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      ElevatedButton.icon(
-                        onPressed: _isLoading ? null : _search,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppPalette.orange,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final buttons = [
+                        ElevatedButton.icon(
+                          onPressed: _isLoading ? null : _search,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppPalette.orange,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                          ),
+                          icon: const Icon(Icons.search_rounded),
+                          label: const Text('Buscar'),
                         ),
-                        icon: const Icon(Icons.search_rounded),
-                        label: const Text('Buscar'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _isLoading ? null : _clearFilters,
-                        icon: const Icon(Icons.cleaning_services_outlined),
-                        label: const Text('Limpiar'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _isLoading ? null : _loadData,
-                        icon: const Icon(Icons.refresh_rounded),
-                        label: const Text('Actualizar'),
-                      ),
-                    ],
+                        OutlinedButton.icon(
+                          onPressed: _isLoading ? null : _clearFilters,
+                          icon: const Icon(Icons.cleaning_services_outlined),
+                          label: const Text('Limpiar'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _isLoading ? null : _loadData,
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: const Text('Actualizar'),
+                        ),
+                      ];
+
+                      if (constraints.maxWidth < 420) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (
+                              var index = 0;
+                              index < buttons.length;
+                              index++
+                            ) ...[
+                              buttons[index],
+                              if (index != buttons.length - 1)
+                                const SizedBox(height: 10),
+                            ],
+                          ],
+                        );
+                      }
+
+                      return Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: buttons,
+                      );
+                    },
                   ),
                 ],
               ),
@@ -1279,9 +1310,12 @@ class _CredentialEditableRowState extends State<_CredentialEditableRow> {
               const SizedBox(height: 12),
               _buildMetadata(context),
               const SizedBox(height: 12),
-              _CredentialDownloadButton(
-                isDownloading: widget.isDownloading,
-                onPressed: widget.user.activo ? _download : null,
+              SizedBox(
+                width: double.infinity,
+                child: _CredentialDownloadButton(
+                  isDownloading: widget.isDownloading,
+                  onPressed: widget.user.activo ? _download : null,
+                ),
               ),
             ],
           )

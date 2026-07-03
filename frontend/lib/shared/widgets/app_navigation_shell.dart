@@ -794,7 +794,7 @@ class _MobileAppFrameState extends State<_MobileAppFrame> {
         borderRadius: borderRadius,
         child: Scaffold(
           key: _scaffoldKey,
-          resizeToAvoidBottomInset: false,
+          resizeToAvoidBottomInset: true,
           backgroundColor: AppPalette.cream,
           endDrawer: _MobileNavigationDrawer(
             currentUser: widget.currentUser,

@@ -19,6 +19,40 @@
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="Aplicacion web con menu base y lector QR.">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+
+  <style>
+    :root {
+      --app-height: 100dvh;
+      background: #f8f5ef;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: var(--app-height);
+      min-height: var(--app-height);
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #f8f5ef;
+    }
+
+    body {
+      position: fixed;
+      inset: 0;
+    }
+
+    flutter-view {
+      position: absolute !important;
+      inset: 0;
+      width: 100% !important;
+      height: 100% !important;
+    }
+  </style>
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -33,6 +67,50 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <script>
+    // Chrome movil puede conservar la altura reducida del teclado y dejar
+    // una zona blanca. Sincronizar el host de Flutter con visualViewport
+    // mantiene la aplicacion ocupando exactamente el alto visible.
+    (function () {
+      var pendingFrame = 0;
+
+      function syncViewportHeight() {
+        if (pendingFrame) {
+          window.cancelAnimationFrame(pendingFrame);
+        }
+
+        pendingFrame = window.requestAnimationFrame(function () {
+          var viewport = window.visualViewport;
+          var height = viewport && viewport.height
+            ? viewport.height
+            : window.innerHeight;
+
+          document.documentElement.style.setProperty(
+            '--app-height',
+            Math.round(height) + 'px'
+          );
+          pendingFrame = 0;
+        });
+      }
+
+      window.addEventListener('resize', syncViewportHeight, { passive: true });
+      window.addEventListener('orientationchange', syncViewportHeight, {
+        passive: true,
+      });
+      window.addEventListener('pageshow', syncViewportHeight, { passive: true });
+
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', syncViewportHeight, {
+          passive: true,
+        });
+        window.visualViewport.addEventListener('scroll', syncViewportHeight, {
+          passive: true,
+        });
+      }
+
+      syncViewportHeight();
+    })();
+  </script>
   <script>
     // Reduce browser/password-manager overlays on Flutter Web text inputs.
     // Chrome may still show security warnings it owns, but these attributes
