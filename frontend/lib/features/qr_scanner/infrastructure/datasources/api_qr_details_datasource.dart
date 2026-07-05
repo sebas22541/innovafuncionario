@@ -13,8 +13,8 @@ class ApiQrDetailsDataSource implements QrDetailsDataSource {
     int? eventId,
   }) async {
     try {
-      // El scanner nunca consulta por la imagen del QR.
-      // Solo envia el lookupCode normalizado para que el backend resuelva la persona.
+      // Envia el contenido completo leido por la camara para que el backend
+      // distinga un QR dinamico de un QR de credencial impresa.
       final query = eventId == null ? '' : '?eventId=$eventId';
       final payload = await _apiClient.getJson(
         '/api/personas/qr/${Uri.encodeComponent(lookupCode)}$query',

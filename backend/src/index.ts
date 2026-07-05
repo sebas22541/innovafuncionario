@@ -2083,7 +2083,7 @@ const server = http.createServer(async (request, response) => {
         : extractLookupCode(scannedValue);
 
       if (!isCiRegistration) {
-        assertScannedQrIsDynamic(scannedValue);
+        assertScannedQrCanRegisterAttendance(scannedValue);
       }
 
       if (!lookupCode) {
@@ -2358,7 +2358,7 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
-      assertScannedQrIsDynamic(codigoQr);
+      assertScannedQrCanRegisterAttendance(codigoQr);
 
       const persona = await findPersonByScannedValue(codigoQr);
       const eventId = readOptionalQueryInt(url, "eventId");
@@ -7851,22 +7851,44 @@ function isDynamicQrExpired(payload: DynamicQrPayload) {
   return payload.expiresAt.getTime() <= Date.now();
 }
 
-function assertScannedQrIsDynamic(scannedValue: string) {
+function assertScannedQrCanRegisterAttendance(scannedValue: string) {
   const dynamicQr = tryParseDynamicQrPayload(scannedValue);
 
-  if (dynamicQr == null) {
-    throw new HttpError(
-      400,
-      "Solo se puede registrar asistencia con el QR generado por el funcionario.",
-    );
+  if (dynamicQr != null) {
+    if (isDynamicQrExpired(dynamicQr)) {
+      throw new HttpError(
+        410,
+        "No se puede realizar el escaneo porque el QR esta caduco. Vuelve a cargar tu QR e intentalo otra vez.",
+      );
+    }
+
+    return;
   }
 
-  if (isDynamicQrExpired(dynamicQr)) {
-    throw new HttpError(
-      410,
-      "No se puede realizar el escaneo porque el QR esta caduco. Vuelve a cargar tu QR e intentalo otra vez.",
-    );
+  if (isPrintedCredentialQr(scannedValue)) {
+    return;
   }
+
+  throw new HttpError(
+    400,
+    "Solo se puede registrar asistencia con el QR del funcionario o el QR impreso en su credencial.",
+  );
+}
+
+function isPrintedCredentialQr(scannedValue: string) {
+  const uri = UriTryParse(scannedValue.trim());
+
+  if (
+    uri == null ||
+    uri.protocol !== "https:" ||
+    uri.hostname.toLowerCase() !== "res.cloudinary.com"
+  ) {
+    return false;
+  }
+
+  const decodedPath = safeDecodeUriComponent(uri.pathname);
+  return /\/imagenes\/credenciales\/credencial-frente-pdf-[^/]+(?:\.jpg)?$/i
+    .test(decodedPath);
 }
 
 function tryParseQrPayloadRecord(scannedValue: string) {
