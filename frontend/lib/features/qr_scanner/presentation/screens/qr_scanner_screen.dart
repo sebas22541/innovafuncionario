@@ -40,9 +40,11 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
   final MobileScannerController _controller = MobileScannerController(
     autoStart: true,
     facing: CameraFacing.back,
+    cameraResolution: const Size(1280, 720),
     detectionSpeed: DetectionSpeed.normal,
-    detectionTimeoutMs: 800,
+    detectionTimeoutMs: 250,
     formats: const [BarcodeFormat.qrCode],
+    autoZoom: true,
   );
 
   QrScanResultModel? _lastScanModel;
@@ -452,12 +454,23 @@ class _ScannerViewport extends StatelessWidget {
                 child: Stack(
                   children: [
                     Positioned.fill(
-                      child: MobileScanner(
-                        controller: controller,
-                        fit: BoxFit.cover,
-                        onDetect: onDetect,
-                        errorBuilder: (context, error) {
-                          return _ScannerErrorState(error: error);
+                      child: LayoutBuilder(
+                        builder: (context, scannerConstraints) {
+                          final scanWindow = buildQrScanWindow(
+                            scannerConstraints.biggest,
+                          );
+
+                          return MobileScanner(
+                            controller: controller,
+                            fit: BoxFit.cover,
+                            scanWindow: scanWindow,
+                            scanWindowUpdateThreshold: 8,
+                            tapToFocus: true,
+                            onDetect: onDetect,
+                            errorBuilder: (context, error) {
+                              return _ScannerErrorState(error: error);
+                            },
+                          );
                         },
                       ),
                     ),

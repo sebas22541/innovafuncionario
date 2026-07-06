@@ -4,6 +4,18 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_palette.dart';
 
+Rect buildQrScanWindow(Size size) {
+  final scanSize = math
+      .min(size.width * 0.62, size.height * 0.62)
+      .clamp(220.0, 340.0);
+
+  return Rect.fromCenter(
+    center: Offset(size.width / 2, size.height / 2 - 8),
+    width: scanSize,
+    height: scanSize,
+  );
+}
+
 class QrScannerOverlay extends StatefulWidget {
   const QrScannerOverlay({super.key, required this.isActive});
 
@@ -30,17 +42,8 @@ class _QrScannerOverlayState extends State<QrScannerOverlay>
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final scanSize = math
-            .min(constraints.maxWidth * 0.62, constraints.maxHeight * 0.62)
-            .clamp(220.0, 340.0);
-
-        final scanRect = Rect.fromCenter(
-          center: Offset(
-            constraints.maxWidth / 2,
-            constraints.maxHeight / 2 - 8,
-          ),
-          width: scanSize,
-          height: scanSize,
+        final scanRect = buildQrScanWindow(
+          Size(constraints.maxWidth, constraints.maxHeight),
         );
 
         return Stack(
