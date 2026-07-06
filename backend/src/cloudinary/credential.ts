@@ -399,7 +399,7 @@ function drawBackPageQr(page: any, input: {
   const { width, height } = page.getSize();
   const qrSize = Math.min(width * 0.48, height * 0.32);
   const x = (width - qrSize) / 2;
-  const y = height * 0.04;
+  const y = height * 0.025;
 
   page.drawImage(input.qrImage, {
     x,
