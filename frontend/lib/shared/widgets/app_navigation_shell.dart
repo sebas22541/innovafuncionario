@@ -14,6 +14,7 @@ import '../../features/lunches/presentation/screens/lunches_screen.dart';
 import '../../features/notifications/infrastructure/services/notifications_api_service.dart';
 import '../../features/notifications/presentation/screens/notifications_screen.dart';
 import '../../features/permissions/presentation/screens/exit_permits_screen.dart';
+import '../../features/ratings/presentation/screens/ratings_screen.dart';
 import '../../features/qr_scanner/presentation/screens/qr_scanner_screen.dart';
 import '../../features/reports/presentation/screens/qr_generation_map_screen.dart';
 import '../../features/reports/presentation/screens/reports_screen.dart';
@@ -396,6 +397,14 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       case AppSection.home:
         return _currentUser.isAdmin
             ? const HomeScreen()
+            : RolePortalHomeContent(
+                currentUser: _currentUser,
+                entries: _portalEntriesForUser(_currentUser),
+                onSelected: _handleSectionSelection,
+              );
+      case AppSection.ratings:
+        return _currentUser.isAdmin
+            ? RatingsScreen(currentUser: _currentUser)
             : RolePortalHomeContent(
                 currentUser: _currentUser,
                 entries: _portalEntriesForUser(_currentUser),
@@ -2207,6 +2216,7 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
   if (user.isAdmin) {
     return const [
       AppSection.home,
+      AppSection.ratings,
       AppSection.events,
       AppSection.reports,
       AppSection.map,
@@ -2263,6 +2273,7 @@ bool _isAttendanceSection(AppSection section) {
     case AppSection.credentials:
       return true;
     case AppSection.home:
+    case AppSection.ratings:
     case AppSection.availableEvents:
     case AppSection.permissionExits:
     case AppSection.cellPhones:
@@ -2296,6 +2307,7 @@ bool _isPermissionSection(AppSection section) {
     case AppSection.lunches:
       return true;
     case AppSection.home:
+    case AppSection.ratings:
     case AppSection.events:
     case AppSection.availableEvents:
     case AppSection.reports:
@@ -2356,6 +2368,8 @@ String _sectionTitleForUser(AppUser user, AppSection section) {
     switch (section) {
       case AppSection.home:
         return 'Inicio';
+      case AppSection.ratings:
+        return section.title;
       case AppSection.events:
         return 'Eventos';
       case AppSection.qrScanner:
@@ -2406,6 +2420,8 @@ String _sectionLabelForUser(AppUser user, AppSection section) {
     switch (section) {
       case AppSection.home:
         return 'Inicio';
+      case AppSection.ratings:
+        return section.label;
       case AppSection.qrScanner:
         return 'Escanear QR';
       case AppSection.myQr:
@@ -2458,6 +2474,8 @@ IconData _sectionIconForUser(AppUser user, AppSection section) {
     switch (section) {
       case AppSection.home:
         return Icons.home_rounded;
+      case AppSection.ratings:
+        return section.icon;
       case AppSection.events:
         return Icons.event_note_rounded;
       case AppSection.qrScanner:

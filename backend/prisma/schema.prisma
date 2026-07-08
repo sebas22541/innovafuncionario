@@ -243,6 +243,7 @@ model usuarios {
   celulares_logout      celulares_asistencia[] @relation("CelularLogoutSolicitante")
   notificaciones         notificaciones[]
   notificacion_envios    notificacion_envios[]
+  calificaciones_funcionario calificaciones_funcionario[] @relation("CalificacionFuncionario")
 
   @@index([cargo_codigo], map: "idx_usuarios_cargo_codigo")
   @@index([subcargo_codigo], map: "idx_usuarios_subcargo_codigo")
@@ -260,6 +261,30 @@ model notificacion_tokens {
   usuarios   usuarios @relation(fields: [usuario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([usuario_id], map: "idx_notificacion_tokens_usuario_id")
+}
+
+model calificaciones_funcionario {
+  id                          Int      @id @default(autoincrement())
+  funcionario_id              Int
+  fecha                       DateTime @db.Date
+  calificacion                String   @db.VarChar(20)
+  comentario                  String?  @db.Text
+  device_id_hash              String   @db.VarChar(64)
+  device_label                String?  @db.VarChar(255)
+  user_agent                  String?  @db.Text
+  ip_hash                     String?  @db.VarChar(64)
+  funcionario_nombre_completo String   @db.VarChar(220)
+  funcionario_ci              String?  @db.VarChar(30)
+  funcionario_cargo           String?  @db.VarChar(120)
+  funcionario_oficina_id      Int?
+  funcionario_oficina         String?  @db.VarChar(150)
+  created_at                  DateTime @default(now()) @db.Timestamptz(6)
+  funcionario                 usuarios @relation("CalificacionFuncionario", fields: [funcionario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([funcionario_id, fecha, device_id_hash])
+  @@index([fecha], map: "idx_calificaciones_funcionario_fecha")
+  @@index([funcionario_id, fecha], map: "idx_calificaciones_funcionario_funcionario_fecha")
+  @@index([calificacion], map: "idx_calificaciones_funcionario_calificacion")
 }
 
 model notificaciones {

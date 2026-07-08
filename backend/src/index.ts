@@ -107,6 +107,13 @@ const DYNAMIC_QR_SIGNING_SECRET =
 const FIREBASE_SERVICE_ACCOUNT_JSON = normalizeOptionalEnvValue(
   process.env.FIREBASE_SERVICE_ACCOUNT_JSON,
 );
+const PUBLIC_FRONTEND_URL = normalizeOptionalEnvValue(
+  process.env.PUBLIC_FRONTEND_URL,
+) ?? "https://innovafuncionario.cochabamba.bo";
+const CALIFICACION_QR_SECRET =
+  process.env.CALIFICACION_QR_SECRET ??
+  createHash("sha256").update(`${DATABASE_URL}:calificaciones`).digest("hex");
+const CALIFICACION_QR_VERSION = "CAL1";
 
 // INICIO SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
 const FUNCIONARIO_CI_SERVICE_TOKEN_SHA256 = normalizeOptionalEnvValue(
@@ -361,6 +368,37 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
+
+    const publicRatingMatch = /^\/api\/calificaciones\/publica\/([^/]+)$/.exec(
+      url.pathname,
+    );
+    if (request.method === "GET" && publicRatingMatch) {
+      const token = decodeURIComponent(publicRatingMatch[1] ?? "");
+      const funcionario = await resolveRatingTokenFuncionario(token);
+
+      sendJson(response, 200, {
+        data: {
+          funcionario: serializeRatingFuncionario(funcionario),
+        },
+      });
+      return;
+    }
+
+    if (request.method === "POST" && publicRatingMatch) {
+      const token = decodeURIComponent(publicRatingMatch[1] ?? "");
+      const funcionario = await resolveRatingTokenFuncionario(token);
+      const input = parseSubmitFuncionarioRatingInput(await readJsonBody(request));
+      const result = await submitFuncionarioRating({
+        funcionario,
+        input,
+        request,
+      });
+
+      sendJson(response, 201, {
+        data: result,
+      });
+      return;
+    }
 
     if (request.method === "POST" && url.pathname === "/api/auth/register") {
       const requester = await assertAdminRequester(
@@ -1230,6 +1268,46 @@ const server = http.createServer(async (request, response) => {
 
       sendJson(response, 200, {
         data: usuarios.map((user) => serializeAppUser(user)),
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/calificaciones") {
+      const requester = await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede consultar calificaciones.",
+      );
+      const fecha = readOptionalQueryDateOnly(url, "fecha") ?? getAppDateOnlyText();
+      const rows = await loadFuncionarioRatingsSummary(requester, fecha);
+
+      sendJson(response, 200, {
+        data: {
+          fecha,
+          funcionarios: rows,
+        },
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/calificaciones/qr") {
+      const requester = await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede generar QR de calificaciones.",
+      );
+      const input = parseGenerateFuncionarioRatingQrInput(await readJsonBody(request));
+      const funcionario = await loadFuncionarioForRatingAdmin(
+        input.funcionarioId,
+        requester,
+      );
+      const token = buildFuncionarioRatingToken(funcionario.id);
+      const urlCalificacion = buildFuncionarioRatingUrl(token);
+
+      sendJson(response, 200, {
+        data: {
+          funcionario: serializeRatingFuncionario(funcionario),
+          token,
+          url: urlCalificacion,
+        },
       });
       return;
     }
@@ -3152,6 +3230,13 @@ function isPublicRoute(request: IncomingMessage, url: URL) {
     return true;
   }
 
+  if (
+    (request.method === "GET" || request.method === "POST") &&
+    /^\/api\/calificaciones\/publica\/[^/]+$/.test(url.pathname)
+  ) {
+    return true;
+  }
+
   return false;
 }
 
@@ -3866,6 +3951,60 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_salidas_usuario_id"
       ON "salidas" ("usuario_id")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "calificaciones_funcionario" (
+      "id" SERIAL PRIMARY KEY,
+      "funcionario_id" INTEGER NOT NULL,
+      "fecha" DATE NOT NULL,
+      "calificacion" VARCHAR(20) NOT NULL,
+      "comentario" TEXT,
+      "device_id_hash" VARCHAR(64) NOT NULL,
+      "device_label" VARCHAR(255),
+      "user_agent" TEXT,
+      "ip_hash" VARCHAR(64),
+      "funcionario_nombre_completo" VARCHAR(220) NOT NULL,
+      "funcionario_ci" VARCHAR(30),
+      "funcionario_cargo" VARCHAR(120),
+      "funcionario_oficina_id" INTEGER,
+      "funcionario_oficina" VARCHAR(150),
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "calificaciones_funcionario_funcionario_id_fkey"
+        FOREIGN KEY ("funcionario_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'calificaciones_funcionario_funcionario_fecha_device_key'
+      ) THEN
+        ALTER TABLE "calificaciones_funcionario"
+          ADD CONSTRAINT "calificaciones_funcionario_funcionario_fecha_device_key"
+          UNIQUE ("funcionario_id", "fecha", "device_id_hash");
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_calificaciones_funcionario_fecha"
+      ON "calificaciones_funcionario" ("fecha")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_calificaciones_funcionario_funcionario_fecha"
+      ON "calificaciones_funcionario" ("funcionario_id", "fecha")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_calificaciones_funcionario_calificacion"
+      ON "calificaciones_funcionario" ("calificacion")
   `);
 }
 
@@ -5547,6 +5686,17 @@ function readOptionalQueryIsoDate(url: URL, key: string) {
   }
 
   return parsedDate;
+}
+
+function readOptionalQueryDateOnly(url: URL, key: string) {
+  const rawValue = url.searchParams.get(key)?.trim();
+
+  if (rawValue == null || rawValue.length === 0) {
+    return null;
+  }
+
+  readDateOnlyString(rawValue, key);
+  return rawValue;
 }
 
 function readRequiredInt(source: JsonRecord, key: string) {
@@ -10312,6 +10462,281 @@ function resolveEffectiveJobTitleName(user: any) {
     normalizeOptionalText(user?.cargo) ??
     null
   );
+}
+
+type SubmitFuncionarioRatingInput = {
+  calificacion: "feliz" | "neutral" | "enojada";
+  comentario: string | null;
+  deviceId: string;
+  deviceLabel: string | null;
+};
+
+function parseGenerateFuncionarioRatingQrInput(payload: unknown) {
+  const body = expectRecord(payload);
+
+  return {
+    funcionarioId: readRequiredInt(body, "funcionarioId"),
+  };
+}
+
+function parseSubmitFuncionarioRatingInput(
+  payload: unknown,
+): SubmitFuncionarioRatingInput {
+  const body = expectRecord(payload);
+  const calificacion = readRequiredString(body, "calificacion", 5, 20)
+    .toLowerCase();
+
+  if (
+    calificacion !== "feliz" &&
+    calificacion !== "neutral" &&
+    calificacion !== "enojada"
+  ) {
+    throw new HttpError(400, "La calificacion enviada no es valida.");
+  }
+
+  return {
+    calificacion,
+    comentario: readOptionalString(body, "comentario", 0, 500),
+    deviceId: readRequiredString(body, "deviceId", 8, 200),
+    deviceLabel: readOptionalString(body, "deviceLabel", 0, 255),
+  };
+}
+
+function buildFuncionarioRatingToken(funcionarioId: number) {
+  const payload = Buffer.from(
+    JSON.stringify({
+      v: CALIFICACION_QR_VERSION,
+      funcionarioId,
+    }),
+  ).toString("base64url");
+  const signature = createHmac("sha256", CALIFICACION_QR_SECRET)
+    .update(payload)
+    .digest("base64url")
+    .slice(0, 32);
+
+  return `${payload}.${signature}`;
+}
+
+function readFuncionarioIdFromRatingToken(token: string) {
+  const normalizedToken = token.trim();
+  const [payload, signature, extra] = normalizedToken.split(".");
+
+  if (!payload || !signature || extra != null) {
+    throw new HttpError(400, "El QR de calificacion no es valido.");
+  }
+
+  const expectedSignature = createHmac("sha256", CALIFICACION_QR_SECRET)
+    .update(payload)
+    .digest("base64url")
+    .slice(0, 32);
+
+  if (!constantTimeEqualText(signature, expectedSignature)) {
+    throw new HttpError(400, "El QR de calificacion no es valido.");
+  }
+
+  let decodedPayload: unknown;
+
+  try {
+    decodedPayload = JSON.parse(Buffer.from(payload, "base64url").toString());
+  } catch {
+    throw new HttpError(400, "El QR de calificacion no es valido.");
+  }
+
+  const body = expectRecord(decodedPayload);
+
+  if (body.v !== CALIFICACION_QR_VERSION) {
+    throw new HttpError(400, "El QR de calificacion no es valido.");
+  }
+
+  return readRequiredInt(body, "funcionarioId");
+}
+
+function buildFuncionarioRatingUrl(token: string) {
+  const publicUrl = new URL(PUBLIC_FRONTEND_URL);
+
+  publicUrl.searchParams.set("calificar", token);
+  return publicUrl.toString();
+}
+
+async function resolveRatingTokenFuncionario(token: string) {
+  const funcionarioId = readFuncionarioIdFromRatingToken(token);
+  const funcionario = await prisma.usuarios.findUnique({
+    where: { id: funcionarioId },
+    include: userWithOfficeInclude,
+  });
+
+  if (!funcionario || funcionario.activo !== true) {
+    throw new HttpError(404, "No se encontro el funcionario a calificar.");
+  }
+
+  return funcionario;
+}
+
+async function loadFuncionarioForRatingAdmin(funcionarioId: number, requester: any) {
+  const funcionario = await prisma.usuarios.findUnique({
+    where: { id: funcionarioId },
+    include: userWithOfficeInclude,
+  });
+
+  if (!funcionario || funcionario.activo !== true) {
+    throw new HttpError(404, "No se encontro el funcionario seleccionado.");
+  }
+
+  assertHealthAdminCanManageUser(requester, funcionario);
+  return funcionario;
+}
+
+function serializeRatingFuncionario(user: any) {
+  return {
+    id: user.id,
+    nombreCompleto: buildUserDisplayName(user),
+    ci: user.ci ?? "",
+    cargo: resolveEffectiveJobTitleName(user) ?? "",
+    oficinaId: resolveLinkedOfficeId(user),
+    oficina: resolveLinkedOfficeName(user) ?? user.unidad ?? "",
+  };
+}
+
+async function submitFuncionarioRating({
+  funcionario,
+  input,
+  request,
+}: {
+  funcionario: any;
+  input: SubmitFuncionarioRatingInput;
+  request: IncomingMessage;
+}) {
+  const fecha = getAppDateOnlyText();
+  const deviceHash = sha256Hex(input.deviceId);
+  const ipHash = sha256Hex(readClientIp(request));
+  const funcionarioOficinaId = resolveLinkedOfficeId(funcionario);
+  const funcionarioOficina = resolveLinkedOfficeName(funcionario) ??
+    funcionario.unidad ??
+    null;
+
+  try {
+    const result = await pool.query(
+      `
+        INSERT INTO "calificaciones_funcionario" (
+          "funcionario_id",
+          "fecha",
+          "calificacion",
+          "comentario",
+          "device_id_hash",
+          "device_label",
+          "user_agent",
+          "ip_hash",
+          "funcionario_nombre_completo",
+          "funcionario_ci",
+          "funcionario_cargo",
+          "funcionario_oficina_id",
+          "funcionario_oficina"
+        )
+        VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        RETURNING "id", "fecha", "calificacion", "created_at"
+      `,
+      [
+        funcionario.id,
+        fecha,
+        input.calificacion,
+        input.comentario,
+        deviceHash,
+        input.deviceLabel,
+        readSingleHeader(request.headers["user-agent"]) ?? null,
+        ipHash,
+        buildUserDisplayName(funcionario),
+        funcionario.ci ?? null,
+        resolveEffectiveJobTitleName(funcionario),
+        funcionarioOficinaId,
+        funcionarioOficina,
+      ],
+    );
+
+    return {
+      registrado: true,
+      calificacion: result.rows[0],
+    };
+  } catch (error: any) {
+    if (error?.code === "23505") {
+      throw new HttpError(
+        409,
+        "Este celular ya califico a este funcionario hoy.",
+      );
+    }
+
+    throw error;
+  }
+}
+
+async function loadFuncionarioRatingsSummary(requester: any, fecha: string) {
+  const params: unknown[] = [fecha];
+  const healthFilter = isHealthAdminUser(requester)
+    ? `AND (
+        principal.nivel = ${HEALTH_OFFICE_LEVEL}
+        OR comision.nivel = ${HEALTH_OFFICE_LEVEL}
+      )`
+    : "";
+  const result = await pool.query(
+    `
+      SELECT
+        u."id" AS "funcionarioId",
+        u."nombre_completo" AS "nombreCompleto",
+        COALESCE(u."subcargo", u."cargo", '') AS "cargo",
+        COALESCE(comision."oficina", principal."oficina", u."unidad", '') AS "oficina",
+        COUNT(c."id")::int AS "total",
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'feliz')::int AS "feliz",
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'neutral')::int AS "neutral",
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'enojada')::int AS "enojada",
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', c."id",
+              'calificacion', c."calificacion",
+              'comentario', COALESCE(c."comentario", ''),
+              'createdAt', c."created_at"
+            )
+            ORDER BY c."created_at" DESC
+          ) FILTER (WHERE c."id" IS NOT NULL),
+          '[]'::json
+        ) AS "comentarios"
+      FROM "usuarios" u
+      LEFT JOIN "oficinas" principal ON principal."id" = u."oficina_id"
+      LEFT JOIN "oficinas" comision ON comision."id" = u."oficina_comision_id"
+      LEFT JOIN "calificaciones_funcionario" c
+        ON c."funcionario_id" = u."id"
+        AND c."fecha" = $1::date
+      WHERE u."activo" = TRUE
+        AND u."email" <> '${SEED_ADMIN_EMAIL.replace(/'/g, "''")}'
+        ${healthFilter}
+      GROUP BY
+        u."id",
+        u."nombre_completo",
+        u."subcargo",
+        u."cargo",
+        u."unidad",
+        comision."oficina",
+        principal."oficina"
+      HAVING COUNT(c."id") > 0
+      ORDER BY "total" DESC, "enojada" DESC, u."nombre_completo" ASC
+    `,
+    params,
+  );
+
+  return result.rows;
+}
+
+function getAppDateOnlyText(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+
+  return `${year}-${month}-${day}`;
 }
 
 function serializeAppUser(user: any, person?: any | null, authToken?: string) {

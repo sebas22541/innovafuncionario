@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 enum AppSection {
   home,
+  ratings,
   events,
   availableEvents,
   reports,
@@ -27,6 +28,8 @@ extension AppSectionX on AppSection {
     switch (this) {
       case AppSection.home:
         return 'Inicio';
+      case AppSection.ratings:
+        return 'Calificaciones';
       case AppSection.events:
         return 'Eventos';
       case AppSection.availableEvents:
@@ -66,6 +69,8 @@ extension AppSectionX on AppSection {
     switch (this) {
       case AppSection.home:
         return 'Panel operativo';
+      case AppSection.ratings:
+        return 'Calificaciones';
       case AppSection.events:
         return 'Gestion de eventos';
       case AppSection.availableEvents:
@@ -105,6 +110,8 @@ extension AppSectionX on AppSection {
     switch (this) {
       case AppSection.home:
         return Icons.home_rounded;
+      case AppSection.ratings:
+        return Icons.sentiment_satisfied_alt_rounded;
       case AppSection.events:
         return Icons.event_note_rounded;
       case AppSection.availableEvents:

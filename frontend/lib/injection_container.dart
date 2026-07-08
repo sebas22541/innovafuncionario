@@ -4,6 +4,7 @@ import 'features/events/infrastructure/services/events_api_service.dart';
 import 'features/lunches/infrastructure/services/lunches_api_service.dart';
 import 'features/notifications/infrastructure/services/notifications_api_service.dart';
 import 'features/permissions/infrastructure/services/exit_permits_api_service.dart';
+import 'features/ratings/infrastructure/services/ratings_api_service.dart';
 import 'features/reports/infrastructure/services/reports_api_service.dart';
 import 'features/qr_scanner/domain/repositories/qr_details_repository.dart';
 import 'features/qr_scanner/domain/usecases/get_qr_details_by_scan.dart';
@@ -25,6 +26,7 @@ Future<void> initDependencies() async {
   final devicesApiService = DevicesApiService(backendApiClient);
   final notificationsApiService = NotificationsApiService(backendApiClient);
   final reportsApiService = ReportsApiService(backendApiClient);
+  final ratingsApiService = RatingsApiService(backendApiClient);
 
   dependencies = AppDependencies._(
     authApiService: authApiService,
@@ -35,6 +37,7 @@ Future<void> initDependencies() async {
     lunchesApiService: lunchesApiService,
     notificationsApiService: notificationsApiService,
     reportsApiService: reportsApiService,
+    ratingsApiService: ratingsApiService,
     qrDetailsDataSource: qrDetailsDataSource,
     qrDetailsRepository: qrDetailsRepository,
     getQrDetailsByScan: GetQrDetailsByScan(qrDetailsRepository),
@@ -51,6 +54,7 @@ class AppDependencies {
     required this.lunchesApiService,
     required this.notificationsApiService,
     required this.reportsApiService,
+    required this.ratingsApiService,
     required this.qrDetailsDataSource,
     required this.qrDetailsRepository,
     required this.getQrDetailsByScan,
@@ -64,6 +68,7 @@ class AppDependencies {
   final LunchesApiService lunchesApiService;
   final NotificationsApiService notificationsApiService;
   final ReportsApiService reportsApiService;
+  final RatingsApiService ratingsApiService;
   final QrDetailsDataSource qrDetailsDataSource;
   final QrDetailsRepository qrDetailsRepository;
   final GetQrDetailsByScan getQrDetailsByScan;
