@@ -19,6 +19,20 @@ class RatingsApiService {
     return RatingReport.fromJson(_readMap(payload['data'], 'data'));
   }
 
+  Future<List<ActiveRatingQr>> fetchActiveQrs() async {
+    final payload = await _apiClient.getJson('/api/calificaciones/qrs');
+    final data = _readMap(payload['data'], 'data');
+    final rows = data['qrs'];
+
+    if (rows is! List) {
+      throw StateError('Los QR activos no tienen un formato valido.');
+    }
+
+    return rows
+        .map((item) => ActiveRatingQr.fromJson(_readMap(item, 'qr')))
+        .toList(growable: false);
+  }
+
   Future<RatingFuncionario> fetchPublicFuncionario(String token) async {
     final payload = await _apiClient.getJson(
       '/api/calificaciones/publica/${Uri.encodeComponent(token)}',
@@ -43,6 +57,43 @@ class RatingsApiService {
           'deviceId': deviceId,
           'deviceLabel': deviceLabel,
         });
+  }
+}
+
+class ActiveRatingQr {
+  const ActiveRatingQr({
+    required this.funcionarioId,
+    required this.nombreCompleto,
+    required this.ci,
+    required this.cargo,
+    required this.oficina,
+    required this.token,
+    required this.url,
+    required this.updatedAt,
+  });
+
+  final int funcionarioId;
+  final String nombreCompleto;
+  final String ci;
+  final String cargo;
+  final String oficina;
+  final String token;
+  final String url;
+  final DateTime updatedAt;
+
+  factory ActiveRatingQr.fromJson(Map<String, dynamic> source) {
+    return ActiveRatingQr(
+      funcionarioId: _readInt(source['funcionarioId'], 'funcionarioId'),
+      nombreCompleto: _readString(source['nombreCompleto'], 'nombreCompleto'),
+      ci: _readString(source['ci'], 'ci'),
+      cargo: _readString(source['cargo'], 'cargo'),
+      oficina: _readString(source['oficina'], 'oficina'),
+      token: _readString(source['token'], 'token'),
+      url: _readString(source['url'], 'url'),
+      updatedAt: DateTime.parse(
+        _readString(source['updatedAt'], 'updatedAt'),
+      ).toLocal(),
+    );
   }
 }
 

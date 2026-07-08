@@ -32,6 +32,7 @@ services:
       PAYLOAD_RESPONSE_ENCRYPTION: ${PAYLOAD_RESPONSE_ENCRYPTION:-true}
       FIREBASE_SERVICE_ACCOUNT_JSON: ${FIREBASE_SERVICE_ACCOUNT_JSON:?Defina FIREBASE_SERVICE_ACCOUNT_JSON en backend/.env.dev antes de desplegar notificaciones}
       QR_DYNAMIC_TTL_SECONDS: ${QR_DYNAMIC_TTL_SECONDS:-1800}
+      PUBLIC_RATING_BASE_URL: ${PUBLIC_RATING_BASE_URL:-https://innovafuncionariodev.cochabamba.bo/calificar}
     ports:
       - "4015:3000"
     volumes:

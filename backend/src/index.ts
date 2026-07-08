@@ -109,7 +109,7 @@ const FIREBASE_SERVICE_ACCOUNT_JSON = normalizeOptionalEnvValue(
 );
 const PUBLIC_RATING_BASE_URL = (
   normalizeOptionalEnvValue(process.env.PUBLIC_RATING_BASE_URL) ??
-  "https://innovafuncionarioapi.cochabamba.bo/calificar"
+  "https://innovafuncionario.cochabamba.bo/calificar"
 ).replace(/\/+$/, "");
 const CALIFICACION_QR_SECRET =
   process.env.CALIFICACION_QR_SECRET ??
@@ -1299,6 +1299,21 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/calificaciones/qrs") {
+      const requester = await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede consultar QR activos de calificaciones.",
+      );
+      const rows = await loadActiveFuncionarioRatingQrs(requester);
+
+      sendJson(response, 200, {
+        data: {
+          qrs: rows,
+        },
+      });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/calificaciones/qr") {
       const requester = await assertAdminRequester(
         authenticatedUser.email,
@@ -1311,6 +1326,11 @@ const server = http.createServer(async (request, response) => {
       );
       const token = buildFuncionarioRatingToken(funcionario.id);
       const urlCalificacion = buildFuncionarioRatingUrl(token);
+      await activateFuncionarioRatingQr({
+        funcionarioId: funcionario.id,
+        token,
+        generatedById: authenticatedUser.id,
+      });
 
       sendJson(response, 200, {
         data: {
@@ -4038,6 +4058,49 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_calificaciones_funcionario_calificacion"
       ON "calificaciones_funcionario" ("calificacion")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "calificacion_funcionario_qrs" (
+      "id" SERIAL PRIMARY KEY,
+      "funcionario_id" INTEGER NOT NULL UNIQUE,
+      "token_hash" VARCHAR(64) NOT NULL,
+      "activo" BOOLEAN NOT NULL DEFAULT TRUE,
+      "generado_por_id" INTEGER,
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "calificacion_funcionario_qrs_funcionario_id_fkey"
+        FOREIGN KEY ("funcionario_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'calificacion_funcionario_qrs_generado_por_id_fkey'
+      ) THEN
+        ALTER TABLE "calificacion_funcionario_qrs"
+          ADD CONSTRAINT "calificacion_funcionario_qrs_generado_por_id_fkey"
+          FOREIGN KEY ("generado_por_id")
+          REFERENCES "usuarios" ("id")
+          ON UPDATE NO ACTION;
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_calificacion_funcionario_qrs_activo"
+      ON "calificacion_funcionario_qrs" ("activo")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_calificacion_funcionario_qrs_updated"
+      ON "calificacion_funcionario_qrs" ("updated_at" DESC)
   `);
 }
 
@@ -10590,6 +10653,22 @@ function buildFuncionarioRatingUrl(token: string) {
 
 async function resolveRatingTokenFuncionario(token: string) {
   const funcionarioId = readFuncionarioIdFromRatingToken(token);
+  const activeQr = await pool.query(
+    `
+      SELECT "id"
+      FROM "calificacion_funcionario_qrs"
+      WHERE "funcionario_id" = $1
+        AND "token_hash" = $2
+        AND "activo" = TRUE
+      LIMIT 1
+    `,
+    [funcionarioId, sha256Hex(token)],
+  );
+
+  if (activeQr.rowCount === 0) {
+    throw new HttpError(404, "El QR de calificacion no esta activo.");
+  }
+
   const funcionario = await prisma.usuarios.findUnique({
     where: { id: funcionarioId },
     include: userWithOfficeInclude,
@@ -10600,6 +10679,37 @@ async function resolveRatingTokenFuncionario(token: string) {
   }
 
   return funcionario;
+}
+
+async function activateFuncionarioRatingQr({
+  funcionarioId,
+  token,
+  generatedById,
+}: {
+  funcionarioId: number;
+  token: string;
+  generatedById: number;
+}) {
+  await pool.query(
+    `
+      INSERT INTO "calificacion_funcionario_qrs" (
+        "funcionario_id",
+        "token_hash",
+        "activo",
+        "generado_por_id",
+        "created_at",
+        "updated_at"
+      )
+      VALUES ($1, $2, TRUE, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT ("funcionario_id")
+      DO UPDATE SET
+        "token_hash" = EXCLUDED."token_hash",
+        "activo" = TRUE,
+        "generado_por_id" = EXCLUDED."generado_por_id",
+        "updated_at" = CURRENT_TIMESTAMP
+    `,
+    [funcionarioId, sha256Hex(token), generatedById],
+  );
 }
 
 async function loadFuncionarioForRatingAdmin(funcionarioId: number, requester: any) {
@@ -11003,6 +11113,45 @@ async function loadFuncionarioRatingsSummary(requester: any, fecha: string) {
   );
 
   return result.rows;
+}
+
+async function loadActiveFuncionarioRatingQrs(requester: any) {
+  const healthFilter = isHealthAdminUser(requester)
+    ? `AND (
+        principal.nivel = ${HEALTH_OFFICE_LEVEL}
+        OR comision.nivel = ${HEALTH_OFFICE_LEVEL}
+      )`
+    : "";
+  const result = await pool.query(
+    `
+      SELECT
+        u."id" AS "funcionarioId",
+        u."nombre_completo" AS "nombreCompleto",
+        COALESCE(u."ci", '') AS "ci",
+        COALESCE(u."subcargo", u."cargo", '') AS "cargo",
+        COALESCE(comision."oficina", principal."oficina", u."unidad", '') AS "oficina",
+        q."updated_at" AS "updatedAt"
+      FROM "calificacion_funcionario_qrs" q
+      INNER JOIN "usuarios" u ON u."id" = q."funcionario_id"
+      LEFT JOIN "oficinas" principal ON principal."id" = u."oficina_id"
+      LEFT JOIN "oficinas" comision ON comision."id" = u."oficina_comision_id"
+      WHERE q."activo" = TRUE
+        AND u."activo" = TRUE
+        AND u."email" <> '${SEED_ADMIN_EMAIL.replace(/'/g, "''")}'
+        ${healthFilter}
+      ORDER BY q."updated_at" DESC, u."nombre_completo" ASC
+    `,
+  );
+
+  return result.rows.map((row) => {
+    const token = buildFuncionarioRatingToken(row.funcionarioId);
+
+    return {
+      ...row,
+      token,
+      url: buildFuncionarioRatingUrl(token),
+    };
+  });
 }
 
 function getAppDateOnlyText(date = new Date()) {

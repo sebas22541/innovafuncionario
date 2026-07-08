@@ -24,9 +24,11 @@ class _RatingsScreenState extends State<RatingsScreen> {
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _dateController = TextEditingController();
   List<AppUser> _users = const [];
+  List<ActiveRatingQr> _activeQrs = const [];
   List<RatingSummary> _report = const [];
   RatingQr? _ratingQr;
   bool _isLoadingUsers = true;
+  bool _isLoadingActiveQrs = true;
   bool _isGenerating = false;
   bool _isLoadingReport = true;
   String _query = '';
@@ -35,11 +37,12 @@ class _RatingsScreenState extends State<RatingsScreen> {
 
   List<AppUser> get _filteredUsers {
     final query = _normalize(_query);
-    final users = _users.where((user) => user.activo).toList(growable: false);
 
-    if (query.isEmpty) {
-      return users.take(30).toList(growable: false);
+    if (query.length < 2) {
+      return const [];
     }
+
+    final users = _users.where((user) => user.activo).toList(growable: false);
 
     return users
         .where(
@@ -56,6 +59,7 @@ class _RatingsScreenState extends State<RatingsScreen> {
     super.initState();
     _dateController.text = _selectedDate;
     _loadUsers();
+    _loadActiveQrs();
     _loadReport();
   }
 
@@ -89,6 +93,30 @@ class _RatingsScreenState extends State<RatingsScreen> {
     } finally {
       if (mounted) {
         setState(() => _isLoadingUsers = false);
+      }
+    }
+  }
+
+  Future<void> _loadActiveQrs() async {
+    setState(() => _isLoadingActiveQrs = true);
+
+    try {
+      final qrs = await dependencies.ratingsApiService.fetchActiveQrs();
+      if (!mounted) {
+        return;
+      }
+      setState(() => _activeQrs = qrs);
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        AppAlert.showError(context, error.message);
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar QR activos.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingActiveQrs = false);
       }
     }
   }
@@ -136,6 +164,7 @@ class _RatingsScreenState extends State<RatingsScreen> {
         return;
       }
       setState(() => _ratingQr = qr);
+      await _loadActiveQrs();
     } on BackendApiException catch (error) {
       if (mounted) {
         AppAlert.showError(context, error.message);
@@ -149,6 +178,22 @@ class _RatingsScreenState extends State<RatingsScreen> {
         setState(() => _isGenerating = false);
       }
     }
+  }
+
+  void _showActiveQr(ActiveRatingQr qr) {
+    setState(() {
+      _ratingQr = RatingQr(
+        funcionario: RatingFuncionario(
+          id: qr.funcionarioId,
+          nombreCompleto: qr.nombreCompleto,
+          ci: qr.ci,
+          cargo: qr.cargo,
+          oficina: qr.oficina,
+        ),
+        token: qr.token,
+        url: qr.url,
+      );
+    });
   }
 
   Future<void> _copyQrUrl() async {
@@ -224,9 +269,10 @@ class _RatingsScreenState extends State<RatingsScreen> {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  if (_isLoadingUsers)
+                  if (_isLoadingUsers && _query.trim().length >= 2)
                     const Center(child: CircularProgressIndicator())
-                  else
+                  else if (_query.trim().length >= 2 &&
+                      _filteredUsers.isNotEmpty)
                     Wrap(
                       spacing: 10,
                       runSpacing: 10,
@@ -241,6 +287,16 @@ class _RatingsScreenState extends State<RatingsScreen> {
                             ),
                           )
                           .toList(growable: false),
+                    )
+                  else if (_query.trim().length >= 2)
+                    const _SearchHint(
+                      icon: Icons.search_off_rounded,
+                      text: 'No se encontraron funcionarios.',
+                    )
+                  else
+                    const _SearchHint(
+                      icon: Icons.manage_search_rounded,
+                      text: 'Escribe al menos 2 letras para buscar.',
                     ),
                   if (qr != null) ...[
                     const SizedBox(height: 22),
@@ -271,6 +327,40 @@ class _RatingsScreenState extends State<RatingsScreen> {
                       ),
                     ),
                   ],
+                  const SizedBox(height: 22),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'QR activos para calificacion',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                      IconButton.filledTonal(
+                        onPressed: _loadActiveQrs,
+                        icon: const Icon(Icons.refresh_rounded),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  if (_isLoadingActiveQrs)
+                    const Center(child: CircularProgressIndicator())
+                  else if (_activeQrs.isEmpty)
+                    const _SearchHint(
+                      icon: Icons.qr_code_2_rounded,
+                      text: 'Todavia no hay QR activos de calificacion.',
+                    )
+                  else
+                    Column(
+                      children: _activeQrs
+                          .map(
+                            (qr) => _ActiveQrTile(
+                              qr: qr,
+                              onTap: () => _showActiveQr(qr),
+                            ),
+                          )
+                          .toList(growable: false),
+                    ),
                 ],
               ),
             ),
@@ -396,6 +486,67 @@ class _RatingSummaryTile extends StatelessWidget {
                 child: Text('- ${comment.comentario}'),
               ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ActiveQrTile extends StatelessWidget {
+  const _ActiveQrTile({required this.qr, required this.onTap});
+
+  final ActiveRatingQr qr;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: AppPalette.surfaceSoft,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: ListTile(
+        onTap: onTap,
+        leading: const Icon(Icons.qr_code_2_rounded),
+        title: Text(
+          qr.nombreCompleto,
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        subtitle: Text(
+          [
+            qr.cargo,
+            qr.oficina,
+          ].where((value) => value.trim().isNotEmpty).join(' | '),
+        ),
+        trailing: const Icon(Icons.chevron_right_rounded),
+      ),
+    );
+  }
+}
+
+class _SearchHint extends StatelessWidget {
+  const _SearchHint({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 18),
+      decoration: BoxDecoration(
+        color: AppPalette.surfaceSoft,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: AppPalette.muted),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text)),
         ],
       ),
     );

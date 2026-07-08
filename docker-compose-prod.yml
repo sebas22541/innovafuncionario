@@ -29,6 +29,7 @@ services:
       PAYLOAD_ENCRYPTION_KEY: ${PAYLOAD_ENCRYPTION_KEY:?Defina PAYLOAD_ENCRYPTION_KEY en el entorno o archivo .env antes de desplegar}
       PAYLOAD_RESPONSE_ENCRYPTION: "true"
       QR_DYNAMIC_TTL_SECONDS: "1800"
+      PUBLIC_RATING_BASE_URL: ${PUBLIC_RATING_BASE_URL:-https://innovafuncionario.cochabamba.bo/calificar}
     ports:
       - "4015:4000"
     volumes:
