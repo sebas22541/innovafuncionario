@@ -1058,15 +1058,30 @@ class _ReportsScreenState extends State<ReportsScreen> {
       final suffix = mode == _PersonnelExcelExportMode.byItem
           ? 'por_item'
           : 'general';
+      final headers = _personnelExcelHeaders(mode);
+      final officeLevelsById = _buildOfficeLevelsById(_personnelOffices);
+      final mayoraltyUsers = users
+          .where((user) => !_isHealthPersonnelUser(user, officeLevelsById))
+          .toList(growable: false);
+      final healthUsers = users
+          .where((user) => _isHealthPersonnelUser(user, officeLevelsById))
+          .toList(growable: false);
 
-      await exportExcelWorkbook(
+      await exportExcelWorkbookSheets(
         fileName:
             'reporte-personal-$suffix-${_formatFilenameDate(DateTime.now())}.xlsx',
-        sheetName: mode == _PersonnelExcelExportMode.byItem
-            ? 'Personal por item'
-            : 'Personal',
-        headers: _personnelExcelHeaders(mode),
-        rows: _buildPersonnelExcelRows(users, mode),
+        sheets: [
+          ExcelWorkbookSheet(
+            sheetName: 'Alcaldia',
+            headers: headers,
+            rows: _buildPersonnelExcelRows(mayoraltyUsers, mode),
+          ),
+          ExcelWorkbookSheet(
+            sheetName: 'Salud',
+            headers: headers,
+            rows: _buildPersonnelExcelRows(healthUsers, mode),
+          ),
+        ],
       );
 
       if (mounted) {
