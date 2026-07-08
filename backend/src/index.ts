@@ -1287,12 +1287,25 @@ const server = http.createServer(async (request, response) => {
         authenticatedUser.email,
         "Solo un administrador puede consultar calificaciones.",
       );
-      const fecha = readOptionalQueryDateOnly(url, "fecha") ?? getAppDateOnlyText();
-      const rows = await loadFuncionarioRatingsSummary(requester, fecha);
+      const today = getAppDateOnlyText();
+      const fechaInicio = readOptionalQueryDateOnly(url, "fechaInicio") ??
+        readOptionalQueryDateOnly(url, "fecha") ??
+        today;
+      const fechaFin = readOptionalQueryDateOnly(url, "fechaFin") ?? fechaInicio;
+      const cargoCodigo = normalizeOptionalText(url.searchParams.get("cargoCodigo"));
+      const rows = await loadFuncionarioRatingsSummary(
+        requester,
+        fechaInicio,
+        fechaFin,
+        cargoCodigo,
+      );
 
       sendJson(response, 200, {
         data: {
-          fecha,
+          fecha: fechaInicio,
+          fechaInicio,
+          fechaFin,
+          cargoCodigo,
           funcionarios: rows,
         },
       });
@@ -11058,14 +11071,34 @@ async function submitFuncionarioRating({
   }
 }
 
-async function loadFuncionarioRatingsSummary(requester: any, fecha: string) {
-  const params: unknown[] = [fecha];
+async function loadFuncionarioRatingsSummary(
+  requester: any,
+  fechaInicio: string,
+  fechaFin: string,
+  cargoCodigo: string | null,
+) {
+  const start = readDateOnlyString(fechaInicio, "fechaInicio");
+  const end = readDateOnlyString(fechaFin, "fechaFin");
+
+  if (start.getTime() > end.getTime()) {
+    throw new HttpError(400, "La fecha inicio no puede ser mayor a la fecha fin.");
+  }
+
+  const params: unknown[] = [fechaInicio, fechaFin];
   const healthFilter = isHealthAdminUser(requester)
     ? `AND (
         principal.nivel = ${HEALTH_OFFICE_LEVEL}
         OR comision.nivel = ${HEALTH_OFFICE_LEVEL}
       )`
     : "";
+  const cargoFilter = cargoCodigo == null
+    ? ""
+    : `AND (u."cargo_codigo" = $3 OR u."subcargo_codigo" = $3)`;
+
+  if (cargoCodigo != null) {
+    params.push(cargoCodigo);
+  }
+
   const result = await pool.query(
     `
       SELECT
@@ -11095,10 +11128,11 @@ async function loadFuncionarioRatingsSummary(requester: any, fecha: string) {
       LEFT JOIN "oficinas" comision ON comision."id" = u."oficina_comision_id"
       LEFT JOIN "calificaciones_funcionario" c
         ON c."funcionario_id" = u."id"
-        AND c."fecha" = $1::date
+        AND c."fecha" BETWEEN $1::date AND $2::date
       WHERE u."activo" = TRUE
         AND u."email" <> '${SEED_ADMIN_EMAIL.replace(/'/g, "''")}'
         ${healthFilter}
+        ${cargoFilter}
       GROUP BY
         u."id",
         u."nombre_completo",

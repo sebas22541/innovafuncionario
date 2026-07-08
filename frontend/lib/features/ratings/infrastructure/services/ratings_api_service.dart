@@ -12,9 +12,19 @@ class RatingsApiService {
     return RatingQr.fromJson(_readMap(payload['data'], 'data'));
   }
 
-  Future<RatingReport> fetchReport({required String fecha}) async {
+  Future<RatingReport> fetchReport({
+    required String fechaInicio,
+    required String fechaFin,
+    String? cargoCodigo,
+  }) async {
+    final query = <String, String>{
+      'fechaInicio': fechaInicio,
+      'fechaFin': fechaFin,
+      if (cargoCodigo != null && cargoCodigo.trim().isNotEmpty)
+        'cargoCodigo': cargoCodigo,
+    };
     final payload = await _apiClient.getJson(
-      '/api/calificaciones?fecha=${Uri.encodeQueryComponent(fecha)}',
+      '/api/calificaciones?${Uri(queryParameters: query).query}',
     );
     return RatingReport.fromJson(_readMap(payload['data'], 'data'));
   }
@@ -120,9 +130,14 @@ class RatingQr {
 }
 
 class RatingReport {
-  const RatingReport({required this.fecha, required this.funcionarios});
+  const RatingReport({
+    required this.fechaInicio,
+    required this.fechaFin,
+    required this.funcionarios,
+  });
 
-  final String fecha;
+  final String fechaInicio;
+  final String fechaFin;
   final List<RatingSummary> funcionarios;
 
   factory RatingReport.fromJson(Map<String, dynamic> source) {
@@ -132,7 +147,8 @@ class RatingReport {
     }
 
     return RatingReport(
-      fecha: _readString(source['fecha'], 'fecha'),
+      fechaInicio: _readString(source['fechaInicio'], 'fechaInicio'),
+      fechaFin: _readString(source['fechaFin'], 'fechaFin'),
       funcionarios: rows
           .map((item) => RatingSummary.fromJson(_readMap(item, 'funcionario')))
           .toList(growable: false),
@@ -164,7 +180,6 @@ class RatingSummary {
   final int neutral;
   final int enojada;
   final List<RatingComment> comentarios;
-  int get puntaje => feliz * 3 + neutral * 2 + enojada;
 
   factory RatingSummary.fromJson(Map<String, dynamic> source) {
     final comments = source['comentarios'];

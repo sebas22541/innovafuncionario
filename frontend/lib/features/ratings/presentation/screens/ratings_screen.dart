@@ -14,6 +14,7 @@ import '../../../../shared/infrastructure/backend_api_client.dart';
 import '../../../../shared/infrastructure/file_downloader.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
+import '../../../auth/domain/entities/cargo_option.dart';
 import '../../infrastructure/services/ratings_api_service.dart';
 
 class RatingsScreen extends StatefulWidget {
@@ -27,13 +28,16 @@ class RatingsScreen extends StatefulWidget {
 
 class _RatingsScreenState extends State<RatingsScreen> {
   final TextEditingController _searchController = TextEditingController();
-  final TextEditingController _dateController = TextEditingController();
+  final TextEditingController _startDateController = TextEditingController();
+  final TextEditingController _endDateController = TextEditingController();
   final TextEditingController _reportSearchController = TextEditingController();
   List<AppUser> _users = const [];
+  List<CargoOption> _cargos = const [];
   List<ActiveRatingQr> _activeQrs = const [];
   List<RatingSummary> _report = const [];
   RatingQr? _ratingQr;
   bool _isLoadingUsers = true;
+  bool _isLoadingCargos = true;
   bool _isLoadingActiveQrs = true;
   bool _isGenerating = false;
   bool _isLoadingReport = true;
@@ -41,7 +45,9 @@ class _RatingsScreenState extends State<RatingsScreen> {
   bool _isDownloadingQr = false;
   String _query = '';
   String _reportQuery = '';
-  String _selectedDate = _todayText();
+  String _startDate = _todayText();
+  String _endDate = _todayText();
+  CargoOption? _selectedCargo;
   Timer? _searchDebounce;
   Timer? _reportSearchDebounce;
 
@@ -83,8 +89,10 @@ class _RatingsScreenState extends State<RatingsScreen> {
   @override
   void initState() {
     super.initState();
-    _dateController.text = _selectedDate;
+    _startDateController.text = _startDate;
+    _endDateController.text = _endDate;
     _loadUsers();
+    _loadCargos();
     _loadActiveQrs();
     _loadReport();
   }
@@ -94,7 +102,8 @@ class _RatingsScreenState extends State<RatingsScreen> {
     _searchDebounce?.cancel();
     _reportSearchDebounce?.cancel();
     _searchController.dispose();
-    _dateController.dispose();
+    _startDateController.dispose();
+    _endDateController.dispose();
     _reportSearchController.dispose();
     super.dispose();
   }
@@ -121,6 +130,26 @@ class _RatingsScreenState extends State<RatingsScreen> {
     } finally {
       if (mounted) {
         setState(() => _isLoadingUsers = false);
+      }
+    }
+  }
+
+  Future<void> _loadCargos() async {
+    setState(() => _isLoadingCargos = true);
+
+    try {
+      final cargos = await dependencies.authApiService.fetchCargos();
+      if (!mounted) {
+        return;
+      }
+      setState(() => _cargos = cargos);
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar cargos.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingCargos = false);
       }
     }
   }
@@ -154,7 +183,9 @@ class _RatingsScreenState extends State<RatingsScreen> {
 
     try {
       final report = await dependencies.ratingsApiService.fetchReport(
-        fecha: _selectedDate,
+        fechaInicio: _startDate,
+        fechaFin: _endDate,
+        cargoCodigo: _selectedCargo?.code,
       );
       if (!mounted) {
         return;
@@ -312,11 +343,6 @@ class _RatingsScreenState extends State<RatingsScreen> {
 
     try {
       final document = pw.Document();
-      final totalFeliz = rows.fold<int>(0, (sum, row) => sum + row.feliz);
-      final totalNeutral = rows.fold<int>(0, (sum, row) => sum + row.neutral);
-      final totalEnojada = rows.fold<int>(0, (sum, row) => sum + row.enojada);
-      final total = rows.fold<int>(0, (sum, row) => sum + row.total);
-      final totalPuntaje = rows.fold<int>(0, (sum, row) => sum + row.puntaje);
 
       document.addPage(
         pw.MultiPage(
@@ -328,7 +354,9 @@ class _RatingsScreenState extends State<RatingsScreen> {
               style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
             ),
             pw.SizedBox(height: 6),
-            pw.Text('Fecha: $_selectedDate'),
+            pw.Text('Rango: $_startDate a $_endDate'),
+            if (_selectedCargo != null)
+              pw.Text('Cargo: ${_selectedCargo!.name}'),
             if (_reportQuery.trim().isNotEmpty)
               pw.Text('Filtro: ${_reportQuery.trim()}'),
             pw.SizedBox(height: 12),
@@ -347,8 +375,6 @@ class _RatingsScreenState extends State<RatingsScreen> {
                 4: pw.FixedColumnWidth(45),
                 5: pw.FixedColumnWidth(45),
                 6: pw.FixedColumnWidth(45),
-                7: pw.FixedColumnWidth(45),
-                8: pw.FixedColumnWidth(50),
               },
               headers: const [
                 'CI',
@@ -358,8 +384,6 @@ class _RatingsScreenState extends State<RatingsScreen> {
                 'Feliz',
                 'Neutral',
                 'Enojada',
-                'Total',
-                'Puntaje',
               ],
               data: rows
                   .map(
@@ -371,16 +395,9 @@ class _RatingsScreenState extends State<RatingsScreen> {
                       '${row.feliz}',
                       '${row.neutral}',
                       '${row.enojada}',
-                      '${row.total}',
-                      '${row.puntaje}',
                     ],
                   )
                   .toList(growable: false),
-            ),
-            pw.SizedBox(height: 12),
-            pw.Text(
-              'Totales: Feliz $totalFeliz | Neutral $totalNeutral | Enojada $totalEnojada | Total $total | Puntaje $totalPuntaje',
-              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
             ),
           ],
         ),
@@ -388,7 +405,7 @@ class _RatingsScreenState extends State<RatingsScreen> {
 
       await Printing.layoutPdf(
         onLayout: (_) => document.save(),
-        name: 'reporte-calificaciones-$_selectedDate.pdf',
+        name: 'reporte-calificaciones-$_startDate-$_endDate.pdf',
       );
     } catch (_) {
       if (mounted) {
@@ -401,8 +418,8 @@ class _RatingsScreenState extends State<RatingsScreen> {
     }
   }
 
-  Future<void> _pickDate() async {
-    final initialDate = DateTime.tryParse(_selectedDate) ?? DateTime.now();
+  Future<void> _pickStartDate() async {
+    final initialDate = DateTime.tryParse(_startDate) ?? DateTime.now();
     final selected = await showDatePicker(
       context: context,
       initialDate: initialDate,
@@ -416,8 +433,37 @@ class _RatingsScreenState extends State<RatingsScreen> {
     }
 
     setState(() {
-      _selectedDate = _formatDate(selected);
-      _dateController.text = _selectedDate;
+      _startDate = _formatDate(selected);
+      _startDateController.text = _startDate;
+      if (DateTime.parse(_endDate).isBefore(DateTime.parse(_startDate))) {
+        _endDate = _startDate;
+        _endDateController.text = _endDate;
+      }
+    });
+    _loadReport();
+  }
+
+  Future<void> _pickEndDate() async {
+    final initialDate = DateTime.tryParse(_endDate) ?? DateTime.now();
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime.now().add(const Duration(days: 1)),
+      locale: const Locale('es', 'BO'),
+    );
+
+    if (selected == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _endDate = _formatDate(selected);
+      _endDateController.text = _endDate;
+      if (DateTime.parse(_endDate).isBefore(DateTime.parse(_startDate))) {
+        _startDate = _endDate;
+        _startDateController.text = _startDate;
+      }
     });
     _loadReport();
   }
@@ -474,20 +520,10 @@ class _RatingsScreenState extends State<RatingsScreen> {
                     const Center(child: CircularProgressIndicator())
                   else if (_query.trim().length >= 2 &&
                       _filteredUsers.isNotEmpty)
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: _filteredUsers
-                          .map(
-                            (user) => ActionChip(
-                              avatar: const Icon(Icons.person_outline_rounded),
-                              label: Text(user.fullName),
-                              onPressed: _isGenerating
-                                  ? null
-                                  : () => _generateQr(user),
-                            ),
-                          )
-                          .toList(growable: false),
+                    _FuncionarioSelectList(
+                      users: _filteredUsers,
+                      isGenerating: _isGenerating,
+                      onSelected: _generateQr,
                     )
                   else if (_query.trim().length >= 2)
                     const _SearchHint(
@@ -589,23 +625,110 @@ class _RatingsScreenState extends State<RatingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Text(
+                    'Reporte por rango',
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                  const SizedBox(height: 12),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isWide = constraints.maxWidth >= 760;
+                      final controls = [
+                        Expanded(
+                          child: TextField(
+                            controller: _startDateController,
+                            readOnly: true,
+                            onTap: _pickStartDate,
+                            decoration: const InputDecoration(
+                              labelText: 'Fecha inicio',
+                              prefixIcon: Icon(Icons.today_rounded),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: _endDateController,
+                            readOnly: true,
+                            onTap: _pickEndDate,
+                            decoration: const InputDecoration(
+                              labelText: 'Fecha fin',
+                              prefixIcon: Icon(Icons.event_rounded),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            initialValue: _selectedCargo?.code,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Cargo',
+                              prefixIcon: Icon(Icons.work_outline_rounded),
+                            ),
+                            items: [
+                              const DropdownMenuItem<String>(
+                                value: '',
+                                child: Text('Todos'),
+                              ),
+                              ..._cargos.map(
+                                (cargo) => DropdownMenuItem<String>(
+                                  value: cargo.code,
+                                  child: Text(
+                                    cargo.name,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ),
+                            ],
+                            onChanged: _isLoadingCargos
+                                ? null
+                                : (value) {
+                                    setState(() {
+                                      _selectedCargo =
+                                          value == null || value.isEmpty
+                                          ? null
+                                          : _cargos.firstWhere(
+                                              (cargo) => cargo.code == value,
+                                            );
+                                    });
+                                    _loadReport();
+                                  },
+                          ),
+                        ),
+                      ];
+
+                      if (isWide) {
+                        return Row(
+                          children: [
+                            controls[0],
+                            const SizedBox(width: 10),
+                            controls[1],
+                            const SizedBox(width: 10),
+                            controls[2],
+                          ],
+                        );
+                      }
+
+                      return Column(
+                        children: [
+                          controls[0],
+                          const SizedBox(height: 10),
+                          controls[1],
+                          const SizedBox(height: 10),
+                          controls[2],
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 12),
                   Row(
                     children: [
                       Expanded(
-                        child: Text(
-                          'Reporte diario',
-                          style: Theme.of(context).textTheme.headlineMedium,
-                        ),
-                      ),
-                      SizedBox(
-                        width: 170,
                         child: TextField(
-                          controller: _dateController,
-                          readOnly: true,
-                          onTap: _pickDate,
+                          controller: _reportSearchController,
+                          onChanged: _onReportSearchChanged,
                           decoration: const InputDecoration(
-                            labelText: 'Fecha',
-                            prefixIcon: Icon(Icons.today_rounded),
+                            labelText: 'Buscar por CI o nombre',
+                            prefixIcon: Icon(Icons.person_search_rounded),
                           ),
                         ),
                       ),
@@ -629,15 +752,6 @@ class _RatingsScreenState extends State<RatingsScreen> {
                         label: const Text('PDF'),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _reportSearchController,
-                    onChanged: _onReportSearchChanged,
-                    decoration: const InputDecoration(
-                      labelText: 'Buscar por CI o nombre',
-                      prefixIcon: Icon(Icons.person_search_rounded),
-                    ),
                   ),
                   const SizedBox(height: 16),
                   if (_isLoadingReport)
@@ -717,11 +831,6 @@ class _RatingSummaryTile extends StatelessWidget {
                 icon: Icons.sentiment_very_dissatisfied_rounded,
                 value: summary.enojada,
               ),
-              _CountPill(icon: Icons.functions_rounded, value: summary.total),
-              _CountPill(
-                icon: Icons.scoreboard_rounded,
-                value: summary.puntaje,
-              ),
             ],
           ),
           if (comments.isNotEmpty) ...[
@@ -733,6 +842,53 @@ class _RatingSummaryTile extends StatelessWidget {
               ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _FuncionarioSelectList extends StatelessWidget {
+  const _FuncionarioSelectList({
+    required this.users,
+    required this.isGenerating,
+    required this.onSelected,
+  });
+
+  final List<AppUser> users;
+  final bool isGenerating;
+  final ValueChanged<AppUser> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 320),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: ListView.separated(
+        shrinkWrap: true,
+        itemCount: users.length,
+        separatorBuilder: (_, _) => const Divider(height: 1),
+        itemBuilder: (context, index) {
+          final user = users[index];
+
+          return ListTile(
+            enabled: !isGenerating,
+            leading: const Icon(Icons.person_outline_rounded),
+            title: Text(user.fullName),
+            subtitle: Text(
+              [
+                if (user.ci.trim().isNotEmpty) 'CI ${user.ci}',
+                user.cargoEfectivo,
+                user.officeName ?? user.unidad,
+              ].where((value) => value.trim().isNotEmpty).join(' | '),
+            ),
+            trailing: const Icon(Icons.qr_code_2_rounded),
+            onTap: isGenerating ? null : () => onSelected(user),
+          );
+        },
       ),
     );
   }
