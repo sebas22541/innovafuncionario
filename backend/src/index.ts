@@ -107,9 +107,10 @@ const DYNAMIC_QR_SIGNING_SECRET =
 const FIREBASE_SERVICE_ACCOUNT_JSON = normalizeOptionalEnvValue(
   process.env.FIREBASE_SERVICE_ACCOUNT_JSON,
 );
-const PUBLIC_FRONTEND_URL = normalizeOptionalEnvValue(
-  process.env.PUBLIC_FRONTEND_URL,
-) ?? "https://innovafuncionario.cochabamba.bo";
+const PUBLIC_RATING_BASE_URL = (
+  normalizeOptionalEnvValue(process.env.PUBLIC_RATING_BASE_URL) ??
+  "https://innovafuncionarioapi.cochabamba.bo/calificar"
+).replace(/\/+$/, "");
 const CALIFICACION_QR_SECRET =
   process.env.CALIFICACION_QR_SECRET ??
   createHash("sha256").update(`${DATABASE_URL}:calificaciones`).digest("hex");
@@ -347,6 +348,15 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, {
         status: "ok",
       });
+      return;
+    }
+
+    const publicRatingPageMatch = /^\/calificar\/([^/]+)$/.exec(url.pathname);
+    if (request.method === "GET" && publicRatingPageMatch) {
+      const token = decodeURIComponent(publicRatingPageMatch[1] ?? "");
+      const funcionario = await resolveRatingTokenFuncionario(token);
+
+      sendHtml(response, 200, buildPublicRatingPage(token, funcionario));
       return;
     }
 
@@ -2985,6 +2995,25 @@ function sendPlainJson(
   response.end(JSON.stringify(payload, null, 2));
 }
 
+function sendHtml(
+  response: ServerResponse,
+  statusCode: number,
+  html: string,
+) {
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Pragma", "no-cache");
+  response.setHeader("X-Frame-Options", "DENY");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  );
+  response.writeHead(statusCode);
+  response.end(html);
+}
+
 function sendErrorJson(
   response: ServerResponse,
   statusCode: number,
@@ -3211,6 +3240,10 @@ function isPublicRoute(request: IncomingMessage, url: URL) {
   }
 
   if (request.method === "GET" && url.pathname === "/health") {
+    return true;
+  }
+
+  if (request.method === "GET" && /^\/calificar\/[^/]+$/.test(url.pathname)) {
     return true;
   }
 
@@ -10552,10 +10585,7 @@ function readFuncionarioIdFromRatingToken(token: string) {
 }
 
 function buildFuncionarioRatingUrl(token: string) {
-  const publicUrl = new URL(PUBLIC_FRONTEND_URL);
-
-  publicUrl.searchParams.set("calificar", token);
-  return publicUrl.toString();
+  return `${PUBLIC_RATING_BASE_URL}/${encodeURIComponent(token)}`;
 }
 
 async function resolveRatingTokenFuncionario(token: string) {
@@ -10595,6 +10625,256 @@ function serializeRatingFuncionario(user: any) {
     oficinaId: resolveLinkedOfficeId(user),
     oficina: resolveLinkedOfficeName(user) ?? user.unidad ?? "",
   };
+}
+
+function buildPublicRatingPage(token: string, funcionario: any) {
+  const funcionarioData = serializeRatingFuncionario(funcionario);
+  const safeToken = escapeHtml(token);
+  const safeName = escapeHtml(funcionarioData.nombreCompleto);
+  const safeCargo = escapeHtml(funcionarioData.cargo);
+  const safeOffice = escapeHtml(funcionarioData.oficina);
+
+  return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Calificar atencion</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #f7f1e8;
+      color: #2d2520;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+    }
+    main {
+      width: min(100%, 520px);
+      background: #fff;
+      border: 1px solid #eadfd2;
+      border-radius: 18px;
+      box-shadow: 0 18px 48px rgba(45, 37, 32, 0.12);
+      padding: 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 26px;
+      text-align: center;
+    }
+    .person {
+      text-align: center;
+      margin-bottom: 22px;
+      line-height: 1.35;
+    }
+    .person strong {
+      display: block;
+      font-size: 18px;
+    }
+    .muted {
+      color: #74675e;
+      font-size: 14px;
+    }
+    .ratings {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    button.rating {
+      height: 104px;
+      border: 2px solid #eadfd2;
+      border-radius: 16px;
+      background: #fbf8f4;
+      cursor: pointer;
+      font-weight: 700;
+      color: #2d2520;
+    }
+    button.rating span {
+      display: block;
+      font-size: 38px;
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+    button.rating.selected {
+      border-color: #d8682a;
+      background: #fff3ea;
+    }
+    label {
+      display: block;
+      margin-top: 18px;
+      font-weight: 700;
+    }
+    textarea {
+      width: 100%;
+      margin-top: 8px;
+      min-height: 110px;
+      resize: vertical;
+      border: 1px solid #d9cbbd;
+      border-radius: 14px;
+      padding: 12px;
+      font: inherit;
+    }
+    .submit {
+      width: 100%;
+      margin-top: 18px;
+      border: 0;
+      border-radius: 14px;
+      background: #d8682a;
+      color: #fff;
+      padding: 14px 16px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .submit:disabled {
+      opacity: .65;
+      cursor: default;
+    }
+    .message {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 12px;
+      display: none;
+      text-align: center;
+      font-weight: 700;
+    }
+    .message.ok {
+      display: block;
+      color: #1b5e20;
+      background: #e8f5e9;
+    }
+    .message.error {
+      display: block;
+      color: #9f1f1f;
+      background: #ffebee;
+    }
+    .done {
+      display: none;
+      text-align: center;
+      padding: 28px 4px;
+    }
+    .done.visible {
+      display: block;
+    }
+    .done .icon {
+      font-size: 56px;
+      color: #2e7d32;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section id="form">
+      <h1>Califica la atencion</h1>
+      <div class="person">
+        <strong>${safeName}</strong>
+        <div class="muted">${safeCargo}</div>
+        <div class="muted">${safeOffice}</div>
+      </div>
+      <div class="ratings" role="group" aria-label="Calificacion">
+        <button class="rating" type="button" data-rating="feliz"><span>☺</span>Feliz</button>
+        <button class="rating" type="button" data-rating="neutral"><span>○</span>Neutral</button>
+        <button class="rating" type="button" data-rating="enojada"><span>☹</span>Enojada</button>
+      </div>
+      <label for="comentario">Comentario opcional</label>
+      <textarea id="comentario" maxlength="500" placeholder="Escribe un comentario si lo deseas"></textarea>
+      <button id="send" class="submit" type="button">Enviar calificacion</button>
+      <div id="message" class="message"></div>
+    </section>
+    <section id="done" class="done" aria-live="polite">
+      <div class="icon">✓</div>
+      <h1>Gracias</h1>
+      <p>Tu calificacion fue registrada.</p>
+    </section>
+  </main>
+  <script>
+    const token = "${safeToken}";
+    const buttons = Array.from(document.querySelectorAll("[data-rating]"));
+    const sendButton = document.getElementById("send");
+    const message = document.getElementById("message");
+    let selectedRating = "";
+
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => {
+        selectedRating = button.dataset.rating || "";
+        buttons.forEach((item) => item.classList.toggle("selected", item === button));
+        showMessage("", "");
+      });
+    });
+
+    sendButton.addEventListener("click", async () => {
+      if (!selectedRating) {
+        showMessage("Selecciona una calificacion.", "error");
+        return;
+      }
+
+      sendButton.disabled = true;
+      sendButton.textContent = "Enviando...";
+
+      try {
+        const response = await fetch("/api/calificaciones/publica/" + encodeURIComponent(token), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            calificacion: selectedRating,
+            comentario: document.getElementById("comentario").value.trim(),
+            deviceId: readOrCreateDeviceId(),
+            deviceLabel: navigator.userAgent || "Navegador"
+          })
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(payload.error || "No fue posible enviar la calificacion.");
+        }
+
+        document.getElementById("form").classList.add("hidden");
+        document.getElementById("done").classList.add("visible");
+      } catch (error) {
+        showMessage(error.message || "No fue posible enviar la calificacion.", "error");
+      } finally {
+        sendButton.disabled = false;
+        sendButton.textContent = "Enviar calificacion";
+      }
+    });
+
+    function showMessage(text, type) {
+      message.textContent = text;
+      message.className = type ? "message " + type : "message";
+    }
+
+    function readOrCreateDeviceId() {
+      const key = "rating_device_id";
+      const existing = localStorage.getItem(key);
+
+      if (existing && existing.length >= 8) {
+        return existing;
+      }
+
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      const value = Date.now() + "-" + Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+      localStorage.setItem(key, value);
+      return value;
+    }
+  </script>
+</body>
+</html>`;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 async function submitFuncionarioRating({

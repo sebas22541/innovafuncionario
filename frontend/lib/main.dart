@@ -3,7 +3,6 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'core/theme/app_theme.dart';
 import 'features/auth/presentation/screens/auth_screen.dart';
-import 'features/ratings/presentation/screens/public_rating_screen.dart';
 import 'injection_container.dart';
 import 'shared/infrastructure/app_image_cache.dart';
 import 'shared/infrastructure/backend_api_client.dart';
@@ -39,7 +38,6 @@ class _QrWebAppState extends State<QrWebApp> {
   int _notificationsRefreshToken = 0;
   int _notificationsOpenToken = 0;
   bool _isRestoringSession = true;
-  late final String? _publicRatingToken = Uri.base.queryParameters['calificar'];
 
   @override
   void initState() {
@@ -50,12 +48,6 @@ class _QrWebAppState extends State<QrWebApp> {
       onDeviceLoginRequested: _restoreSession,
       onForegroundNotificationReceived: _showForegroundNotification,
     );
-    final publicRatingToken = _publicRatingToken;
-
-    if (publicRatingToken != null && publicRatingToken.trim().isNotEmpty) {
-      _isRestoringSession = false;
-      return;
-    }
     _restoreSession();
   }
 
@@ -224,8 +216,6 @@ class _QrWebAppState extends State<QrWebApp> {
 
   @override
   Widget build(BuildContext context) {
-    final publicRatingToken = _publicRatingToken;
-
     return MaterialApp(
       scaffoldMessengerKey: _scaffoldMessengerKey,
       title: 'QR Asistencia',
@@ -240,8 +230,6 @@ class _QrWebAppState extends State<QrWebApp> {
       ],
       home: _isRestoringSession
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
-          : publicRatingToken != null && publicRatingToken.trim().isNotEmpty
-          ? PublicRatingScreen(token: publicRatingToken.trim())
           : AnimatedSwitcher(
               duration: const Duration(milliseconds: 260),
               child: _currentUser == null
