@@ -40,7 +40,8 @@ class _RatingsScreenState extends State<RatingsScreen> {
   bool _isLoadingCargos = true;
   bool _isLoadingActiveQrs = true;
   bool _isGenerating = false;
-  bool _isLoadingReport = true;
+  bool _isLoadingReport = false;
+  bool _hasLoadedReport = false;
   bool _isExportingPdf = false;
   bool _isDownloadingQr = false;
   String _query = '';
@@ -94,7 +95,6 @@ class _RatingsScreenState extends State<RatingsScreen> {
     _loadUsers();
     _loadCargos();
     _loadActiveQrs();
-    _loadReport();
   }
 
   @override
@@ -179,7 +179,10 @@ class _RatingsScreenState extends State<RatingsScreen> {
   }
 
   Future<void> _loadReport() async {
-    setState(() => _isLoadingReport = true);
+    setState(() {
+      _isLoadingReport = true;
+      _hasLoadedReport = true;
+    });
 
     try {
       final report = await dependencies.ratingsApiService.fetchReport(
@@ -756,6 +759,12 @@ class _RatingsScreenState extends State<RatingsScreen> {
                   const SizedBox(height: 16),
                   if (_isLoadingReport)
                     const Center(child: CircularProgressIndicator())
+                  else if (!_hasLoadedReport)
+                    const _SearchHint(
+                      icon: Icons.manage_search_rounded,
+                      text:
+                          'Selecciona un rango, cargo si corresponde, y presiona actualizar para ver el reporte.',
+                    )
                   else if (_report.isEmpty)
                     const _EmptyReport()
                   else if (filteredReport.isEmpty)
