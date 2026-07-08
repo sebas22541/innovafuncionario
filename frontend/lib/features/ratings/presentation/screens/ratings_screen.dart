@@ -1,12 +1,17 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/file_downloader.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../infrastructure/services/ratings_api_service.dart';
@@ -23,6 +28,7 @@ class RatingsScreen extends StatefulWidget {
 class _RatingsScreenState extends State<RatingsScreen> {
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _dateController = TextEditingController();
+  final TextEditingController _reportSearchController = TextEditingController();
   List<AppUser> _users = const [];
   List<ActiveRatingQr> _activeQrs = const [];
   List<RatingSummary> _report = const [];
@@ -31,9 +37,13 @@ class _RatingsScreenState extends State<RatingsScreen> {
   bool _isLoadingActiveQrs = true;
   bool _isGenerating = false;
   bool _isLoadingReport = true;
+  bool _isExportingPdf = false;
+  bool _isDownloadingQr = false;
   String _query = '';
+  String _reportQuery = '';
   String _selectedDate = _todayText();
   Timer? _searchDebounce;
+  Timer? _reportSearchDebounce;
 
   List<AppUser> get _filteredUsers {
     final query = _normalize(_query);
@@ -54,6 +64,22 @@ class _RatingsScreenState extends State<RatingsScreen> {
         .toList(growable: false);
   }
 
+  List<RatingSummary> get _filteredReport {
+    final query = _normalize(_reportQuery);
+
+    if (query.isEmpty) {
+      return _report;
+    }
+
+    return _report
+        .where(
+          (row) => _normalize(
+            '${row.ci} ${row.nombreCompleto} ${row.cargo} ${row.oficina}',
+          ).contains(query),
+        )
+        .toList(growable: false);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -66,8 +92,10 @@ class _RatingsScreenState extends State<RatingsScreen> {
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _reportSearchDebounce?.cancel();
     _searchController.dispose();
     _dateController.dispose();
+    _reportSearchController.dispose();
     super.dispose();
   }
 
@@ -210,6 +238,169 @@ class _RatingsScreenState extends State<RatingsScreen> {
     }
   }
 
+  Future<void> _downloadQrImage() async {
+    final qr = _ratingQr;
+
+    if (qr == null || _isDownloadingQr) {
+      return;
+    }
+
+    setState(() => _isDownloadingQr = true);
+
+    try {
+      final painter = QrPainter(
+        data: qr.url,
+        version: QrVersions.auto,
+        gapless: true,
+        eyeStyle: const QrEyeStyle(
+          eyeShape: QrEyeShape.square,
+          color: Colors.black,
+        ),
+        dataModuleStyle: const QrDataModuleStyle(
+          dataModuleShape: QrDataModuleShape.square,
+          color: Colors.black,
+        ),
+      );
+      const imageSize = 900.0;
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder)
+        ..drawRect(
+          const Rect.fromLTWH(0, 0, imageSize, imageSize),
+          Paint()..color = Colors.white,
+        );
+      painter.paint(canvas, const Size(imageSize, imageSize));
+      final image = await recorder.endRecording().toImage(
+        imageSize.toInt(),
+        imageSize.toInt(),
+      );
+      final imageData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+      if (imageData == null) {
+        throw StateError('No fue posible crear la imagen QR.');
+      }
+
+      await downloadFile(
+        fileName:
+            'qr-calificacion-${_safeFileName(qr.funcionario.nombreCompleto)}.png',
+        bytes: imageData.buffer.asUint8List(),
+        mimeType: 'image/png',
+      );
+
+      if (mounted) {
+        AppAlert.showSuccess(context, 'QR descargado.');
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible descargar el QR.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDownloadingQr = false);
+      }
+    }
+  }
+
+  Future<void> _exportReportPdf() async {
+    final rows = _filteredReport;
+
+    if (rows.isEmpty || _isExportingPdf) {
+      AppAlert.showWarning(context, 'No hay datos para exportar.');
+      return;
+    }
+
+    setState(() => _isExportingPdf = true);
+
+    try {
+      final document = pw.Document();
+      final totalFeliz = rows.fold<int>(0, (sum, row) => sum + row.feliz);
+      final totalNeutral = rows.fold<int>(0, (sum, row) => sum + row.neutral);
+      final totalEnojada = rows.fold<int>(0, (sum, row) => sum + row.enojada);
+      final total = rows.fold<int>(0, (sum, row) => sum + row.total);
+      final totalPuntaje = rows.fold<int>(0, (sum, row) => sum + row.puntaje);
+
+      document.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4.landscape,
+          margin: const pw.EdgeInsets.all(24),
+          build: (context) => [
+            pw.Text(
+              'Reporte de calificaciones',
+              style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 6),
+            pw.Text('Fecha: $_selectedDate'),
+            if (_reportQuery.trim().isNotEmpty)
+              pw.Text('Filtro: ${_reportQuery.trim()}'),
+            pw.SizedBox(height: 12),
+            pw.TableHelper.fromTextArray(
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              headerDecoration: const pw.BoxDecoration(
+                color: PdfColors.grey300,
+              ),
+              cellStyle: const pw.TextStyle(fontSize: 8),
+              cellAlignment: pw.Alignment.centerLeft,
+              columnWidths: const {
+                0: pw.FixedColumnWidth(54),
+                1: pw.FixedColumnWidth(130),
+                2: pw.FixedColumnWidth(120),
+                3: pw.FixedColumnWidth(140),
+                4: pw.FixedColumnWidth(45),
+                5: pw.FixedColumnWidth(45),
+                6: pw.FixedColumnWidth(45),
+                7: pw.FixedColumnWidth(45),
+                8: pw.FixedColumnWidth(50),
+              },
+              headers: const [
+                'CI',
+                'Nombre',
+                'Cargo',
+                'Oficina',
+                'Feliz',
+                'Neutral',
+                'Enojada',
+                'Total',
+                'Puntaje',
+              ],
+              data: rows
+                  .map(
+                    (row) => [
+                      row.ci,
+                      row.nombreCompleto,
+                      row.cargo,
+                      row.oficina,
+                      '${row.feliz}',
+                      '${row.neutral}',
+                      '${row.enojada}',
+                      '${row.total}',
+                      '${row.puntaje}',
+                    ],
+                  )
+                  .toList(growable: false),
+            ),
+            pw.SizedBox(height: 12),
+            pw.Text(
+              'Totales: Feliz $totalFeliz | Neutral $totalNeutral | Enojada $totalEnojada | Total $total | Puntaje $totalPuntaje',
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+            ),
+          ],
+        ),
+      );
+
+      await Printing.layoutPdf(
+        onLayout: (_) => document.save(),
+        name: 'reporte-calificaciones-$_selectedDate.pdf',
+      );
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible generar el PDF.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isExportingPdf = false);
+      }
+    }
+  }
+
   Future<void> _pickDate() async {
     final initialDate = DateTime.tryParse(_selectedDate) ?? DateTime.now();
     final selected = await showDatePicker(
@@ -240,9 +431,19 @@ class _RatingsScreenState extends State<RatingsScreen> {
     });
   }
 
+  void _onReportSearchChanged(String value) {
+    _reportSearchDebounce?.cancel();
+    _reportSearchDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (mounted) {
+        setState(() => _reportQuery = value);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final qr = _ratingQr;
+    final filteredReport = _filteredReport;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
@@ -323,6 +524,22 @@ class _RatingsScreenState extends State<RatingsScreen> {
                             icon: const Icon(Icons.copy_rounded),
                             label: const Text('Copiar enlace'),
                           ),
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            onPressed: _isDownloadingQr
+                                ? null
+                                : _downloadQrImage,
+                            icon: _isDownloadingQr
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.download_rounded),
+                            label: const Text('Descargar imagen QR'),
+                          ),
                         ],
                       ),
                     ),
@@ -397,16 +614,44 @@ class _RatingsScreenState extends State<RatingsScreen> {
                         onPressed: _loadReport,
                         icon: const Icon(Icons.refresh_rounded),
                       ),
+                      const SizedBox(width: 10),
+                      FilledButton.icon(
+                        onPressed: _isExportingPdf ? null : _exportReportPdf,
+                        icon: _isExportingPdf
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.picture_as_pdf_rounded),
+                        label: const Text('PDF'),
+                      ),
                     ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _reportSearchController,
+                    onChanged: _onReportSearchChanged,
+                    decoration: const InputDecoration(
+                      labelText: 'Buscar por CI o nombre',
+                      prefixIcon: Icon(Icons.person_search_rounded),
+                    ),
                   ),
                   const SizedBox(height: 16),
                   if (_isLoadingReport)
                     const Center(child: CircularProgressIndicator())
                   else if (_report.isEmpty)
                     const _EmptyReport()
+                  else if (filteredReport.isEmpty)
+                    const _SearchHint(
+                      icon: Icons.search_off_rounded,
+                      text: 'No hay resultados para ese CI o nombre.',
+                    )
                   else
                     Column(
-                      children: _report
+                      children: filteredReport
                           .map((row) => _RatingSummaryTile(summary: row))
                           .toList(growable: false),
                     ),
@@ -442,39 +687,40 @@ class _RatingSummaryTile extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Text(
+            summary.nombreCompleto,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 4),
+          Text('CI ${summary.ci}'),
+          const SizedBox(height: 4),
+          Text(
+            [
+              summary.cargo,
+              summary.oficina,
+            ].where((value) => value.trim().isNotEmpty).join(' | '),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      summary.nombreCompleto,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      [
-                        summary.cargo,
-                        summary.oficina,
-                      ].where((value) => value.trim().isNotEmpty).join(' | '),
-                    ),
-                  ],
-                ),
-              ),
               _CountPill(
                 icon: Icons.sentiment_satisfied_alt_rounded,
                 value: summary.feliz,
               ),
-              const SizedBox(width: 8),
               _CountPill(
                 icon: Icons.sentiment_neutral_rounded,
                 value: summary.neutral,
               ),
-              const SizedBox(width: 8),
               _CountPill(
                 icon: Icons.sentiment_very_dissatisfied_rounded,
                 value: summary.enojada,
+              ),
+              _CountPill(icon: Icons.functions_rounded, value: summary.total),
+              _CountPill(
+                icon: Icons.scoreboard_rounded,
+                value: summary.puntaje,
               ),
             ],
           ),
@@ -604,4 +850,12 @@ String _formatDate(DateTime date) {
   final month = date.month.toString().padLeft(2, '0');
   final day = date.day.toString().padLeft(2, '0');
   return '${date.year}-$month-$day';
+}
+
+String _safeFileName(String value) {
+  final safe = _normalize(
+    value,
+  ).replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+
+  return safe.isEmpty ? 'funcionario' : safe;
 }

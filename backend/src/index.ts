@@ -11071,6 +11071,7 @@ async function loadFuncionarioRatingsSummary(requester: any, fecha: string) {
       SELECT
         u."id" AS "funcionarioId",
         u."nombre_completo" AS "nombreCompleto",
+        COALESCE(u."ci", '') AS "ci",
         COALESCE(u."subcargo", u."cargo", '') AS "cargo",
         COALESCE(comision."oficina", principal."oficina", u."unidad", '') AS "oficina",
         COUNT(c."id")::int AS "total",
@@ -11101,6 +11102,7 @@ async function loadFuncionarioRatingsSummary(requester: any, fecha: string) {
       GROUP BY
         u."id",
         u."nombre_completo",
+        u."ci",
         u."subcargo",
         u."cargo",
         u."unidad",

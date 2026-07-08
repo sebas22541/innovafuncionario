@@ -144,6 +144,7 @@ class RatingSummary {
   const RatingSummary({
     required this.funcionarioId,
     required this.nombreCompleto,
+    required this.ci,
     required this.cargo,
     required this.oficina,
     required this.total,
@@ -155,6 +156,7 @@ class RatingSummary {
 
   final int funcionarioId;
   final String nombreCompleto;
+  final String ci;
   final String cargo;
   final String oficina;
   final int total;
@@ -162,12 +164,14 @@ class RatingSummary {
   final int neutral;
   final int enojada;
   final List<RatingComment> comentarios;
+  int get puntaje => feliz * 3 + neutral * 2 + enojada;
 
   factory RatingSummary.fromJson(Map<String, dynamic> source) {
     final comments = source['comentarios'];
     return RatingSummary(
       funcionarioId: _readInt(source['funcionarioId'], 'funcionarioId'),
       nombreCompleto: _readString(source['nombreCompleto'], 'nombreCompleto'),
+      ci: _readString(source['ci'], 'ci'),
       cargo: _readString(source['cargo'], 'cargo'),
       oficina: _readString(source['oficina'], 'oficina'),
       total: _readInt(source['total'], 'total'),
