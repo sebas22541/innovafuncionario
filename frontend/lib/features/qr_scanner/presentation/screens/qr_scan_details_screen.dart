@@ -217,7 +217,12 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
         observation: observation,
       );
 
-      final actionLabel = listType == EventListType.attended
+      final wasLate =
+          _resolveControlTimeStatus(control, registeredAt) ==
+          _ControlTimeStatus.late;
+      final actionLabel = wasLate
+          ? 'Registro retrasado guardado en ${control.name}'
+          : listType == EventListType.attended
           ? 'Asistencia guardada en ${control.name}'
           : 'Observacion guardada en ${control.name}';
       final actionMessage = widget.manualCi == null
@@ -383,6 +388,9 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
 
     final currentAttendance = currentDetails.eventAttendance;
     final currentControls = currentAttendance?.controls ?? const [];
+    final isLate =
+        _resolveControlTimeStatus(control, registeredAt) ==
+        _ControlTimeStatus.late;
     final updatedControl = QrEventControlRecord(
       id: _findExistingControlRecord(currentDetails, control)?.id ?? 0,
       controlId: control.id,
@@ -390,6 +398,7 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
       controlOrder: control.order,
       status: listType == EventListType.attended ? 'ASISTIO' : 'OBSERVADO',
       registeredAt: registeredAt,
+      isLate: isLate,
       note: observation,
     );
     final updatedControls =
@@ -411,6 +420,7 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
         .where((record) => record.isAttended)
         .length;
     final observedCount = updatedControls.length - attendedCount;
+    final lateCount = updatedControls.where((record) => record.isLate).length;
     final updatedAttendance = QrEventAttendanceRecord(
       status: attendedCount > 0 ? 'ASISTIO' : 'OBSERVADO',
       registeredAt: registeredAt,
@@ -418,6 +428,7 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
       registeredControlsCount: updatedControls.length,
       attendedControlsCount: attendedCount,
       observedControlsCount: observedCount,
+      lateControlsCount: lateCount,
     );
     final updatedDetails = currentDetails.copyWith(
       eventAttendance: updatedAttendance,
@@ -881,18 +892,24 @@ class _ControlRegistrationCard extends StatelessWidget {
     final isSubmittingObserved = submittingActionKey == observedKey;
     final isBusy = submittingActionKey != null;
     final hasExistingRecord = existingControl != null;
-    final isWithinTimeWindow = _isWithinControlTimeWindow(
-      control,
-      DateTime.now(),
-    );
+    final timeStatus = _resolveControlTimeStatus(control, DateTime.now());
+    final isLateWindow = timeStatus == _ControlTimeStatus.late;
+    final isBeforeTimeWindow =
+        timeStatus == _ControlTimeStatus.notStarted ||
+        timeStatus == _ControlTimeStatus.invalid;
     final isExistingAttended = existingControl?.isAttended == true;
+    final isExistingLate = existingControl?.isLate == true;
     final statusAccent = hasExistingRecord
-        ? isExistingAttended
+        ? isExistingLate
+              ? AppPalette.orange
+              : isExistingAttended
               ? const Color(0xFF16A34A)
               : AppPalette.night
         : AppPalette.muted;
     final statusLabel = hasExistingRecord
-        ? isExistingAttended
+        ? isExistingLate
+              ? 'Retrasado'
+              : isExistingAttended
               ? 'Asistio'
               : 'Observado'
         : null;
@@ -931,7 +948,9 @@ class _ControlRegistrationCard extends StatelessWidget {
               child: Row(
                 children: [
                   Icon(
-                    isExistingAttended
+                    isExistingLate
+                        ? Icons.schedule_rounded
+                        : isExistingAttended
                         ? Icons.check_circle_rounded
                         : Icons.info_rounded,
                     color: statusAccent,
@@ -960,7 +979,7 @@ class _ControlRegistrationCard extends StatelessWidget {
                 ],
               ),
             )
-          else if (!isWithinTimeWindow)
+          else if (isBeforeTimeWindow)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
@@ -970,11 +989,31 @@ class _ControlRegistrationCard extends StatelessWidget {
                 border: Border.all(color: AppPalette.line),
               ),
               child: Text(
-                'Este control solo permite registrar asistencia de ${control.timeWindowLabel}.',
+                'Este control comenzara a registrar asistencia a las ${control.startTime ?? 'hora configurada'}.',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: AppPalette.night,
                   fontWeight: FontWeight.w700,
                 ),
+              ),
+            )
+          else if (isLateWindow && allowAttended)
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: isBusy || isLookupPending
+                    ? null
+                    : () => onRegister(EventListType.attended),
+                icon: isSubmittingAttended
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.schedule_rounded),
+                label: const Text('Registrar retrasado'),
               ),
             )
           else if (allowAttended)
@@ -1036,9 +1075,14 @@ class _ControlRegistrationCard extends StatelessWidget {
   }
 }
 
-bool _isWithinControlTimeWindow(EventControl control, DateTime now) {
+enum _ControlTimeStatus { notStarted, onTime, late, invalid }
+
+_ControlTimeStatus _resolveControlTimeStatus(
+  EventControl control,
+  DateTime now,
+) {
   if (!control.hasTimeWindow) {
-    return true;
+    return _ControlTimeStatus.onTime;
   }
 
   final currentTime = now.hour * 60 + now.minute;
@@ -1046,10 +1090,18 @@ bool _isWithinControlTimeWindow(EventControl control, DateTime now) {
   final endTime = _timeTextToMinutes(control.endTime);
 
   if (startTime == null || endTime == null) {
-    return false;
+    return _ControlTimeStatus.invalid;
   }
 
-  return currentTime >= startTime && currentTime <= endTime;
+  if (currentTime < startTime) {
+    return _ControlTimeStatus.notStarted;
+  }
+
+  if (currentTime > endTime) {
+    return _ControlTimeStatus.late;
+  }
+
+  return _ControlTimeStatus.onTime;
 }
 
 int? _timeTextToMinutes(String? value) {

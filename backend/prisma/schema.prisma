@@ -158,6 +158,7 @@ model asistencia_controles {
   asistencia_id     Int
   control_id        Int
   estado            estado_asistencia @default(ASISTIO)
+  retrasado         Boolean           @default(false)
   observacion       String?
   registrado_por_id Int?
   registrado_en     DateTime          @default(now()) @db.Timestamptz(6)

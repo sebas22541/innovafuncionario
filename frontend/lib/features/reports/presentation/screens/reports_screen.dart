@@ -43,6 +43,7 @@ const Map<int, pw.TableColumnWidth> _personnelPdfColumnWidths = {
   6: pw.FixedColumnWidth(116),
   7: pw.FixedColumnWidth(50),
 };
+const int _healthOfficeLevel = 11;
 const _personnelTipoOptions = ['ITEM', 'EVENTUAL', 'CONSULTOR'];
 
 enum _PersonnelExcelExportMode { normal, byItem }
@@ -78,6 +79,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   bool _isLoadingEventReport = false;
   bool _isExporting = false;
   bool _isExportingEventPdf = false;
+  bool _isExportingLateEventPdf = false;
   bool _isExportingEventExcel = false;
   bool _isExportingPersonnelPdf = false;
   bool _isExportingPersonnelExcel = false;
@@ -844,6 +846,100 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
+  Future<void> _exportLateEventPdf() async {
+    final event = _eventReport;
+
+    if (event == null) {
+      return;
+    }
+
+    if (event.late.isEmpty) {
+      AppAlert.showWarning(
+        context,
+        'Este evento no tiene registros retrasados.',
+      );
+      return;
+    }
+
+    setState(() {
+      _isExportingLateEventPdf = true;
+    });
+
+    try {
+      final document = pw.Document();
+      final lateRows = _buildLateEventPdfRows(
+        _sortEventRosterEntries(event.late),
+      );
+
+      document.addPage(
+        pw.MultiPage(
+          build: (context) => [
+            pw.Text(
+              'Reporte de retrasados',
+              style: pw.TextStyle(
+                fontSize: _reportPdfFontSize,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 10),
+            pw.Text(
+              'Evento: ${event.name}',
+              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
+            ),
+            pw.Text(
+              'Fecha: ${_formatDateTime(event.date)}',
+              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
+            ),
+            pw.Text(
+              'Direccion: ${event.address?.trim().isNotEmpty == true ? event.address! : 'Sin direccion'}',
+              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
+            ),
+            pw.SizedBox(height: 16),
+            pw.Text(
+              'Retrasados (${event.resolvedLateCount})',
+              style: pw.TextStyle(
+                fontSize: _reportPdfFontSize,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 8),
+            pw.TableHelper.fromTextArray(
+              headers: const [
+                'Nro',
+                'CI',
+                'Nombre',
+                'Tipo',
+                'Oficina',
+                'Escaneado',
+              ],
+              columnWidths: _eventReportPdfColumnWidths,
+              data: lateRows,
+              headerStyle: pw.TextStyle(
+                fontSize: _reportPdfFontSize,
+                fontWeight: pw.FontWeight.bold,
+              ),
+              cellStyle: const pw.TextStyle(fontSize: _reportPdfFontSize),
+              headerDecoration: const pw.BoxDecoration(
+                color: PdfColor.fromInt(0xFFFFE6CC),
+              ),
+            ),
+          ],
+        ),
+      );
+
+      await Printing.layoutPdf(
+        onLayout: (_) async => document.save(),
+        name: _buildLateEventReportFilename(event),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExportingLateEventPdf = false;
+        });
+      }
+    }
+  }
+
   Future<void> _exportEventExcel() async {
     final event = _eventReport;
 
@@ -1012,54 +1108,59 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
     try {
       final document = pw.Document();
-      final rows = _buildPersonnelPdfRows(users);
+      final officeLevelsById = _buildOfficeLevelsById(_personnelOffices);
+      final mayoraltyUsers = users
+          .where((user) => !_isHealthPersonnelUser(user, officeLevelsById))
+          .toList(growable: false);
+      final healthUsers = users
+          .where((user) => _isHealthPersonnelUser(user, officeLevelsById))
+          .toList(growable: false);
       final filters = _personnelFiltersSummary();
 
       document.addPage(
         pw.MultiPage(
           pageFormat: PdfPageFormat.a4.landscape,
-          build: (context) => [
-            pw.Text(
-              'Reporte de personal',
-              style: pw.TextStyle(
-                fontSize: _reportPdfFontSize + 2,
-                fontWeight: pw.FontWeight.bold,
+          build: (context) {
+            final content = <pw.Widget>[
+              pw.Text(
+                'Reporte de personal',
+                style: pw.TextStyle(
+                  fontSize: _reportPdfFontSize + 2,
+                  fontWeight: pw.FontWeight.bold,
+                ),
               ),
-            ),
-            pw.SizedBox(height: 8),
-            pw.Text(
-              'Total exportado: ${users.length}',
-              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
-            ),
-            pw.Text(
-              'Filtros: $filters',
-              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
-            ),
-            pw.SizedBox(height: 12),
-            pw.TableHelper.fromTextArray(
-              headers: const [
-                'Item',
-                'CI',
-                'Nombre',
-                'Tipo',
-                'Cargo',
-                'Unidad',
-                'Comision',
-                'Estado',
-              ],
-              columnWidths: _personnelPdfColumnWidths,
-              data: rows,
-              headerStyle: pw.TextStyle(
-                fontSize: _reportPdfFontSize,
-                fontWeight: pw.FontWeight.bold,
+              pw.SizedBox(height: 8),
+              pw.Text(
+                'Total exportado: ${users.length}',
+                style: const pw.TextStyle(fontSize: _reportPdfFontSize),
               ),
-              cellStyle: const pw.TextStyle(fontSize: _reportPdfFontSize - 1),
-              cellAlignment: pw.Alignment.centerLeft,
-              headerDecoration: const pw.BoxDecoration(
-                color: PdfColor.fromInt(0xFFE7DFF6),
+              pw.Text(
+                'Alcaldia: ${mayoraltyUsers.length} | Salud: ${healthUsers.length}',
+                style: const pw.TextStyle(fontSize: _reportPdfFontSize),
               ),
-            ),
-          ],
+              pw.Text(
+                'Filtros: $filters',
+                style: const pw.TextStyle(fontSize: _reportPdfFontSize),
+              ),
+              pw.SizedBox(height: 12),
+            ];
+
+            content.addAll(
+              _buildPersonnelPdfSection(
+                title: 'Alcaldia',
+                users: mayoraltyUsers,
+              ),
+            );
+
+            if (healthUsers.isNotEmpty) {
+              content.add(pw.SizedBox(height: 14));
+              content.addAll(
+                _buildPersonnelPdfSection(title: 'Salud', users: healthUsers),
+              );
+            }
+
+            return content;
+          },
         ),
       );
 
@@ -1391,7 +1492,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Selecciona un evento y veras tablas separadas con las personas asistidas, observadas y faltantes.',
+                      'Selecciona un evento y veras tablas separadas con las personas asistidas, retrasadas, observadas y faltantes.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                     const SizedBox(height: 18),
@@ -1418,6 +1519,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           onPressed:
                               eventReport == null ||
                                   _isExportingEventPdf ||
+                                  _isExportingLateEventPdf ||
                                   _isExportingEventExcel ||
                                   _isLoadingEventReport
                               ? null
@@ -1440,7 +1542,33 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         OutlinedButton.icon(
                           onPressed:
                               eventReport == null ||
+                                  eventReport.late.isEmpty ||
                                   _isExportingEventPdf ||
+                                  _isExportingLateEventPdf ||
+                                  _isExportingEventExcel ||
+                                  _isLoadingEventReport
+                              ? null
+                              : _exportLateEventPdf,
+                          icon: _isExportingLateEventPdf
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.schedule_rounded),
+                          label: Text(
+                            _isExportingLateEventPdf
+                                ? 'Generando retrasados...'
+                                : 'Descargar retrasados PDF',
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed:
+                              eventReport == null ||
+                                  _isExportingEventPdf ||
+                                  _isExportingLateEventPdf ||
                                   _isExportingEventExcel ||
                                   _isLoadingEventReport
                               ? null
@@ -1833,6 +1961,10 @@ class _EventReportCard extends StatelessWidget {
                   label: '${event.attended.length} asistieron',
                 ),
                 _ReportChip(
+                  icon: Icons.schedule_rounded,
+                  label: '${event.late.length} retrasados',
+                ),
+                _ReportChip(
                   icon: Icons.visibility_outlined,
                   label: '${event.observed.length} observados',
                 ),
@@ -1848,6 +1980,14 @@ class _EventReportCard extends StatelessWidget {
               entries: _sortEventRosterEntries(event.attended),
               emptyMessage:
                   'Todavia no hay personas registradas como asistidas.',
+            ),
+            const SizedBox(height: 18),
+            _EventRosterTableSection(
+              title: 'Retrasados',
+              entries: _sortEventRosterEntries(event.late),
+              emptyMessage: 'No hay personas registradas fuera de horario.',
+              accentBackground: const Color(0xFFFFE6CC),
+              useLateRegisteredAt: true,
             ),
             const SizedBox(height: 18),
             _EventRosterTableSection(
@@ -1878,12 +2018,14 @@ class _EventRosterTableSection extends StatelessWidget {
     required this.entries,
     required this.emptyMessage,
     this.accentBackground = AppPalette.orangeSoft,
+    this.useLateRegisteredAt = false,
   });
 
   final String title;
   final List<EventRosterEntry> entries;
   final String emptyMessage;
   final Color accentBackground;
+  final bool useLateRegisteredAt;
 
   @override
   Widget build(BuildContext context) {
@@ -1939,7 +2081,13 @@ class _EventRosterTableSection extends StatelessWidget {
                       _EventTableValueCell(
                         value: entry.officeName ?? 'Sin oficina',
                       ),
-                      _EventTableDateTimeCell(dateTime: entry.registeredAt),
+                      _EventTableDateTimeCell(
+                        dateTime:
+                            useLateRegisteredAt &&
+                                entry.lateRegisteredAt != null
+                            ? entry.lateRegisteredAt!
+                            : entry.registeredAt,
+                      ),
                       _EventTableValueCell(
                         value: _eventRosterTipoLabel(entry.tipoVinculo),
                       ),
@@ -2728,6 +2876,27 @@ List<List<String>> _buildEventPdfRows(List<EventRosterEntry> entries) {
       .toList(growable: false);
 }
 
+List<List<String>> _buildLateEventPdfRows(List<EventRosterEntry> entries) {
+  return entries
+      .asMap()
+      .entries
+      .map(
+        (entry) => [
+          '${entry.key + 1}',
+          entry.value.ci?.trim().isNotEmpty == true
+              ? entry.value.ci!.trim()
+              : 'Sin CI',
+          entry.value.fullName,
+          _eventRosterTipoLabel(entry.value.tipoVinculo),
+          entry.value.officeName ?? 'Sin oficina',
+          _formatDateTime(
+            entry.value.lateRegisteredAt ?? entry.value.registeredAt,
+          ),
+        ],
+      )
+      .toList(growable: false);
+}
+
 List<List<String>> _buildEventAbsenteePdfRows(
   List<EventAbsenteeEntry> entries,
 ) {
@@ -2876,6 +3045,68 @@ List<List<String>> _buildPersonnelPdfRows(List<AppUser> users) {
         ],
       )
       .toList(growable: false);
+}
+
+List<pw.Widget> _buildPersonnelPdfSection({
+  required String title,
+  required List<AppUser> users,
+}) {
+  return [
+    pw.Text(
+      '$title (${users.length})',
+      style: pw.TextStyle(
+        fontSize: _reportPdfFontSize + 1,
+        fontWeight: pw.FontWeight.bold,
+      ),
+    ),
+    pw.SizedBox(height: 6),
+    if (users.isEmpty)
+      pw.Text(
+        'Sin personal para mostrar.',
+        style: const pw.TextStyle(fontSize: _reportPdfFontSize),
+      )
+    else
+      pw.TableHelper.fromTextArray(
+        headers: const [
+          'Item',
+          'CI',
+          'Nombre',
+          'Tipo',
+          'Cargo',
+          'Unidad',
+          'Comision',
+          'Estado',
+        ],
+        columnWidths: _personnelPdfColumnWidths,
+        data: _buildPersonnelPdfRows(users),
+        headerStyle: pw.TextStyle(
+          fontSize: _reportPdfFontSize,
+          fontWeight: pw.FontWeight.bold,
+        ),
+        cellStyle: const pw.TextStyle(fontSize: _reportPdfFontSize - 1),
+        cellAlignment: pw.Alignment.centerLeft,
+        headerDecoration: const pw.BoxDecoration(
+          color: PdfColor.fromInt(0xFFE7DFF6),
+        ),
+      ),
+  ];
+}
+
+Map<int, int> _buildOfficeLevelsById(List<OfficeOption> offices) {
+  return {for (final office in offices) office.id: office.level};
+}
+
+bool _isHealthPersonnelUser(AppUser user, Map<int, int> officeLevelsById) {
+  final officeIds = <int?>{
+    user.officeId,
+    user.primaryOfficeId,
+    user.commissionOfficeId,
+  };
+
+  return officeIds.any(
+    (officeId) =>
+        officeId != null && officeLevelsById[officeId] == _healthOfficeLevel,
+  );
 }
 
 List<String> _personnelExcelHeaders(_PersonnelExcelExportMode mode) {
@@ -3154,6 +3385,17 @@ String _buildEventReportFilename(EventRecord event) {
 
   final safeName = normalizedName.isEmpty ? 'evento' : normalizedName;
   return 'reporte-evento-${event.id}-$safeName.pdf';
+}
+
+String _buildLateEventReportFilename(EventRecord event) {
+  final normalizedName = event.name
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+
+  final safeName = normalizedName.isEmpty ? 'evento' : normalizedName;
+  return 'retrasados-evento-${event.id}-$safeName.pdf';
 }
 
 String _buildEventExcelFilename(EventRecord event) {

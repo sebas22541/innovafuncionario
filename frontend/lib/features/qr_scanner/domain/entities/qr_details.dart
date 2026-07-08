@@ -6,6 +6,7 @@ class QrEventControlRecord {
     required this.controlOrder,
     required this.status,
     required this.registeredAt,
+    this.isLate = false,
     this.note,
   });
 
@@ -15,6 +16,7 @@ class QrEventControlRecord {
   final int controlOrder;
   final String status;
   final DateTime registeredAt;
+  final bool isLate;
   final String? note;
 
   bool get isAttended => status == 'ASISTIO';
@@ -28,6 +30,7 @@ class QrEventAttendanceRecord {
     this.registeredControlsCount = 0,
     this.attendedControlsCount = 0,
     this.observedControlsCount = 0,
+    this.lateControlsCount = 0,
   });
 
   final String status;
@@ -36,6 +39,7 @@ class QrEventAttendanceRecord {
   final int registeredControlsCount;
   final int attendedControlsCount;
   final int observedControlsCount;
+  final int lateControlsCount;
 
   QrEventAttendanceRecord copyWith({
     String? status,
@@ -44,6 +48,7 @@ class QrEventAttendanceRecord {
     int? registeredControlsCount,
     int? attendedControlsCount,
     int? observedControlsCount,
+    int? lateControlsCount,
   }) {
     return QrEventAttendanceRecord(
       status: status ?? this.status,
@@ -55,6 +60,7 @@ class QrEventAttendanceRecord {
           attendedControlsCount ?? this.attendedControlsCount,
       observedControlsCount:
           observedControlsCount ?? this.observedControlsCount,
+      lateControlsCount: lateControlsCount ?? this.lateControlsCount,
     );
   }
 }

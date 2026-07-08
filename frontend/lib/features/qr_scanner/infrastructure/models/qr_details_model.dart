@@ -8,6 +8,7 @@ class QrEventControlRecordModel {
     required this.controlOrder,
     required this.status,
     required this.registeredAt,
+    this.isLate = false,
     this.note,
   });
 
@@ -17,6 +18,7 @@ class QrEventControlRecordModel {
   final int controlOrder;
   final String status;
   final DateTime registeredAt;
+  final bool isLate;
   final String? note;
 
   QrEventControlRecord toEntity() {
@@ -27,6 +29,7 @@ class QrEventControlRecordModel {
       controlOrder: controlOrder,
       status: status,
       registeredAt: registeredAt,
+      isLate: isLate,
       note: note,
     );
   }
@@ -40,6 +43,7 @@ class QrEventAttendanceRecordModel {
     this.registeredControlsCount = 0,
     this.attendedControlsCount = 0,
     this.observedControlsCount = 0,
+    this.lateControlsCount = 0,
   });
 
   final String status;
@@ -48,6 +52,7 @@ class QrEventAttendanceRecordModel {
   final int registeredControlsCount;
   final int attendedControlsCount;
   final int observedControlsCount;
+  final int lateControlsCount;
 
   QrEventAttendanceRecord toEntity() {
     return QrEventAttendanceRecord(
@@ -59,6 +64,7 @@ class QrEventAttendanceRecordModel {
       registeredControlsCount: registeredControlsCount,
       attendedControlsCount: attendedControlsCount,
       observedControlsCount: observedControlsCount,
+      lateControlsCount: lateControlsCount,
     );
   }
 }

@@ -43,6 +43,7 @@ class EventAttendanceControl {
     required this.controlOrder,
     required this.status,
     required this.registeredAt,
+    this.isLate = false,
     this.note,
   });
 
@@ -52,6 +53,7 @@ class EventAttendanceControl {
   final int controlOrder;
   final String status;
   final DateTime registeredAt;
+  final bool isLate;
   final String? note;
 
   bool get isAttended => status == 'ASISTIO';
@@ -101,6 +103,7 @@ class EventRosterEntry {
     required this.fullName,
     required this.note,
     required this.registeredAt,
+    this.lateRegisteredAt,
     this.controls = const [],
     this.registeredControlsCount = 0,
     this.attendedControlsCount = 0,
@@ -118,6 +121,7 @@ class EventRosterEntry {
   final String fullName;
   final String note;
   final DateTime registeredAt;
+  final DateTime? lateRegisteredAt;
   final List<EventAttendanceControl> controls;
   final int registeredControlsCount;
   final int attendedControlsCount;
@@ -128,6 +132,8 @@ class EventRosterEntry {
   final String? officeName;
   final String? jobTitle;
   final String? qrValue;
+
+  bool get isLate => lateRegisteredAt != null;
 }
 
 class EventAbsenteeEntry {
@@ -198,9 +204,11 @@ class EventRecord {
     this.excludedOfficeIds = const [],
     this.attended = const [],
     this.observed = const [],
+    this.late = const [],
     this.absentees = const [],
     this.attendedCount,
     this.observedCount,
+    this.lateCount,
     this.absenteeCount,
     this.officeCountOverride,
     this.jobTitleCountOverride,
@@ -225,9 +233,11 @@ class EventRecord {
   final List<int> excludedOfficeIds;
   final List<EventRosterEntry> attended;
   final List<EventRosterEntry> observed;
+  final List<EventRosterEntry> late;
   final List<EventAbsenteeEntry> absentees;
   final int? attendedCount;
   final int? observedCount;
+  final int? lateCount;
   final int? absenteeCount;
   final int? officeCountOverride;
   final int? jobTitleCountOverride;
@@ -236,6 +246,8 @@ class EventRecord {
   int get resolvedAttendedCount => attendedCount ?? attended.length;
 
   int get resolvedObservedCount => observedCount ?? observed.length;
+
+  int get resolvedLateCount => lateCount ?? late.length;
 
   int get resolvedAbsenteeCount => absenteeCount ?? absentees.length;
 

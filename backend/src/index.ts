@@ -2113,7 +2113,11 @@ const server = http.createServer(async (request, response) => {
       }
 
       const registeredAt = new Date();
-      assertControlRegistrationWindow(evento, selectedControl, registeredAt);
+      const registrationTiming = resolveControlRegistrationTiming(
+        evento,
+        selectedControl,
+        registeredAt,
+      );
 
       const persona = isCiRegistration
         ? await findPersonByCi(input.ci!)
@@ -2179,6 +2183,7 @@ const server = http.createServer(async (request, response) => {
             asistencia_id: baseAttendance.id,
             control_id: input.controlId,
             estado: input.estado,
+            retrasado: registrationTiming.isLate,
             observacion: resolvedObservation,
             registrado_por_id: operador.id,
             registrado_en: registeredAt,
@@ -2188,6 +2193,7 @@ const server = http.createServer(async (request, response) => {
           },
           update: {
             estado: input.estado,
+            retrasado: registrationTiming.isLate,
             observacion: resolvedObservation,
             registrado_por_id: operador.id,
             registrado_en: registeredAt,
@@ -2244,6 +2250,7 @@ const server = http.createServer(async (request, response) => {
             controlNombre: selectedControl.nombre,
             controlOrden: selectedControl.orden,
             estado: controlAttendance.estado,
+            retrasado: controlAttendance.retrasado,
             observacion: controlAttendance.observacion,
             registradoEn: controlAttendance.registrado_en.toISOString(),
           },
@@ -3358,6 +3365,16 @@ async function ensureRuntimeSchema() {
     ALTER TABLE "evento_controles"
       ADD COLUMN IF NOT EXISTS "hora_inicio" VARCHAR(5),
       ADD COLUMN IF NOT EXISTS "hora_fin" VARCHAR(5)
+  `);
+
+  await pool.query(`
+    ALTER TABLE "asistencia_controles"
+      ADD COLUMN IF NOT EXISTS "retrasado" BOOLEAN NOT NULL DEFAULT FALSE
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_asistencia_controles_retrasado"
+      ON "asistencia_controles" ("retrasado")
   `);
 
   await pool.query(`
@@ -4519,32 +4536,168 @@ function resolvePorteroLugar(
   return normalizeOptionalText(lugar);
 }
 
+type EventJobTitleCandidate = {
+  code: string | null;
+  name: string | null;
+};
+
+type EventJobTitleGroup =
+  | "CHIEF"
+  | "DIRECTOR"
+  | "MUNICIPAL_SECRETARY"
+  | "SUBMAYOR"
+  | "TECHNICAL";
+
+function resolveUserEventJobTitles(user: any): EventJobTitleCandidate[] {
+  const candidates = [
+    {
+      code: normalizeOptionalText(user?.cargo_codigo),
+      name: normalizeLooseMatchText(user?.cargo),
+    },
+    {
+      code: normalizeOptionalText(user?.subcargo_codigo),
+      name: normalizeLooseMatchText(user?.subcargo),
+    },
+  ];
+  const seen = new Set<string>();
+
+  return candidates.filter((candidate) => {
+    if (candidate.code == null && candidate.name == null) {
+      return false;
+    }
+
+    const key = `${candidate.code ?? ""}|${candidate.name ?? ""}`;
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function resolveEventJobTitleGroup(
+  normalizedJobTitle: string | null,
+): EventJobTitleGroup | null {
+  if (normalizedJobTitle == null) {
+    return null;
+  }
+
+  if (/\bJEF[EA]\b/.test(normalizedJobTitle)) {
+    return "CHIEF";
+  }
+
+  if (
+    normalizedJobTitle.includes("DIRECTOR") ||
+    normalizedJobTitle.includes("DIRECCTOR")
+  ) {
+    return "DIRECTOR";
+  }
+
+  if (
+    /\bSECRETARI[OA]\b/.test(normalizedJobTitle) &&
+    normalizedJobTitle.includes("MUNICIPAL")
+  ) {
+    return "MUNICIPAL_SECRETARY";
+  }
+
+  if (normalizedJobTitle.includes("SUBALCALD")) {
+    return "SUBMAYOR";
+  }
+
+  if (normalizedJobTitle.includes("TECNIC")) {
+    return "TECHNICAL";
+  }
+
+  return null;
+}
+
+function isEventLeadershipJobTitle(normalizedJobTitle: string | null) {
+  const group = resolveEventJobTitleGroup(normalizedJobTitle);
+
+  return (
+    group === "CHIEF" ||
+    group === "DIRECTOR" ||
+    group === "MUNICIPAL_SECRETARY" ||
+    group === "SUBMAYOR"
+  );
+}
+
 function matchesCargoSelection(
-  userCargoCodigo: string | null,
-  userCargoName: string | null,
+  userJobTitles: EventJobTitleCandidate[],
   allowedCargoCodigos: Set<string>,
   allowedCargoNames: Set<string>,
 ) {
-  if (userCargoCodigo != null && allowedCargoCodigos.has(userCargoCodigo)) {
-    return true;
-  }
+  const onlyTechnicalSelection =
+    allowedCargoNames.size > 0 &&
+    [...allowedCargoNames].every(
+      (jobTitle) => resolveEventJobTitleGroup(jobTitle) === "TECHNICAL",
+    );
 
-  if (userCargoName == null) {
+  if (
+    onlyTechnicalSelection &&
+    userJobTitles.some((jobTitle) =>
+      isEventLeadershipJobTitle(jobTitle.name),
+    )
+  ) {
     return false;
   }
 
-  if (allowedCargoNames.has(userCargoName)) {
+  if (
+    userJobTitles.some(
+      (jobTitle) =>
+        jobTitle.code != null && allowedCargoCodigos.has(jobTitle.code),
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    userJobTitles.some(
+      (jobTitle) =>
+        jobTitle.name != null && allowedCargoNames.has(jobTitle.name),
+    )
+  ) {
     return true;
   }
 
   for (const allowedCargoName of allowedCargoNames) {
+    const allowedGroup = resolveEventJobTitleGroup(allowedCargoName);
+
+    if (allowedGroup === "TECHNICAL") {
+      if (
+        userJobTitles.length > 0 &&
+        !userJobTitles.some((jobTitle) =>
+          isEventLeadershipJobTitle(jobTitle.name),
+        )
+      ) {
+        return true;
+      }
+
+      continue;
+    }
+
     if (
-      allowedCargoName.length >= 4 &&
-      userCargoName.length >= 4 &&
-      (allowedCargoName.includes(userCargoName) ||
-        userCargoName.includes(allowedCargoName))
+      allowedGroup != null &&
+      userJobTitles.some(
+        (jobTitle) =>
+          resolveEventJobTitleGroup(jobTitle.name) === allowedGroup,
+      )
     ) {
       return true;
+    }
+
+    for (const jobTitle of userJobTitles) {
+      if (
+        jobTitle.name != null &&
+        allowedCargoName.length >= 4 &&
+        jobTitle.name.length >= 4 &&
+        (allowedCargoName.includes(jobTitle.name) ||
+          jobTitle.name.includes(allowedCargoName))
+      ) {
+        return true;
+      }
     }
   }
 
@@ -7590,7 +7743,7 @@ function formatTimeInAppTimeZone(date: Date) {
   }).format(date);
 }
 
-function assertControlRegistrationWindow(
+function resolveControlRegistrationTiming(
   event: { fecha_evento: Date },
   control: {
     nombre: string;
@@ -7604,7 +7757,7 @@ function assertControlRegistrationWindow(
 
   // Los controles creados antes de esta funcionalidad no tienen rango.
   if (startTime == null && endTime == null) {
-    return;
+    return { isLate: false };
   }
 
   if (
@@ -7623,16 +7776,21 @@ function assertControlRegistrationWindow(
   const currentDate = formatDateInAppTimeZone(registeredAt);
   const currentTime = formatTimeInAppTimeZone(registeredAt);
 
-  if (
-    currentDate !== eventDate ||
-    currentTime < startTime ||
-    currentTime > endTime
-  ) {
+  if (currentDate !== eventDate) {
     throw new HttpError(
       409,
-      `El control "${control.nombre}" solo permite registrar asistencia de ${startTime} a ${endTime}.`,
+      `El control "${control.nombre}" solo permite registrar en la fecha del evento.`,
     );
   }
+
+  if (currentTime < startTime) {
+    throw new HttpError(
+      409,
+      `El control "${control.nombre}" comenzara a registrar asistencia a las ${startTime}.`,
+    );
+  }
+
+  return { isLate: currentTime > endTime };
 }
 
 function buildQrLookupCandidates(scannedValue: string, providedLookupCode?: string) {
@@ -9711,6 +9869,7 @@ function serializeAttendanceControlRecord(controlAttendance: any) {
     controlNombre: controlAttendance.evento_controles.nombre,
     controlOrden: controlAttendance.evento_controles.orden,
     estado: controlAttendance.estado,
+    retrasado: controlAttendance.retrasado === true,
     observacion: controlAttendance.observacion,
     registradoEn: controlAttendance.registrado_en.toISOString(),
   };
@@ -9721,6 +9880,11 @@ function serializeEventAttendanceLookup(attendance: any) {
     serializeAttendanceControlRecord,
   );
   const controlSummary = buildSerializedControlSummary(serializedControls);
+  const lateRegisteredAt = serializedControls
+    .filter((control: any) => control.retrasado === true)
+    .map((control: any) => control.registradoEn as string)
+    .sort()
+    .at(-1) ?? null;
 
   return {
     estado: controlSummary.state,
@@ -9728,7 +9892,10 @@ function serializeEventAttendanceLookup(attendance: any) {
     controlesRegistrados: controlSummary.registeredCount,
     controlesAsistidos: controlSummary.attendedCount,
     controlesObservados: controlSummary.observedCount,
+    controlesRetrasados: controlSummary.lateCount,
     registradoEn: attendance.registrado_en.toISOString(),
+    retrasado: lateRegisteredAt != null,
+    retrasadoEn: lateRegisteredAt,
   };
 }
 
@@ -9744,12 +9911,16 @@ function buildSerializedControlSummary(controlRecords: any[]) {
   const observedControls = sortedControls.filter(
     (control) => control.estado === estado_asistencia.OBSERVADO,
   );
+  const lateControls = sortedControls.filter(
+    (control) => control.retrasado === true,
+  );
 
   return {
     controls: sortedControls,
     registeredCount: sortedControls.length,
     attendedCount: attendedControls.length,
     observedCount: observedControls.length,
+    lateCount: lateControls.length,
     state:
       attendedControls.length > 0
         ? estado_asistencia.ASISTIO
@@ -9891,8 +10062,10 @@ function serializeEventSummary(
     cargosCount: selectedCargoCodes.length,
     asistieron: [],
     observaron: [],
+    retrasados: [],
     asistieronCount: resolvedCounts.attended,
     observaronCount: resolvedCounts.observed,
+    retrasadosCount: 0,
     personasListadasCount: resolvedCounts.total,
     detalleCompleto: false,
   };
@@ -9905,13 +10078,22 @@ function serializeEvent(event: any) {
   const observed = (event.asistencias ?? [])
     .filter((item: any) => item.estado === estado_asistencia.OBSERVADO)
     .map(serializeAttendanceRecord);
+  const late = (event.asistencias ?? [])
+    .filter((item: any) =>
+      (item.asistencia_controles ?? []).some(
+        (control: any) => control.retrasado === true,
+      ),
+    )
+    .map(serializeAttendanceRecord);
 
   return {
     ...buildSerializedEventBase(event),
     asistieron: attended,
     observaron: observed,
+    retrasados: late,
     asistieronCount: attended.length,
     observaronCount: observed.length,
+    retrasadosCount: late.length,
     personasListadasCount: attended.length + observed.length,
     detalleCompleto: true,
   };
@@ -9995,24 +10177,52 @@ async function buildEventReportRequirementReason(person: any, event: any) {
     resolveLinkedOfficeId(linkedUser) ??
     (await resolveOfficeForUser(prisma, linkedUser))?.id ??
     null;
-  const userCargoCodigo = resolveEffectiveJobTitleCode(linkedUser);
+  const userJobTitles = resolveUserEventJobTitles(linkedUser);
+  const eventCargoCodes = new Set<string>(
+    (event.evento_cargos ?? []).map(
+      (item: { cargo_codigo: string }) => item.cargo_codigo,
+    ),
+  );
+  const eventCargoNames = new Set<string>(
+    (event.evento_cargos ?? [])
+      .map((item: { cargos?: { cargo?: string | null } }) =>
+        normalizeLooseMatchText(item.cargos?.cargo),
+      )
+      .filter((name: string | null): name is string => name != null),
+  );
+  const officeCargoRows = (event.evento_oficina_cargos ?? []).filter(
+    (item: { oficina_id: number }) => item.oficina_id === userOfficeId,
+  );
+  const officeCargoCodes = new Set<string>(
+    officeCargoRows.map(
+      (item: { cargo_codigo: string }) => item.cargo_codigo,
+    ),
+  );
+  const officeCargoNames = new Set<string>(
+    officeCargoRows
+      .map((item: { cargos?: { cargo?: string | null } }) =>
+        normalizeLooseMatchText(item.cargos?.cargo),
+      )
+      .filter((name: string | null): name is string => name != null),
+  );
   const matchesOffice =
     userOfficeId != null &&
     (event.evento_oficinas ?? []).some(
       (item: { oficina_id: number }) => item.oficina_id === userOfficeId,
     );
   const matchesCargo =
-    userCargoCodigo != null &&
-    (event.evento_cargos ?? []).some(
-      (item: { cargo_codigo: string }) => item.cargo_codigo === userCargoCodigo,
-    );
+    eventCargoCodes.size > 0 &&
+    matchesCargoSelection(userJobTitles, eventCargoCodes, eventCargoNames);
   const matchesOfficeCargo =
-    userOfficeId != null &&
-    userCargoCodigo != null &&
-    (event.evento_oficina_cargos ?? []).some(
-      (item: { oficina_id: number; cargo_codigo: string }) =>
-        item.oficina_id === userOfficeId && item.cargo_codigo === userCargoCodigo,
+    matchesOffice &&
+    officeCargoRows.length > 0 &&
+    matchesCargoSelection(
+      userJobTitles,
+      officeCargoCodes,
+      officeCargoNames,
     );
+  const officeAllowsAllJobTitles =
+    matchesOffice && officeCargoRows.length === 0;
 
   if (matchesOfficeCargo) {
     return "Oficina y cargo";
@@ -10022,7 +10232,7 @@ async function buildEventReportRequirementReason(person: any, event: any) {
     return "Oficina y cargo";
   }
 
-  if (matchesOffice) {
+  if (officeAllowsAllJobTitles) {
     return "Oficina";
   }
 
@@ -10226,6 +10436,11 @@ function serializeAttendanceRecord(attendance: any) {
     serializeAttendanceControlRecord,
   );
   const controlSummary = buildSerializedControlSummary(serializedControls);
+  const lateRegisteredAt = serializedControls
+    .filter((control: any) => control.retrasado === true)
+    .map((control: any) => control.registradoEn as string)
+    .sort()
+    .at(-1) ?? null;
   const resolvedState = serializedControls.length > 0
     ? controlSummary.state
     : attendance.estado;
@@ -10253,10 +10468,13 @@ function serializeAttendanceRecord(attendance: any) {
     fotoUrl: linkedUser?.foto_url ?? null,
     email: linkedUser?.email ?? null,
     registradoEn: attendance.registrado_en.toISOString(),
+    retrasado: lateRegisteredAt != null,
+    retrasadoEn: lateRegisteredAt,
     controles: controlSummary.controls,
     controlesRegistrados: controlSummary.registeredCount,
     controlesAsistidos: controlSummary.attendedCount,
     controlesObservados: controlSummary.observedCount,
+    controlesRetrasados: controlSummary.lateCount,
     eventoId: attendance.evento_id,
     eventoNombre:
       "eventos" in attendance ? attendance.eventos.nombre : undefined,
@@ -10293,6 +10511,7 @@ function serializeAttendanceReportRecord(attendance: any, person: any) {
     controlesRegistrados: controlSummary.registeredCount,
     controlesAsistidos: controlSummary.attendedCount,
     controlesObservados: controlSummary.observedCount,
+    controlesRetrasados: controlSummary.lateCount,
   };
 }
 
@@ -10434,8 +10653,7 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
       )
       .filter((cargoName: string | null) => cargoName != null),
   );
-  const userCargoCodigo = resolveEffectiveJobTitleCode(linkedUser);
-  const userCargoName = normalizeLooseMatchText(resolveEffectiveJobTitleName(linkedUser));
+  const userJobTitles = resolveUserEventJobTitles(linkedUser);
   const userOfficeCode = normalizeOfficeCode(resolveLinkedOfficeCode(linkedUser) ?? "");
   const userOfficeName = normalizeLooseMatchText(resolveLinkedOfficeName(linkedUser));
   const matchingOfficeIds = new Set<number>(
@@ -10476,10 +10694,14 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
   const matchesOfficeCargo =
     !hasOfficeCargoRules ||
     officeCargoRules.length === 0 ||
-    matchesCargoSelection(userCargoCodigo, userCargoName, officeCargoCodes, officeCargoNames);
+    matchesCargoSelection(userJobTitles, officeCargoCodes, officeCargoNames);
   const matchesCargo =
     allowedCargoCodigos.size > 0 &&
-    matchesCargoSelection(userCargoCodigo, userCargoName, allowedCargoCodigos, allowedCargoNames);
+    matchesCargoSelection(
+      userJobTitles,
+      allowedCargoCodigos,
+      allowedCargoNames,
+    );
 
   const matchesOfficeRule = matchesOffice && matchesOfficeCargo;
 

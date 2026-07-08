@@ -4527,13 +4527,18 @@ class _AttendanceControlsSheet extends StatelessWidget {
                   ...eventControls.map((control) {
                     final recordedControl = controlsById[control.id];
                     final isAttended = recordedControl?.isAttended == true;
+                    final isLate = recordedControl?.isLate == true;
                     final accentColor = recordedControl == null
                         ? AppPalette.muted
+                        : isLate
+                        ? AppPalette.orange
                         : isAttended
                         ? AppPalette.orange
                         : AppPalette.night;
                     final statusLabel = recordedControl == null
                         ? 'No realizado'
+                        : isLate
+                        ? 'Retrasado'
                         : isAttended
                         ? 'Asistio'
                         : 'Observado';
@@ -4559,6 +4564,8 @@ class _AttendanceControlsSheet extends StatelessWidget {
                             child: Icon(
                               recordedControl == null
                                   ? Icons.remove_done_rounded
+                                  : isLate
+                                  ? Icons.schedule_rounded
                                   : isAttended
                                   ? Icons.how_to_reg_rounded
                                   : Icons.visibility_outlined,

@@ -35,7 +35,7 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
 
   final MobileScannerController _controller = MobileScannerController(
     autoStart: true,
-    facing: CameraFacing.back,
+    facing: CameraFacing.front,
     cameraResolution: const Size(1280, 720),
     detectionSpeed: DetectionSpeed.normal,
     detectionTimeoutMs: 250,

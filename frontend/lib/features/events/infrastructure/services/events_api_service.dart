@@ -197,6 +197,10 @@ class EventsApiService {
       source['observaron'] ?? const [],
       'observaron',
     ).map(_parseRosterEntry).toList(growable: false);
+    final late = _readList(
+      source['retrasados'] ?? const [],
+      'retrasados',
+    ).map(_parseRosterEntry).toList(growable: false);
     final absentees = _readList(
       source['faltaron'] ?? const [],
       'faltaron',
@@ -239,11 +243,13 @@ class EventsApiService {
       ),
       attended: attended,
       observed: observed,
+      late: late,
       absentees: absentees,
       attendedCount:
           _readNullableInt(source['asistieronCount']) ?? attended.length,
       observedCount:
           _readNullableInt(source['observaronCount']) ?? observed.length,
+      lateCount: _readNullableInt(source['retrasadosCount']) ?? late.length,
       absenteeCount:
           _readNullableInt(source['faltaronCount']) ?? absentees.length,
       officeCountOverride: _readNullableInt(source['oficinasCount']),
@@ -399,6 +405,7 @@ class EventsApiService {
       registeredAt: DateTime.parse(
         _readString(source['registradoEn'], 'asistencia.registradoEn'),
       ).toLocal(),
+      lateRegisteredAt: _readNullableDateTime(source['retrasadoEn']),
       controls: controls,
       registeredControlsCount:
           _readNullableInt(source['controlesRegistrados']) ?? controls.length,
@@ -459,6 +466,7 @@ class EventsApiService {
         'controlRegistro.controlOrden',
       ),
       status: _readString(source['estado'], 'controlRegistro.estado'),
+      isLate: source['retrasado'] as bool? ?? false,
       registeredAt: DateTime.parse(
         _readString(source['registradoEn'], 'controlRegistro.registradoEn'),
       ).toLocal(),
@@ -503,6 +511,11 @@ String? _readNullableString(dynamic source) {
   }
 
   return source;
+}
+
+DateTime? _readNullableDateTime(dynamic source) {
+  final value = _readNullableString(source);
+  return value == null ? null : DateTime.parse(value).toLocal();
 }
 
 double? _readNullableDouble(dynamic source) {

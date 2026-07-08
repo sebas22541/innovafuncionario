@@ -118,6 +118,8 @@ class ApiQrDetailsDataSource implements QrDetailsDataSource {
                   eventAttendance['controlesAsistidos'] as int? ?? 0,
               observedControlsCount:
                   eventAttendance['controlesObservados'] as int? ?? 0,
+              lateControlsCount:
+                  eventAttendance['controlesRetrasados'] as int? ?? 0,
               controls: ((eventAttendance['controles'] as List?) ?? const [])
                   .whereType<Map<String, dynamic>>()
                   .map(
@@ -128,6 +130,7 @@ class ApiQrDetailsDataSource implements QrDetailsDataSource {
                           (control['controlNombre'] as String?) ?? 'Control',
                       controlOrder: control['controlOrden'] as int? ?? 0,
                       status: (control['estado'] as String?) ?? 'OBSERVADO',
+                      isLate: control['retrasado'] as bool? ?? false,
                       registeredAt: DateTime.parse(
                         (control['registradoEn'] as String?) ??
                             DateTime.now().toIso8601String(),
