@@ -123,7 +123,10 @@ const CALIFICACION_QR_SECRET =
   createHash("sha256").update(`${DATABASE_URL}:calificaciones`).digest("hex");
 const CALIFICACION_QR_VERSION = "CAL1";
 const PUBLIC_RATING_LOGO_SRC = readAssetDataUri(
-  new URL("../../frontend/assets/images/escuBla.png", import.meta.url),
+  [
+    "assets/images/escuBla.png",
+    new URL("../../frontend/assets/images/escuBla.png", import.meta.url),
+  ],
   "image/png",
 );
 
@@ -7523,15 +7526,17 @@ function hashPassword(password: string) {
   return `scrypt:${salt}:${derivedKey}`;
 }
 
-function readAssetDataUri(fileUrl: URL, mimeType: string) {
-  try {
-    return `data:${mimeType};base64,${readFileSync(fileUrl).toString("base64")}`;
-  } catch (error) {
-    logWarning("No se pudo cargar el logo publico de calificaciones.", {
-      error: getErrorMessage(error),
-    });
-    return null;
+function readAssetDataUri(fileLocations: Array<string | URL>, mimeType: string) {
+  for (const location of fileLocations) {
+    try {
+      return `data:${mimeType};base64,${readFileSync(location).toString("base64")}`;
+    } catch {
+      // Intenta la siguiente ubicacion. En Docker el asset vive en /app/assets.
+    }
   }
+
+  logWarning("No se pudo cargar el logo publico de calificaciones.");
+  return null;
 }
 
 function buildDefaultUserPassword(input: {
@@ -10944,7 +10949,7 @@ function buildPublicRatingPage(token: string, funcionario: any) {
   const safeCargo = escapeHtml(funcionarioData.cargo);
   const safeOffice = escapeHtml(funcionarioData.oficina);
   const logoMarkup = PUBLIC_RATING_LOGO_SRC == null
-    ? `<div class="brand-fallback">Innova Funcionario</div>`
+    ? ``
     : `<img class="brand-logo" src="${PUBLIC_RATING_LOGO_SRC}" alt="Innova Funcionario">`;
 
   return `<!doctype html>

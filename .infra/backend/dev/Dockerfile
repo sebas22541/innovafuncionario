@@ -12,6 +12,7 @@ RUN npm ci
 
 COPY backend/ ./
 COPY frontend/assets/templates/credencial.pdf ./assets/templates/credencial.pdf
+COPY frontend/assets/images/escuBla.png ./assets/images/escuBla.png
 RUN npx prisma generate
 
 EXPOSE 3000
