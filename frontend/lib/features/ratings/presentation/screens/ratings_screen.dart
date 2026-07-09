@@ -15,9 +15,10 @@ import '../../../../shared/infrastructure/file_downloader.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../../auth/domain/entities/cargo_option.dart';
+import '../../../auth/domain/entities/office_option.dart';
 import '../../infrastructure/services/ratings_api_service.dart';
 
-enum _RatingsReportFilter { dateRange, cargo, search }
+enum _RatingsReportFilter { dateRange, cargo, office, search }
 
 class RatingsScreen extends StatefulWidget {
   const RatingsScreen({super.key, required this.currentUser});
@@ -33,13 +34,16 @@ class _RatingsScreenState extends State<RatingsScreen> {
   final TextEditingController _startDateController = TextEditingController();
   final TextEditingController _endDateController = TextEditingController();
   final TextEditingController _reportSearchController = TextEditingController();
+  final TextEditingController _officeSearchController = TextEditingController();
   List<AppUser> _users = const [];
   List<CargoOption> _cargos = const [];
+  List<OfficeOption> _offices = const [];
   List<ActiveRatingQr> _activeQrs = const [];
   List<RatingSummary> _report = const [];
   RatingQr? _ratingQr;
   bool _isLoadingUsers = true;
   bool _isLoadingCargos = true;
+  bool _isLoadingOffices = true;
   bool _isLoadingActiveQrs = true;
   bool _isGenerating = false;
   bool _isLoadingReport = false;
@@ -51,9 +55,12 @@ class _RatingsScreenState extends State<RatingsScreen> {
   String _startDate = _todayText();
   String _endDate = _todayText();
   CargoOption? _selectedCargo;
+  OfficeOption? _selectedOffice;
+  String _officeQuery = '';
   _RatingsReportFilter? _activeReportFilter;
   Timer? _searchDebounce;
   Timer? _reportSearchDebounce;
+  Timer? _officeSearchDebounce;
 
   List<AppUser> get _filteredUsers {
     final query = _normalize(_query);
@@ -76,6 +83,23 @@ class _RatingsScreenState extends State<RatingsScreen> {
 
   List<RatingSummary> get _filteredReport => _report;
 
+  List<OfficeOption> get _filteredOffices {
+    final query = _normalize(_officeQuery);
+
+    if (query.length < 2) {
+      return const [];
+    }
+
+    return _offices
+        .where(
+          (office) => _normalize(
+            '${office.name} ${office.code} ${office.level}',
+          ).contains(query),
+        )
+        .take(20)
+        .toList(growable: false);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -83,6 +107,7 @@ class _RatingsScreenState extends State<RatingsScreen> {
     _endDateController.text = _endDate;
     _loadUsers();
     _loadCargos();
+    _loadOffices();
     _loadActiveQrs();
   }
 
@@ -94,6 +119,8 @@ class _RatingsScreenState extends State<RatingsScreen> {
     _startDateController.dispose();
     _endDateController.dispose();
     _reportSearchController.dispose();
+    _officeSearchController.dispose();
+    _officeSearchDebounce?.cancel();
     super.dispose();
   }
 
@@ -143,6 +170,26 @@ class _RatingsScreenState extends State<RatingsScreen> {
     }
   }
 
+  Future<void> _loadOffices() async {
+    setState(() => _isLoadingOffices = true);
+
+    try {
+      final offices = await dependencies.authApiService.fetchOffices();
+      if (!mounted) {
+        return;
+      }
+      setState(() => _offices = offices);
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible cargar oficinas.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingOffices = false);
+      }
+    }
+  }
+
   Future<void> _loadActiveQrs() async {
     setState(() => _isLoadingActiveQrs = true);
 
@@ -184,6 +231,9 @@ class _RatingsScreenState extends State<RatingsScreen> {
         fechaFin: filter == _RatingsReportFilter.dateRange ? _endDate : null,
         cargoCodigo: filter == _RatingsReportFilter.cargo
             ? _selectedCargo?.code
+            : null,
+        oficinaId: filter == _RatingsReportFilter.office
+            ? _selectedOffice?.id
             : null,
         query: filter == _RatingsReportFilter.search ? _reportQuery : null,
       );
@@ -359,6 +409,9 @@ class _RatingsScreenState extends State<RatingsScreen> {
             if (_activeReportFilter == _RatingsReportFilter.cargo &&
                 _selectedCargo != null)
               pw.Text('Cargo: ${_selectedCargo!.name}'),
+            if (_activeReportFilter == _RatingsReportFilter.office &&
+                _selectedOffice != null)
+              pw.Text('Oficina: ${_selectedOffice!.name}'),
             if (_activeReportFilter == _RatingsReportFilter.search &&
                 _reportQuery.trim().isNotEmpty)
               pw.Text('Filtro: ${_reportQuery.trim()}'),
@@ -498,6 +551,42 @@ class _RatingsScreenState extends State<RatingsScreen> {
         }
       }
     });
+  }
+
+  void _onOfficeSearchChanged(String value) {
+    _officeSearchDebounce?.cancel();
+    _officeSearchDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _officeQuery = value;
+        _selectedOffice = null;
+      });
+
+      if (value.trim().isEmpty &&
+          _activeReportFilter == _RatingsReportFilter.office) {
+        setState(() {
+          _report = const [];
+          _hasLoadedReport = false;
+          _activeReportFilter = null;
+        });
+      }
+    });
+  }
+
+  void _selectReportOffice(OfficeOption office) {
+    setState(() {
+      _selectedOffice = office;
+      _officeQuery = office.name;
+      _officeSearchController.text = office.name;
+    });
+    _loadReport(filter: _RatingsReportFilter.office);
+  }
+
+  void _refreshActiveReport() {
+    _loadReport(filter: _activeReportFilter ?? _RatingsReportFilter.dateRange);
   }
 
   @override
@@ -736,6 +825,52 @@ class _RatingsScreenState extends State<RatingsScreen> {
                     },
                   ),
                   const SizedBox(height: 12),
+                  TextField(
+                    controller: _officeSearchController,
+                    onChanged: _onOfficeSearchChanged,
+                    decoration: InputDecoration(
+                      labelText: 'Buscar oficina',
+                      prefixIcon: const Icon(Icons.apartment_rounded),
+                      suffixIcon: _officeSearchController.text.trim().isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'Limpiar oficina',
+                              onPressed: () {
+                                _officeSearchDebounce?.cancel();
+                                setState(() {
+                                  _officeSearchController.clear();
+                                  _officeQuery = '';
+                                  _selectedOffice = null;
+                                  if (_activeReportFilter ==
+                                      _RatingsReportFilter.office) {
+                                    _report = const [];
+                                    _hasLoadedReport = false;
+                                    _activeReportFilter = null;
+                                  }
+                                });
+                              },
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                    ),
+                  ),
+                  if (_isLoadingOffices && _officeQuery.trim().length >= 2) ...[
+                    const SizedBox(height: 10),
+                    const Center(child: CircularProgressIndicator()),
+                  ] else if (_officeQuery.trim().length >= 2 &&
+                      _selectedOffice == null) ...[
+                    const SizedBox(height: 10),
+                    if (_filteredOffices.isEmpty)
+                      const _SearchHint(
+                        icon: Icons.search_off_rounded,
+                        text: 'No se encontraron oficinas.',
+                      )
+                    else
+                      _OfficeSelectList(
+                        offices: _filteredOffices,
+                        onSelected: _selectReportOffice,
+                      ),
+                  ],
+                  const SizedBox(height: 12),
                   Row(
                     children: [
                       Expanded(
@@ -750,7 +885,7 @@ class _RatingsScreenState extends State<RatingsScreen> {
                       ),
                       const SizedBox(width: 10),
                       IconButton.filledTonal(
-                        onPressed: _loadReport,
+                        onPressed: _refreshActiveReport,
                         icon: const Icon(Icons.refresh_rounded),
                       ),
                       const SizedBox(width: 10),
@@ -786,11 +921,7 @@ class _RatingsScreenState extends State<RatingsScreen> {
                       text: 'No hay resultados para ese CI o nombre.',
                     )
                   else
-                    Column(
-                      children: filteredReport
-                          .map((row) => _RatingSummaryTile(summary: row))
-                          .toList(growable: false),
-                    ),
+                    _RatingSummaryGrid(rows: filteredReport),
                 ],
               ),
             ),
@@ -813,7 +944,6 @@ class _RatingSummaryTile extends StatelessWidget {
         .toList(growable: false);
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppPalette.surfaceSoft,
@@ -869,6 +999,42 @@ class _RatingSummaryTile extends StatelessWidget {
   }
 }
 
+class _RatingSummaryGrid extends StatelessWidget {
+  const _RatingSummaryGrid({required this.rows});
+
+  final List<RatingSummary> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 980
+            ? 3
+            : constraints.maxWidth >= 640
+            ? 2
+            : 1;
+        const spacing = 12.0;
+        final itemWidth =
+            (constraints.maxWidth - (spacing * (columns - 1))) / columns;
+
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          alignment: WrapAlignment.start,
+          children: rows
+              .map(
+                (row) => SizedBox(
+                  width: itemWidth,
+                  child: _RatingSummaryTile(summary: row),
+                ),
+              )
+              .toList(growable: false),
+        );
+      },
+    );
+  }
+}
+
 class _FuncionarioSelectList extends StatelessWidget {
   const _FuncionarioSelectList({
     required this.users,
@@ -909,6 +1075,41 @@ class _FuncionarioSelectList extends StatelessWidget {
             ),
             trailing: const Icon(Icons.qr_code_2_rounded),
             onTap: isGenerating ? null : () => onSelected(user),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _OfficeSelectList extends StatelessWidget {
+  const _OfficeSelectList({required this.offices, required this.onSelected});
+
+  final List<OfficeOption> offices;
+  final ValueChanged<OfficeOption> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 280),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: ListView.separated(
+        shrinkWrap: true,
+        itemCount: offices.length,
+        separatorBuilder: (_, _) => const Divider(height: 1),
+        itemBuilder: (context, index) {
+          final office = offices[index];
+
+          return ListTile(
+            leading: const Icon(Icons.apartment_rounded),
+            title: Text(office.name),
+            subtitle: Text('Codigo ${office.code} | Nivel ${office.level}'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => onSelected(office),
           );
         },
       ),

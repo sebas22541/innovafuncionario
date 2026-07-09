@@ -12,6 +12,7 @@ import http, {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
@@ -121,6 +122,10 @@ const CALIFICACION_QR_SECRET =
   process.env.CALIFICACION_QR_SECRET ??
   createHash("sha256").update(`${DATABASE_URL}:calificaciones`).digest("hex");
 const CALIFICACION_QR_VERSION = "CAL1";
+const PUBLIC_RATING_LOGO_SRC = readAssetDataUri(
+  new URL("../../frontend/assets/images/letragris.png", import.meta.url),
+  "image/png",
+);
 
 // INICIO SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
 const FUNCIONARIO_CI_SERVICE_TOKEN_SHA256 = normalizeOptionalEnvValue(
@@ -1309,6 +1314,7 @@ const server = http.createServer(async (request, response) => {
         readOptionalQueryDateOnly(url, "fecha");
       const fechaFin = readOptionalQueryDateOnly(url, "fechaFin") ?? fechaInicio;
       const cargoCodigo = normalizeOptionalText(url.searchParams.get("cargoCodigo"));
+      const oficinaId = readOptionalQueryInt(url, "oficinaId");
       const search = normalizeOptionalText(
         url.searchParams.get("q") ?? url.searchParams.get("ci"),
       );
@@ -1317,6 +1323,7 @@ const server = http.createServer(async (request, response) => {
         fechaInicio,
         fechaFin,
         cargoCodigo,
+        oficinaId,
         search,
       );
 
@@ -1326,6 +1333,7 @@ const server = http.createServer(async (request, response) => {
           fechaInicio,
           fechaFin: fechaFin ?? null,
           cargoCodigo,
+          oficinaId,
           q: search,
           funcionarios: rows,
         },
@@ -7515,6 +7523,17 @@ function hashPassword(password: string) {
   return `scrypt:${salt}:${derivedKey}`;
 }
 
+function readAssetDataUri(fileUrl: URL, mimeType: string) {
+  try {
+    return `data:${mimeType};base64,${readFileSync(fileUrl).toString("base64")}`;
+  } catch (error) {
+    logWarning("No se pudo cargar el logo publico de calificaciones.", {
+      error: getErrorMessage(error),
+    });
+    return null;
+  }
+}
+
 function buildDefaultUserPassword(input: {
   primerApellido: string;
   ci: string;
@@ -10924,6 +10943,9 @@ function buildPublicRatingPage(token: string, funcionario: any) {
   const safeName = escapeHtml(funcionarioData.nombreCompleto);
   const safeCargo = escapeHtml(funcionarioData.cargo);
   const safeOffice = escapeHtml(funcionarioData.oficina);
+  const logoMarkup = PUBLIC_RATING_LOGO_SRC == null
+    ? `<div class="brand-fallback">Innova Funcionario</div>`
+    : `<img class="brand-logo" src="${PUBLIC_RATING_LOGO_SRC}" alt="Innova Funcionario">`;
 
   return `<!doctype html>
 <html lang="es">
@@ -10974,6 +10996,23 @@ function buildPublicRatingPage(token: string, funcionario: any) {
       line-height: 1.08;
       font-weight: 800;
       letter-spacing: 0;
+      text-align: center;
+    }
+    .brand {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 24px;
+    }
+    .brand-logo {
+      display: block;
+      width: min(78%, 310px);
+      max-height: 72px;
+      object-fit: contain;
+    }
+    .brand-fallback {
+      color: var(--night-deep);
+      font-size: 22px;
+      font-weight: 800;
       text-align: center;
     }
     .person {
@@ -11146,6 +11185,7 @@ function buildPublicRatingPage(token: string, funcionario: any) {
 <body>
   <main>
     <section id="form">
+      <div class="brand">${logoMarkup}</div>
       <h1>Califica la atenci&oacute;n</h1>
       <div class="person">
         <strong>${safeName}</strong>
@@ -11154,7 +11194,7 @@ function buildPublicRatingPage(token: string, funcionario: any) {
       </div>
       <div class="ratings" role="group" aria-label="Calificaci&oacute;n">
         <button class="rating" type="button" data-rating="feliz"><span>&#9786;</span>Feliz</button>
-        <button class="rating" type="button" data-rating="neutral"><span>&#9675;</span>Neutral</button>
+        <button class="rating" type="button" data-rating="neutral"><span>&#128528;</span>Neutral</button>
         <button class="rating" type="button" data-rating="enojada"><span>&#9785;</span>Enojada</button>
       </div>
       <label for="comentario">Comentario opcional</label>
@@ -11328,6 +11368,7 @@ async function loadFuncionarioRatingsSummary(
   fechaInicio: string | null,
   fechaFin: string | null,
   cargoCodigo: string | null,
+  oficinaId: number | null,
   search: string | null,
 ) {
   const hasDateFilter = fechaInicio != null || fechaFin != null;
@@ -11362,18 +11403,22 @@ async function loadFuncionarioRatingsSummary(
     );
   }
 
+  if (oficinaId != null) {
+    params.push(oficinaId);
+    filters.push(
+      `AND COALESCE(u."oficina_comision_id", u."oficina_id") = $${params.length}`,
+    );
+  }
+
   if (search != null) {
-    params.push(`%${search}%`);
-    filters.push(`
-      AND (
-        u."ci" ILIKE $${params.length}
-        OR u."nombre_completo" ILIKE $${params.length}
-        OR u."cargo" ILIKE $${params.length}
-        OR u."subcargo" ILIKE $${params.length}
-        OR principal."oficina" ILIKE $${params.length}
-        OR comision."oficina" ILIKE $${params.length}
-      )
-    `);
+    const normalizedSearch = search.trim();
+    if (/^\d+$/.test(normalizedSearch)) {
+      params.push(normalizedSearch);
+      filters.push(`AND COALESCE(u."ci", '') = $${params.length}`);
+    } else {
+      params.push(`%${normalizedSearch}%`);
+      filters.push(`AND u."nombre_completo" ILIKE $${params.length}`);
+    }
   }
 
   const result = await pool.query(
@@ -11403,6 +11448,9 @@ async function loadFuncionarioRatingsSummary(
       FROM "usuarios" u
       LEFT JOIN "oficinas" principal ON principal."id" = u."oficina_id"
       LEFT JOIN "oficinas" comision ON comision."id" = u."oficina_comision_id"
+      INNER JOIN "calificacion_funcionario_qrs" q
+        ON q."funcionario_id" = u."id"
+        AND q."activo" = TRUE
       LEFT JOIN "calificaciones_funcionario" c
         ON c."funcionario_id" = u."id"
         ${joinFilters.join("\n")}
@@ -11419,8 +11467,7 @@ async function loadFuncionarioRatingsSummary(
         u."unidad",
         comision."oficina",
         principal."oficina"
-      HAVING COUNT(c."id") > 0
-      ORDER BY "total" DESC, "enojada" DESC, u."nombre_completo" ASC
+      ORDER BY u."nombre_completo" ASC
     `,
     params,
   );

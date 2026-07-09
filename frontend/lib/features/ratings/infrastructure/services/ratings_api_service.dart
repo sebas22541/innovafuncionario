@@ -16,6 +16,7 @@ class RatingsApiService {
     String? fechaInicio,
     String? fechaFin,
     String? cargoCodigo,
+    int? oficinaId,
     String? query,
   }) async {
     final queryParameters = <String, String>{
@@ -24,6 +25,7 @@ class RatingsApiService {
       if (fechaFin != null && fechaFin.trim().isNotEmpty) 'fechaFin': fechaFin,
       if (cargoCodigo != null && cargoCodigo.trim().isNotEmpty)
         'cargoCodigo': cargoCodigo,
+      if (oficinaId != null) 'oficinaId': '$oficinaId',
       if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
     };
     final payload = await _apiClient.getJson(
@@ -150,8 +152,8 @@ class RatingReport {
     }
 
     return RatingReport(
-      fechaInicio: _readString(source['fechaInicio'], 'fechaInicio'),
-      fechaFin: _readString(source['fechaFin'], 'fechaFin'),
+      fechaInicio: source['fechaInicio'] as String? ?? '',
+      fechaFin: source['fechaFin'] as String? ?? '',
       funcionarios: rows
           .map((item) => RatingSummary.fromJson(_readMap(item, 'funcionario')))
           .toList(growable: false),
