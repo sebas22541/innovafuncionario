@@ -206,6 +206,9 @@ model usuarios {
   ci                   String?                @db.VarChar(30)
   celular              String?                @db.VarChar(30)
   tipo_vinculo         String?                @db.VarChar(30)
+  contrato_numero      String?                @db.VarChar(80)
+  contrato_inicio      DateTime?              @db.Date
+  contrato_fin         DateTime?              @db.Date
   unidad               String?                @db.VarChar(120)
   oficina_id           Int?
   oficina_comision_id  Int?
@@ -247,6 +250,7 @@ model usuarios {
   calificacion_funcionario_qr calificacion_funcionario_qrs?
 
   @@index([cargo_codigo], map: "idx_usuarios_cargo_codigo")
+  @@index([contrato_fin], map: "idx_usuarios_contrato_fin")
   @@index([subcargo_codigo], map: "idx_usuarios_subcargo_codigo")
   @@index([oficina_comision_id], map: "idx_usuarios_oficina_comision_id")
   @@index([oficina_id], map: "idx_usuarios_oficina_id")
@@ -378,6 +382,7 @@ enum rol_usuario {
   CONTROL
   CREDENCIALES
   ALMUERZO
+  LECTOR_USUARIOS
   OPERADOR
 }
 

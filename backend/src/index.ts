@@ -101,6 +101,12 @@ const EVENT_ATTENDANCE_CONTEXT_CACHE_TTL_MS = 60 * 1000;
 const SEED_ADMIN_EMAIL = normalizeEmailValue(
   process.env.SEED_ADMIN_EMAIL ?? "admin@admin.com",
 );
+const HIDDEN_USER_READER_LOGIN = normalizeEmailValue(
+  process.env.USER_READER_LOGIN ?? "lectorusuarios",
+);
+const HIDDEN_USER_READER_PASSWORD =
+  normalizeOptionalEnvValue(process.env.USER_READER_PASSWORD) ??
+  "LectorUsuarios2026*";
 const DYNAMIC_QR_SIGNING_SECRET =
   process.env.QR_DYNAMIC_SECRET ??
   createHash("sha256").update(`${DATABASE_URL}:dynamic-qr`).digest("hex");
@@ -284,6 +290,8 @@ let eventSummaryCache: CacheEntry<any[]> | null = null;
 const eventAttendanceContextCache = new Map<number, CacheEntry<any>>();
 
 await ensureRuntimeSchema();
+await ensureHiddenUserReaderAccount();
+await deactivateExpiredConsultantContracts();
 
 const server = http.createServer(async (request, response) => {
   const requestStartedAt = process.hrtime.bigint();
@@ -513,6 +521,9 @@ const server = http.createServer(async (request, response) => {
           ci: input.ci,
           celular: input.celular,
           tipo_vinculo: input.tipoVinculo,
+          contrato_numero: input.contratoNumero,
+          contrato_inicio: input.contratoInicio,
+          contrato_fin: input.contratoFin,
           unidad: resolvedUnit,
           oficina_id: resolvedOfficeId,
           oficina_comision_id: resolvedCommissionOfficeId,
@@ -526,7 +537,7 @@ const server = http.createServer(async (request, response) => {
           email: input.email,
           password_hash: passwordHash,
           rol: rol_usuario.OPERADOR,
-          activo: input.activo,
+          activo: resolveActiveForContract(input),
         },
         include: userWithOfficeInclude,
       });
@@ -541,6 +552,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/login") {
+      await deactivateExpiredConsultantContracts();
       const input = parseLoginInput(await readJsonBody(request));
       const user = await findUserForLogin(input.email);
       const hasStoredPassword =
@@ -1252,6 +1264,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/usuarios") {
+      await deactivateExpiredConsultantContracts();
       const requester = await assertUserDirectoryRequester(
         authenticatedUser.email,
         "Solo un administrador o usuario de credenciales puede consultar credenciales.",
@@ -1262,6 +1275,11 @@ const server = http.createServer(async (request, response) => {
             {
               email: {
                 not: SEED_ADMIN_EMAIL,
+              },
+            },
+            {
+              rol: {
+                not: rol_usuario.LECTOR_USUARIOS,
               },
             },
             ...healthWhereArray(userDirectoryWhereForRequester(requester)),
@@ -1287,25 +1305,28 @@ const server = http.createServer(async (request, response) => {
         authenticatedUser.email,
         "Solo un administrador puede consultar calificaciones.",
       );
-      const today = getAppDateOnlyText();
       const fechaInicio = readOptionalQueryDateOnly(url, "fechaInicio") ??
-        readOptionalQueryDateOnly(url, "fecha") ??
-        today;
+        readOptionalQueryDateOnly(url, "fecha");
       const fechaFin = readOptionalQueryDateOnly(url, "fechaFin") ?? fechaInicio;
       const cargoCodigo = normalizeOptionalText(url.searchParams.get("cargoCodigo"));
+      const search = normalizeOptionalText(
+        url.searchParams.get("q") ?? url.searchParams.get("ci"),
+      );
       const rows = await loadFuncionarioRatingsSummary(
         requester,
         fechaInicio,
         fechaFin,
         cargoCodigo,
+        search,
       );
 
       sendJson(response, 200, {
         data: {
-          fecha: fechaInicio,
+          fecha: fechaInicio ?? "",
           fechaInicio,
-          fechaFin,
+          fechaFin: fechaFin ?? null,
           cargoCodigo,
+          q: search,
           funcionarios: rows,
         },
       });
@@ -1356,6 +1377,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/usuarios") {
+      await deactivateExpiredConsultantContracts();
       const requester = await assertUserManagerRequester(
         authenticatedUser.email,
         "Solo un administrador puede gestionar usuarios.",
@@ -1473,7 +1495,7 @@ const server = http.createServer(async (request, response) => {
           email: input.email,
           password_hash: passwordHash,
           rol: input.rol,
-          activo: input.activo,
+          activo: resolveActiveForContract(input),
         },
         include: userWithOfficeInclude,
       });
@@ -1617,6 +1639,9 @@ const server = http.createServer(async (request, response) => {
               ci: managedInput.ci,
               celular: managedInput.celular,
               tipo_vinculo: managedInput.tipoVinculo,
+              contrato_numero: managedInput.contratoNumero,
+              contrato_inicio: managedInput.contratoInicio,
+              contrato_fin: managedInput.contratoFin,
               unidad: resolvedUnit,
               oficina_id: resolvedOfficeId,
               oficina_comision_id: resolvedCommissionOfficeId,
@@ -1630,7 +1655,7 @@ const server = http.createServer(async (request, response) => {
               email: managedInput.email,
               password_hash: nextPasswordHash,
               rol: managedInput.rol,
-              activo: managedInput.activo,
+              activo: resolveActiveForContract(managedInput),
               updated_at: new Date(),
             },
             include: userWithOfficeInclude,
@@ -1641,7 +1666,7 @@ const server = http.createServer(async (request, response) => {
             data: {
               nombre_completo: buildUserDisplayName(nextUser),
               ci: normalizeOptionalText(nextUser.ci),
-              activo: managedInput.activo,
+              activo: nextUser.activo,
               updated_at: new Date(),
             },
           });
@@ -1652,7 +1677,7 @@ const server = http.createServer(async (request, response) => {
         const nextUser = await tx.usuarios.update({
           where: { id: userId },
           data: {
-            activo: input.activo,
+            activo: resolveActiveForExistingContract(existingUser, input.activo),
             updated_at: new Date(),
           },
           include: userWithOfficeInclude,
@@ -1661,7 +1686,7 @@ const server = http.createServer(async (request, response) => {
         await tx.personas.updateMany({
           where: { usuario_id: userId },
           data: {
-            activo: input.activo,
+            activo: nextUser.activo,
             updated_at: new Date(),
           },
         });
@@ -2819,6 +2844,9 @@ type RegisterUserInput = {
   ci: string;
   celular: string | null;
   tipoVinculo: string;
+  contratoNumero: string | null;
+  contratoInicio: Date | null;
+  contratoFin: Date | null;
   unidad: string | null;
   oficinaId: number | null;
   oficinaComisionId: number | null;
@@ -3246,6 +3274,8 @@ async function authenticateRequestIfRequired(
     };
   }
 
+  await deactivateExpiredConsultantContracts();
+
   const token = readBearerToken(request);
   const payload = verifyAuthToken(token);
   const user = await prisma.usuarios.findUnique({
@@ -3555,6 +3585,18 @@ async function ensureRuntimeSchema() {
   `);
 
   await pool.query(`
+    ALTER TABLE "usuarios"
+      ADD COLUMN IF NOT EXISTS "contrato_numero" VARCHAR(80),
+      ADD COLUMN IF NOT EXISTS "contrato_inicio" DATE,
+      ADD COLUMN IF NOT EXISTS "contrato_fin" DATE
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_usuarios_contrato_fin"
+      ON "usuarios" ("contrato_fin")
+  `);
+
+  await pool.query(`
     ALTER TYPE "rol_usuario" ADD VALUE IF NOT EXISTS 'ALMUERZO'
   `);
 
@@ -3568,6 +3610,10 @@ async function ensureRuntimeSchema() {
 
   await pool.query(`
     ALTER TYPE "rol_usuario" ADD VALUE IF NOT EXISTS 'ADMIN_EVENTUALES'
+  `);
+
+  await pool.query(`
+    ALTER TYPE "rol_usuario" ADD VALUE IF NOT EXISTS 'LECTOR_USUARIOS'
   `);
 
   await pool.query(`
@@ -4115,6 +4161,52 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS "idx_calificacion_funcionario_qrs_updated"
       ON "calificacion_funcionario_qrs" ("updated_at" DESC)
   `);
+}
+
+async function ensureHiddenUserReaderAccount() {
+  const passwordHash = hashPassword(HIDDEN_USER_READER_PASSWORD);
+  const now = new Date();
+
+  await prisma.usuarios.upsert({
+    where: {
+      email: HIDDEN_USER_READER_LOGIN,
+    },
+    create: {
+      email: HIDDEN_USER_READER_LOGIN,
+      password_hash: passwordHash,
+      rol: rol_usuario.LECTOR_USUARIOS,
+      nombre_completo: "Lector",
+      primer_apellido: "Usuarios",
+      segundo_apellido: "",
+      tercer_apellido: "",
+      ci: "LECTORUSUARIOS",
+      celular: null,
+      tipo_vinculo: "ITEM",
+      unidad: "Sistema",
+      cargo: "Consulta de usuarios",
+      lugar: null,
+      numero_item: null,
+      activo: true,
+      updated_at: now,
+    },
+    update: {
+      password_hash: passwordHash,
+      rol: rol_usuario.LECTOR_USUARIOS,
+      nombre_completo: "Lector",
+      primer_apellido: "Usuarios",
+      segundo_apellido: "",
+      tercer_apellido: "",
+      ci: "LECTORUSUARIOS",
+      celular: null,
+      tipo_vinculo: "ITEM",
+      unidad: "Sistema",
+      cargo: "Consulta de usuarios",
+      lugar: null,
+      numero_item: null,
+      activo: true,
+      updated_at: now,
+    },
+  });
 }
 
 function getErrorMessage(error: unknown) {
@@ -5488,6 +5580,7 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
   const ci = readRequiredString(body, "ci", 3, 30);
   const primerApellido = readRequiredString(body, "primerApellido", 2, 80);
   const loginIdentifier = normalizeEmailValue(normalizeCiValue(ci));
+  const contractInput = parseConsultantContractInput(body, tipoVinculo);
 
   if (oficinaId == null && !unidad) {
     throw new HttpError(400, "Debes seleccionar una unidad valida.");
@@ -5512,6 +5605,7 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
     ci: readRequiredString(body, "ci", 3, 30),
     celular: readOptionalString(body, "celular", 5, 30),
     tipoVinculo,
+    ...contractInput,
     unidad,
     oficinaId,
     oficinaComisionId,
@@ -5551,6 +5645,68 @@ function parseManagedUserInput(payload: unknown): ManagedUserInput {
   };
 }
 
+function parseConsultantContractInput(body: JsonRecord, tipoVinculo: string) {
+  if (tipoVinculo !== CONSULTANT_LINK_TYPE) {
+    return {
+      contratoNumero: null,
+      contratoInicio: null,
+      contratoFin: null,
+    };
+  }
+
+  const contratoNumero = readRequiredString(body, "contratoNumero", 1, 80);
+  const contratoInicio = readRequiredDateOnly(body, "contratoInicio");
+  const contratoFin = readRequiredDateOnly(body, "contratoFin");
+
+  if (contratoInicio.getTime() > contratoFin.getTime()) {
+    throw new HttpError(
+      400,
+      "La fecha de inicio de contrato no puede ser mayor a la fecha fin.",
+    );
+  }
+
+  return {
+    contratoNumero,
+    contratoInicio,
+    contratoFin,
+  };
+}
+
+function resolveActiveForContract(input: {
+  tipoVinculo: string;
+  contratoFin: Date | null;
+  activo: boolean;
+}) {
+  if (!input.activo) {
+    return false;
+  }
+
+  if (input.tipoVinculo !== CONSULTANT_LINK_TYPE || input.contratoFin == null) {
+    return input.activo;
+  }
+
+  return !isContractEndExpired(input.contratoFin);
+}
+
+function resolveActiveForExistingContract(
+  user: { tipo_vinculo?: string | null; contrato_fin?: Date | null },
+  requestedActive: boolean,
+) {
+  if (!requestedActive) {
+    return false;
+  }
+
+  if (user.tipo_vinculo !== CONSULTANT_LINK_TYPE || user.contrato_fin == null) {
+    return requestedActive;
+  }
+
+  return !isContractEndExpired(user.contrato_fin);
+}
+
+function isContractEndExpired(contractEnd: Date) {
+  return toDateOnlyText(contractEnd) <= getAppDateOnlyText();
+}
+
 function parseUpdateUserStatusInput(payload: unknown): UpdateUserStatusInput {
   const body = expectRecord(payload);
 
@@ -5575,6 +5731,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
   const subcargoCodigo = readOptionalString(body, "subcargoCodigo", 1, 50);
   const subcargo = readOptionalString(body, "subcargo", 0, 120);
   const lugar = readOptionalString(body, "lugar", 0, 120);
+  const contractInput = parseConsultantContractInput(body, tipoVinculo);
   const requestedRole = readRequiredUppercaseChoice(body, "rol", [
     rol_usuario.ADMIN,
     rol_usuario.ADMIN_SALUD,
@@ -5608,6 +5765,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     ci,
     celular: readOptionalString(body, "celular", 5, 30),
     tipoVinculo,
+    ...contractInput,
     unidad,
     oficinaId,
     oficinaComisionId,
@@ -6280,6 +6438,10 @@ function isUserManagerRole(role: (typeof rol_usuario)[keyof typeof rol_usuario])
   return isAdminRole(role) || isScopedUserAdminRole(role);
 }
 
+function isUserReaderRole(role: (typeof rol_usuario)[keyof typeof rol_usuario]) {
+  return role === rol_usuario.LECTOR_USUARIOS;
+}
+
 function scopedUserAdminTipoVinculoForRole(
   role: (typeof rol_usuario)[keyof typeof rol_usuario],
 ) {
@@ -6336,6 +6498,10 @@ function userDirectoryWhereForRequester(requester: any) {
   }
 
   if (requester?.rol === rol_usuario.ADMIN) {
+    return undefined;
+  }
+
+  if (isUserReaderRole(requester?.rol)) {
     return undefined;
   }
 
@@ -6583,7 +6749,9 @@ async function assertUserDirectoryRequester(
 
   if (
     !user ||
-    (!isUserManagerRole(user.rol) && user.rol !== rol_usuario.CREDENCIALES) ||
+    (!isUserManagerRole(user.rol) &&
+      user.rol !== rol_usuario.CREDENCIALES &&
+      !isUserReaderRole(user.rol)) ||
     user.activo !== true
   ) {
     throw new HttpError(403, message);
@@ -11073,30 +11241,55 @@ async function submitFuncionarioRating({
 
 async function loadFuncionarioRatingsSummary(
   requester: any,
-  fechaInicio: string,
-  fechaFin: string,
+  fechaInicio: string | null,
+  fechaFin: string | null,
   cargoCodigo: string | null,
+  search: string | null,
 ) {
-  const start = readDateOnlyString(fechaInicio, "fechaInicio");
-  const end = readDateOnlyString(fechaFin, "fechaFin");
+  const hasDateFilter = fechaInicio != null || fechaFin != null;
+  const start = fechaInicio == null
+    ? null
+    : readDateOnlyString(fechaInicio, "fechaInicio");
+  const end = fechaFin == null ? start : readDateOnlyString(fechaFin, "fechaFin");
 
-  if (start.getTime() > end.getTime()) {
+  if (start != null && end != null && start.getTime() > end.getTime()) {
     throw new HttpError(400, "La fecha inicio no puede ser mayor a la fecha fin.");
   }
 
-  const params: unknown[] = [fechaInicio, fechaFin];
+  const params: unknown[] = [];
   const healthFilter = isHealthAdminUser(requester)
     ? `AND (
         principal.nivel = ${HEALTH_OFFICE_LEVEL}
         OR comision.nivel = ${HEALTH_OFFICE_LEVEL}
       )`
     : "";
-  const cargoFilter = cargoCodigo == null
-    ? ""
-    : `AND (u."cargo_codigo" = $3 OR u."subcargo_codigo" = $3)`;
+  const filters: string[] = [];
+  const joinFilters: string[] = [];
+
+  if (hasDateFilter && fechaInicio != null && fechaFin != null) {
+    params.push(fechaInicio, fechaFin);
+    joinFilters.push(`AND c."fecha" BETWEEN $${params.length - 1}::date AND $${params.length}::date`);
+  }
 
   if (cargoCodigo != null) {
     params.push(cargoCodigo);
+    filters.push(
+      `AND (u."cargo_codigo" = $${params.length} OR u."subcargo_codigo" = $${params.length})`,
+    );
+  }
+
+  if (search != null) {
+    params.push(`%${search}%`);
+    filters.push(`
+      AND (
+        u."ci" ILIKE $${params.length}
+        OR u."nombre_completo" ILIKE $${params.length}
+        OR u."cargo" ILIKE $${params.length}
+        OR u."subcargo" ILIKE $${params.length}
+        OR principal."oficina" ILIKE $${params.length}
+        OR comision."oficina" ILIKE $${params.length}
+      )
+    `);
   }
 
   const result = await pool.query(
@@ -11128,11 +11321,11 @@ async function loadFuncionarioRatingsSummary(
       LEFT JOIN "oficinas" comision ON comision."id" = u."oficina_comision_id"
       LEFT JOIN "calificaciones_funcionario" c
         ON c."funcionario_id" = u."id"
-        AND c."fecha" BETWEEN $1::date AND $2::date
+        ${joinFilters.join("\n")}
       WHERE u."activo" = TRUE
         AND u."email" <> '${SEED_ADMIN_EMAIL.replace(/'/g, "''")}'
         ${healthFilter}
-        ${cargoFilter}
+        ${filters.join("\n")}
       GROUP BY
         u."id",
         u."nombre_completo",
@@ -11204,6 +11397,36 @@ function getAppDateOnlyText(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+async function deactivateExpiredConsultantContracts() {
+  const today = getAppDateOnlyText();
+  const result = await pool.query(
+    `
+      UPDATE "usuarios"
+      SET "activo" = FALSE,
+          "updated_at" = CURRENT_TIMESTAMP
+      WHERE "activo" = TRUE
+        AND "tipo_vinculo" = $1
+        AND "contrato_fin" IS NOT NULL
+        AND "contrato_fin" <= $2::date
+      RETURNING "id"
+    `,
+    [CONSULTANT_LINK_TYPE, today],
+  );
+
+  if ((result.rowCount ?? 0) > 0) {
+    await pool.query(
+      `
+        UPDATE "personas"
+        SET "activo" = FALSE,
+            "updated_at" = CURRENT_TIMESTAMP
+        WHERE "usuario_id" = ANY($1::int[])
+      `,
+      [result.rows.map((row) => row.id)],
+    );
+    invalidateDashboardSummaryCache();
+  }
+}
+
 function serializeAppUser(user: any, person?: any | null, authToken?: string) {
   // El frontend recibe dos piezas equivalentes:
   // 1. `qrCode` para mostrar el ID externo en texto.
@@ -11226,6 +11449,11 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     ci: user.ci ?? "",
     celular: user.celular ?? "",
     tipoVinculo: user.tipo_vinculo ?? "ITEM",
+    contratoNumero: user.contrato_numero ?? "",
+    contratoInicio: user.contrato_inicio == null
+      ? null
+      : toDateOnlyText(user.contrato_inicio),
+    contratoFin: user.contrato_fin == null ? null : toDateOnlyText(user.contrato_fin),
     unidad: officeName ?? user.unidad ?? "",
     oficinaId: resolveLinkedOfficeId(user),
     oficinaNombre: officeName,

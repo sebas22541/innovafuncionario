@@ -6,6 +6,7 @@ enum AppUserRole {
   control,
   credentials,
   lunch,
+  userReader,
   external,
 }
 
@@ -26,6 +27,8 @@ extension AppUserRoleX on AppUserRole {
         return 'CREDENCIALES';
       case AppUserRole.lunch:
         return 'ALMUERZO';
+      case AppUserRole.userReader:
+        return 'LECTOR_USUARIOS';
       case AppUserRole.external:
         return 'OPERADOR';
     }
@@ -47,6 +50,8 @@ extension AppUserRoleX on AppUserRole {
         return 'Credenciales';
       case AppUserRole.lunch:
         return 'Almuerzo';
+      case AppUserRole.userReader:
+        return 'Lector de usuarios';
       case AppUserRole.external:
         return 'Funcionario';
     }
@@ -65,6 +70,9 @@ class AppUser {
     required this.ci,
     required this.celular,
     required this.tipoVinculo,
+    this.contratoNumero = '',
+    this.contratoInicio,
+    this.contratoFin,
     required this.unidad,
     required this.cargo,
     required this.lugar,
@@ -101,6 +109,9 @@ class AppUser {
   final String ci;
   final String celular;
   final String tipoVinculo;
+  final String contratoNumero;
+  final String? contratoInicio;
+  final String? contratoFin;
   final String unidad;
   final String cargo;
   final String lugar;
@@ -138,6 +149,9 @@ class AppUser {
       ci: ci,
       celular: celular,
       tipoVinculo: tipoVinculo,
+      contratoNumero: contratoNumero,
+      contratoInicio: contratoInicio,
+      contratoFin: contratoFin,
       unidad: unidad,
       cargo: cargo,
       lugar: lugar,
@@ -180,6 +194,9 @@ class AppUser {
       ci: _readString(source['ci'], 'ci'),
       celular: source['celular'] as String? ?? '',
       tipoVinculo: _readString(source['tipoVinculo'], 'tipoVinculo'),
+      contratoNumero: source['contratoNumero'] as String? ?? '',
+      contratoInicio: source['contratoInicio'] as String?,
+      contratoFin: source['contratoFin'] as String?,
       unidad: _readString(source['unidad'], 'unidad'),
       cargo: _readString(source['cargo'], 'cargo'),
       lugar: source['lugar'] as String? ?? '',
@@ -219,6 +236,9 @@ class AppUser {
       'ci': ci,
       'celular': celular,
       'tipoVinculo': tipoVinculo,
+      'contratoNumero': contratoNumero,
+      'contratoInicio': contratoInicio,
+      'contratoFin': contratoFin,
       'unidad': unidad,
       'cargo': cargo,
       'lugar': lugar,
@@ -297,11 +317,15 @@ class AppUser {
 
   bool get canEditUsers => role == AppUserRole.admin;
 
+  bool get canViewUsers => canManageUsers || role == AppUserRole.userReader;
+
   bool get isControl => role == AppUserRole.control;
 
   bool get isCredentials => role == AppUserRole.credentials;
 
   bool get isLunchControl => role == AppUserRole.lunch;
+
+  bool get isUserReader => role == AppUserRole.userReader;
 
   bool get isExternalUser => role == AppUserRole.external;
 
@@ -395,6 +419,10 @@ AppUserRole _readRole(dynamic value) {
 
   if (value == 'ALMUERZO') {
     return AppUserRole.lunch;
+  }
+
+  if (value == 'LECTOR_USUARIOS') {
+    return AppUserRole.userReader;
   }
 
   return AppUserRole.external;

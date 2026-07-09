@@ -13,18 +13,21 @@ class RatingsApiService {
   }
 
   Future<RatingReport> fetchReport({
-    required String fechaInicio,
-    required String fechaFin,
+    String? fechaInicio,
+    String? fechaFin,
     String? cargoCodigo,
+    String? query,
   }) async {
-    final query = <String, String>{
-      'fechaInicio': fechaInicio,
-      'fechaFin': fechaFin,
+    final queryParameters = <String, String>{
+      if (fechaInicio != null && fechaInicio.trim().isNotEmpty)
+        'fechaInicio': fechaInicio,
+      if (fechaFin != null && fechaFin.trim().isNotEmpty) 'fechaFin': fechaFin,
       if (cargoCodigo != null && cargoCodigo.trim().isNotEmpty)
         'cargoCodigo': cargoCodigo,
+      if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
     };
     final payload = await _apiClient.getJson(
-      '/api/calificaciones?${Uri(queryParameters: query).query}',
+      '/api/calificaciones?${Uri(queryParameters: queryParameters).query}',
     );
     return RatingReport.fromJson(_readMap(payload['data'], 'data'));
   }

@@ -294,6 +294,9 @@ class _UsersScreenState extends State<UsersScreen> {
         ci: draft.ci,
         celular: draft.celular,
         tipoVinculo: draft.tipoVinculo,
+        contratoNumero: draft.contratoNumero,
+        contratoInicio: draft.contratoInicio,
+        contratoFin: draft.contratoFin,
         oficinaId: draft.office.id,
         oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
@@ -454,6 +457,9 @@ class _UsersScreenState extends State<UsersScreen> {
         ci: draft.ci,
         celular: draft.celular,
         tipoVinculo: draft.tipoVinculo,
+        contratoNumero: draft.contratoNumero,
+        contratoInicio: draft.contratoInicio,
+        contratoFin: draft.contratoFin,
         oficinaId: draft.office.id,
         oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
@@ -1486,6 +1492,7 @@ class _RoleChip extends StatelessWidget {
       AppUserRole.control => AppPalette.night,
       AppUserRole.credentials => AppPalette.orange,
       AppUserRole.lunch => Colors.green.shade700,
+      AppUserRole.userReader => AppPalette.night,
       AppUserRole.external => AppPalette.muted,
     };
     final backgroundColor = switch (role) {
@@ -1496,6 +1503,7 @@ class _RoleChip extends StatelessWidget {
       AppUserRole.control => AppPalette.blueSoftStrong,
       AppUserRole.credentials => AppPalette.orangeSoft,
       AppUserRole.lunch => Colors.green.shade50,
+      AppUserRole.userReader => AppPalette.blueSoftStrong,
       AppUserRole.external => AppPalette.surfaceSoft,
     };
 
@@ -1831,12 +1839,14 @@ class _RoleFilterField extends StatelessWidget {
           value: null,
           child: Text('Todos los roles'),
         ),
-        ...AppUserRole.values.map(
-          (role) => DropdownMenuItem<AppUserRole?>(
-            value: role,
-            child: Text(role.label),
-          ),
-        ),
+        ...AppUserRole.values
+            .where((role) => role != AppUserRole.userReader)
+            .map(
+              (role) => DropdownMenuItem<AppUserRole?>(
+                value: role,
+                child: Text(role.label),
+              ),
+            ),
       ],
       onChanged: onChanged,
     );
@@ -1882,6 +1892,11 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   final TextEditingController _subcargoController = TextEditingController();
   final TextEditingController _lugarController = TextEditingController();
   final TextEditingController _numeroItemController = TextEditingController();
+  final TextEditingController _contratoNumeroController =
+      TextEditingController();
+  final TextEditingController _contratoInicioController =
+      TextEditingController();
+  final TextEditingController _contratoFinController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController =
       TextEditingController();
@@ -1901,6 +1916,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   bool _changePassword = false;
   bool get _isEditing => widget.initialUser != null;
   bool get _isReadOnly => widget.readOnly;
+  bool get _isConsultant => _selectedTipoVinculo == 'CONSULTOR';
   bool get _isScopedUserAdmin => widget.currentUser.isScopedUserAdmin;
   String? get _fixedTipoVinculo {
     if (widget.currentUser.isAdminConsultants) {
@@ -1933,6 +1949,9 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
       _ => 'ITEM',
     };
     _selectedActivo = user.activo;
+    _contratoNumeroController.text = user.contratoNumero;
+    _contratoInicioController.text = user.contratoInicio ?? '';
+    _contratoFinController.text = user.contratoFin ?? '';
     _ciController.text = user.ci;
     _celularController.text = user.celular;
     _nombreCompletoController.text = user.nombreCompleto;
@@ -1994,6 +2013,9 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _subcargoController.dispose();
     _lugarController.dispose();
     _numeroItemController.dispose();
+    _contratoNumeroController.dispose();
+    _contratoInicioController.dispose();
+    _contratoFinController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
@@ -2114,6 +2136,31 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     });
   }
 
+  Future<void> _pickContractDate({
+    required TextEditingController controller,
+  }) async {
+    if (_isReadOnly) {
+      return;
+    }
+
+    final initialDate = DateTime.tryParse(controller.text) ?? DateTime.now();
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(DateTime.now().year + 10),
+      locale: const Locale('es', 'BO'),
+    );
+
+    if (!mounted || selected == null) {
+      return;
+    }
+
+    setState(() {
+      controller.text = _formatDate(selected);
+    });
+  }
+
   OfficeOption? _findInitialOffice({
     int? officeId,
     String? officeCode,
@@ -2225,11 +2272,31 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
       return;
     }
 
+    if (_isConsultant) {
+      final inicio = DateTime.tryParse(_contratoInicioController.text.trim());
+      final fin = DateTime.tryParse(_contratoFinController.text.trim());
+
+      if (inicio == null || fin == null || inicio.isAfter(fin)) {
+        AppAlert.showError(
+          context,
+          'Revisa las fechas del contrato del consultor.',
+        );
+        return;
+      }
+    }
+
     Navigator.of(context).pop(
       _ManagedUserDraft(
         role: _selectedRole,
         tipoVinculo: _selectedTipoVinculo,
         activo: _selectedActivo,
+        contratoNumero: _isConsultant
+            ? _contratoNumeroController.text.trim()
+            : null,
+        contratoInicio: _isConsultant
+            ? _contratoInicioController.text.trim()
+            : null,
+        contratoFin: _isConsultant ? _contratoFinController.text.trim() : null,
         ci: _ciController.text.trim(),
         celular: _celularController.text.trim(),
         nombreCompleto: _nombreCompletoController.text.trim(),
@@ -2297,410 +2364,483 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
             ),
             const Divider(height: 1, color: AppPalette.line),
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 18, 24, 18),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _isReadOnly
-                            ? 'Consulta los datos del usuario. Este rol no puede modificar informacion desde esta pantalla.'
-                            : _isEditing
-                            ? 'Actualiza los datos del usuario y guarda los cambios.'
-                            : 'Completa los datos del usuario. El acceso se creara automaticamente con CI como usuario y primer apellido + CI como contrasena inicial.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                      const SizedBox(height: 18),
-                      _DropdownField<AppUserRole>(
-                        label: 'Rol del sistema',
-                        isRequired: true,
-                        value: _selectedRole,
-                        items: _roleDropdownItemsForUser(widget.currentUser),
-                        enabled: !_isReadOnly,
-                        onChanged: _isReadOnly || _isScopedUserAdmin
-                            ? (_) {}
-                            : (value) {
-                                if (value == null) {
-                                  return;
-                                }
-
-                                setState(() {
-                                  _selectedRole = value;
-                                });
-                              },
-                      ),
-                      const SizedBox(height: 14),
-                      _DropdownField<String>(
-                        label: 'Tipo de vinculacion',
-                        isRequired: true,
-                        value: _selectedTipoVinculo,
-                        items: _tipoVinculoDropdownItemsForUser(
-                          widget.currentUser,
-                        ),
-                        enabled: !_isReadOnly,
-                        onChanged: _isReadOnly || fixedTipoVinculo != null
-                            ? (_) {}
-                            : (value) {
-                                if (value == null) {
-                                  return;
-                                }
-
-                                setState(() {
-                                  _selectedTipoVinculo = value;
-
-                                  if (value != 'ITEM') {
-                                    _numeroItemController.clear();
-                                  }
-                                });
-                              },
-                      ),
-                      const SizedBox(height: 14),
-                      _FormField(
-                        controller: _ciController,
-                        label: 'CI',
-                        hint: 'Ingresa el carnet de identidad',
-                        isRequired: true,
-                        validator: _requiredValidator('Ingresa el CI.'),
-                        readOnly: _isReadOnly,
-                        onChanged: _isReadOnly ? null : (_) => setState(() {}),
-                      ),
-                      const SizedBox(height: 14),
-                      _FormField(
-                        controller: _celularController,
-                        label: 'Celular',
-                        hint: 'Ingresa el numero de celular (opcional)',
-                        isRequired: false,
-                        keyboardType: TextInputType.phone,
-                        validator: (_) => null,
-                        readOnly: _isReadOnly,
-                      ),
-                      const SizedBox(height: 14),
-                      _FormField(
-                        controller: _nombreCompletoController,
-                        label: 'Nombre completo',
-                        hint: 'Ingresa los nombres',
-                        isRequired: true,
-                        validator: _requiredValidator('Ingresa los nombres.'),
-                        readOnly: _isReadOnly,
-                      ),
-                      const SizedBox(height: 14),
-                      _FormField(
-                        controller: _primerApellidoController,
-                        label: 'Primer apellido',
-                        hint: 'Ingresa el primer apellido',
-                        isRequired: true,
-                        validator: _requiredValidator(
-                          'Ingresa el primer apellido.',
-                        ),
-                        readOnly: _isReadOnly,
-                        onChanged: _isReadOnly ? null : (_) => setState(() {}),
-                      ),
-                      const SizedBox(height: 14),
-                      _FormField(
-                        controller: _segundoApellidoController,
-                        label: 'Segundo apellido (opcional)',
-                        hint: 'Ingresa el segundo apellido si aplica',
-                        validator: (value) {
-                          if ((value ?? '').trim().length > 80) {
-                            return 'El segundo apellido es demasiado largo.';
-                          }
-                          return null;
-                        },
-                        readOnly: _isReadOnly,
-                      ),
-                      const SizedBox(height: 14),
-                      _FormField(
-                        controller: _tercerApellidoController,
-                        label: 'Tercer apellido (opcional)',
-                        hint: 'Ingresa el tercer apellido si aplica',
-                        validator: (_) => null,
-                        readOnly: _isReadOnly,
-                      ),
-                      const SizedBox(height: 14),
-                      _PickerField(
-                        controller: _unidadController,
-                        label: 'Unidad / oficina',
-                        hint: 'Selecciona una unidad registrada',
-                        icon: Icons.apartment_rounded,
-                        isRequired: true,
-                        onTap: _pickOffice,
-                        validator: _requiredValidator(
-                          'Selecciona una unidad valida.',
-                        ),
-                        enabled: !_isReadOnly,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _selectedOffice == null
-                            ? '${widget.offices.length} unidades cargadas desde la base de datos.'
-                            : 'Codigo ${_selectedOffice!.code} | Nivel ${_selectedOffice!.level}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: _selectedOffice == null
-                              ? null
-                              : AppPalette.orange,
-                          fontWeight: _selectedOffice == null
-                              ? null
-                              : FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      CheckboxListTile(
-                        value: _hasCommission,
-                        contentPadding: EdgeInsets.zero,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        title: const Text('Comision'),
-                        onChanged: _isReadOnly
-                            ? null
-                            : (value) {
-                                setState(() {
-                                  _hasCommission = value ?? false;
-
-                                  if (!_hasCommission) {
-                                    _selectedCommissionOffice = null;
-                                    _commissionOfficeController.clear();
-                                  }
-                                });
-                              },
-                      ),
-                      if (_hasCommission) ...[
-                        const SizedBox(height: 10),
-                        _PickerField(
-                          controller: _commissionOfficeController,
-                          label: 'Oficina de comision',
-                          hint: 'Selecciona la oficina de comision',
-                          icon: Icons.swap_horiz_rounded,
-                          isRequired: true,
-                          onTap: _pickCommissionOffice,
-                          validator: _requiredValidator(
-                            'Selecciona la oficina de comision.',
+              child: Builder(
+                builder: (context) {
+                  final content = SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(24, 18, 24, 18),
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _isReadOnly
+                                ? 'Consulta los datos del usuario. Este rol no puede modificar informacion desde esta pantalla.'
+                                : _isEditing
+                                ? 'Actualiza los datos del usuario y guarda los cambios.'
+                                : 'Completa los datos del usuario. El acceso se creara automaticamente con CI como usuario y primer apellido + CI como contrasena inicial.',
+                            style: Theme.of(context).textTheme.bodyMedium,
                           ),
-                          enabled: !_isReadOnly,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _selectedCommissionOffice == null
-                              ? 'Esta oficina contara como principal para eventos.'
-                              : 'Comision: ${_selectedCommissionOffice!.name}',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: _selectedCommissionOffice == null
-                                    ? null
-                                    : AppPalette.orange,
-                                fontWeight: _selectedCommissionOffice == null
-                                    ? null
-                                    : FontWeight.w600,
+                          const SizedBox(height: 18),
+                          _DropdownField<AppUserRole>(
+                            label: 'Rol del sistema',
+                            isRequired: true,
+                            value: _selectedRole,
+                            items: _roleDropdownItemsForUser(
+                              widget.currentUser,
+                            ),
+                            enabled: !_isReadOnly,
+                            onChanged: _isReadOnly || _isScopedUserAdmin
+                                ? (_) {}
+                                : (value) {
+                                    if (value == null) {
+                                      return;
+                                    }
+
+                                    setState(() {
+                                      _selectedRole = value;
+                                    });
+                                  },
+                          ),
+                          const SizedBox(height: 14),
+                          _DropdownField<String>(
+                            label: 'Tipo de vinculacion',
+                            isRequired: true,
+                            value: _selectedTipoVinculo,
+                            items: _tipoVinculoDropdownItemsForUser(
+                              widget.currentUser,
+                            ),
+                            enabled: !_isReadOnly,
+                            onChanged: _isReadOnly || fixedTipoVinculo != null
+                                ? (_) {}
+                                : (value) {
+                                    if (value == null) {
+                                      return;
+                                    }
+
+                                    setState(() {
+                                      _selectedTipoVinculo = value;
+
+                                      if (value != 'ITEM') {
+                                        _numeroItemController.clear();
+                                      }
+
+                                      if (value != 'CONSULTOR') {
+                                        _contratoNumeroController.clear();
+                                        _contratoInicioController.clear();
+                                        _contratoFinController.clear();
+                                      }
+                                    });
+                                  },
+                          ),
+                          if (_isConsultant) ...[
+                            const SizedBox(height: 14),
+                            _FormField(
+                              controller: _contratoNumeroController,
+                              label: 'Numero de contrato',
+                              hint: 'Ingresa el numero de contrato',
+                              isRequired: true,
+                              validator: _requiredValidator(
+                                'Ingresa el numero de contrato.',
                               ),
-                        ),
-                      ],
-                      const SizedBox(height: 14),
-                      _PickerField(
-                        controller: _cargoController,
-                        label: 'Cargo',
-                        hint: 'Selecciona un cargo registrado',
-                        icon: Icons.badge_outlined,
-                        isRequired: true,
-                        onTap: _pickCargo,
-                        validator: _requiredValidator(
-                          'Selecciona un cargo valido.',
-                        ),
-                        enabled: !_isReadOnly,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _selectedCargo == null
-                            ? '${widget.cargos.length} cargos cargados desde la base de datos.'
-                            : 'Codigo ${_selectedCargo!.code}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: _selectedCargo == null
-                              ? null
-                              : AppPalette.orange,
-                          fontWeight: _selectedCargo == null
-                              ? null
-                              : FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      _PickerField(
-                        controller: _subcargoController,
-                        label: 'Subcargo / funcion actual',
-                        hint: 'Opcional: selecciona el cargo que cumple ahora',
-                        icon: Icons.assignment_ind_outlined,
-                        onTap: _pickSubcargo,
-                        enabled: !_isReadOnly,
-                        suffixIcon: _selectedSubcargo == null || _isReadOnly
-                            ? null
-                            : IconButton(
-                                tooltip: 'Quitar subcargo',
-                                onPressed: _clearSubcargo,
-                                icon: const Icon(Icons.close_rounded),
+                              readOnly: _isReadOnly,
+                            ),
+                            const SizedBox(height: 14),
+                            _PickerField(
+                              controller: _contratoInicioController,
+                              label: 'Inicio de contrato',
+                              hint: 'Selecciona la fecha de inicio',
+                              icon: Icons.today_rounded,
+                              isRequired: true,
+                              onTap: () => _pickContractDate(
+                                controller: _contratoInicioController,
                               ),
-                        validator: (_) => null,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _selectedSubcargo == null
-                            ? 'Si se asigna, este cargo contara para permisos y solicitudes.'
-                            : 'Funcion actual: ${_formatSubcargoName(_selectedSubcargo!.name)}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: _selectedSubcargo == null
-                              ? null
-                              : AppPalette.orange,
-                          fontWeight: _selectedSubcargo == null
-                              ? null
-                              : FontWeight.w600,
-                        ),
-                      ),
-                      if (_requiresLugarForCargo(_selectedCargo)) ...[
-                        const SizedBox(height: 14),
-                        _FormField(
-                          controller: _lugarController,
-                          label: 'Lugar',
-                          hint: 'Ingresa el lugar (opcional)',
-                          isRequired: false,
-                          validator: (_) => null,
-                          readOnly: _isReadOnly,
-                        ),
-                      ],
-                      if (_selectedTipoVinculo == 'ITEM') ...[
-                        const SizedBox(height: 14),
-                        _FormField(
-                          controller: _numeroItemController,
-                          label: 'Numero item',
-                          hint: 'Ingresa el numero item',
-                          isRequired: true,
-                          validator: _requiredValidator(
-                            'Ingresa el numero item.',
-                          ),
-                          readOnly: _isReadOnly,
-                        ),
-                      ],
-                      const SizedBox(height: 14),
-                      _DropdownField<bool>(
-                        label: 'Estado',
-                        isRequired: true,
-                        value: _selectedActivo,
-                        items: const [
-                          DropdownMenuItem(value: true, child: Text('Activo')),
-                          DropdownMenuItem(
-                            value: false,
-                            child: Text('Inactivo'),
-                          ),
-                        ],
-                        enabled: !_isReadOnly,
-                        onChanged: _isReadOnly
-                            ? (_) {}
-                            : (value) {
-                                if (value == null) {
-                                  return;
-                                }
-
-                                setState(() {
-                                  _selectedActivo = value;
-                                });
-                              },
-                      ),
-                      if (!_isReadOnly) ...[
-                        const SizedBox(height: 14),
-                        _PhotoPickerField(
-                          photoBytes: _photoBytes,
-                          existingPhotoSource: widget.initialUser?.fotoUrl,
-                          isRequired: !_isEditing,
-                          showError: _showPhotoError,
-                          onPickPhoto: _pickPhoto,
-                        ),
-                        const SizedBox(height: 14),
-                        _AccessInfoCard(
-                          isEditing: _isEditing,
-                          ci: _ciController.text,
-                          primerApellido: _primerApellidoController.text,
-                        ),
-                      ],
-                      if (_isEditing && !_isReadOnly) ...[
-                        const SizedBox(height: 12),
-                        CheckboxListTile(
-                          value: _changePassword,
-                          contentPadding: EdgeInsets.zero,
-                          controlAffinity: ListTileControlAffinity.leading,
-                          title: const Text('Cambiar contrasena'),
-                          onChanged: (value) {
-                            setState(() {
-                              _changePassword = value ?? false;
-
-                              if (!_changePassword) {
-                                _passwordController.clear();
-                                _confirmPasswordController.clear();
-                              }
-                            });
-                          },
-                        ),
-                        if (_changePassword) ...[
+                              validator: _requiredValidator(
+                                'Selecciona la fecha de inicio.',
+                              ),
+                              enabled: !_isReadOnly,
+                            ),
+                            const SizedBox(height: 14),
+                            _PickerField(
+                              controller: _contratoFinController,
+                              label: 'Fin de contrato',
+                              hint: 'Selecciona la fecha de fin',
+                              icon: Icons.event_rounded,
+                              isRequired: true,
+                              onTap: () => _pickContractDate(
+                                controller: _contratoFinController,
+                              ),
+                              validator: _requiredValidator(
+                                'Selecciona la fecha de fin.',
+                              ),
+                              enabled: !_isReadOnly,
+                            ),
+                          ],
                           const SizedBox(height: 14),
                           _FormField(
-                            controller: _passwordController,
-                            label: 'Nueva contrasena',
-                            hint: '*******',
-                            obscureText: _hidePassword,
+                            controller: _ciController,
+                            label: 'CI',
+                            hint: 'Ingresa el carnet de identidad',
                             isRequired: true,
-                            suffixIcon: IconButton(
-                              onPressed: () {
-                                setState(() {
-                                  _hidePassword = !_hidePassword;
-                                });
-                              },
-                              icon: Icon(
-                                _hidePassword
-                                    ? Icons.visibility_outlined
-                                    : Icons.visibility_off_outlined,
-                              ),
-                            ),
-                            validator: (value) {
-                              final password = (value ?? '').trim();
-
-                              if (password.length < 6) {
-                                return 'La contrasena debe tener al menos 6 caracteres.';
-                              }
-
-                              return null;
-                            },
+                            validator: _requiredValidator('Ingresa el CI.'),
+                            readOnly: _isReadOnly,
+                            onChanged: _isReadOnly
+                                ? null
+                                : (_) => setState(() {}),
                           ),
                           const SizedBox(height: 14),
                           _FormField(
-                            controller: _confirmPasswordController,
-                            label: 'Confirmar nueva contrasena',
-                            hint: '*******',
-                            obscureText: _hideConfirmPassword,
+                            controller: _celularController,
+                            label: 'Celular',
+                            hint: 'Ingresa el numero de celular (opcional)',
+                            isRequired: false,
+                            keyboardType: TextInputType.phone,
+                            validator: (_) => null,
+                            readOnly: _isReadOnly,
+                          ),
+                          const SizedBox(height: 14),
+                          _FormField(
+                            controller: _nombreCompletoController,
+                            label: 'Nombre completo',
+                            hint: 'Ingresa los nombres',
                             isRequired: true,
-                            suffixIcon: IconButton(
-                              onPressed: () {
-                                setState(() {
-                                  _hideConfirmPassword = !_hideConfirmPassword;
-                                });
-                              },
-                              icon: Icon(
-                                _hideConfirmPassword
-                                    ? Icons.visibility_outlined
-                                    : Icons.visibility_off_outlined,
-                              ),
+                            validator: _requiredValidator(
+                              'Ingresa los nombres.',
                             ),
+                            readOnly: _isReadOnly,
+                          ),
+                          const SizedBox(height: 14),
+                          _FormField(
+                            controller: _primerApellidoController,
+                            label: 'Primer apellido',
+                            hint: 'Ingresa el primer apellido',
+                            isRequired: true,
+                            validator: _requiredValidator(
+                              'Ingresa el primer apellido.',
+                            ),
+                            readOnly: _isReadOnly,
+                            onChanged: _isReadOnly
+                                ? null
+                                : (_) => setState(() {}),
+                          ),
+                          const SizedBox(height: 14),
+                          _FormField(
+                            controller: _segundoApellidoController,
+                            label: 'Segundo apellido (opcional)',
+                            hint: 'Ingresa el segundo apellido si aplica',
                             validator: (value) {
-                              final password = _passwordController.text.trim();
-                              final confirmation = (value ?? '').trim();
-
-                              if (confirmation != password) {
-                                return 'Las contrasenas no coinciden.';
+                              if ((value ?? '').trim().length > 80) {
+                                return 'El segundo apellido es demasiado largo.';
                               }
-
                               return null;
                             },
-                            onFieldSubmitted: (_) => _submit(),
+                            readOnly: _isReadOnly,
                           ),
+                          const SizedBox(height: 14),
+                          _FormField(
+                            controller: _tercerApellidoController,
+                            label: 'Tercer apellido (opcional)',
+                            hint: 'Ingresa el tercer apellido si aplica',
+                            validator: (_) => null,
+                            readOnly: _isReadOnly,
+                          ),
+                          const SizedBox(height: 14),
+                          _PickerField(
+                            controller: _unidadController,
+                            label: 'Unidad / oficina',
+                            hint: 'Selecciona una unidad registrada',
+                            icon: Icons.apartment_rounded,
+                            isRequired: true,
+                            onTap: _pickOffice,
+                            validator: _requiredValidator(
+                              'Selecciona una unidad valida.',
+                            ),
+                            enabled: !_isReadOnly,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _selectedOffice == null
+                                ? '${widget.offices.length} unidades cargadas desde la base de datos.'
+                                : 'Codigo ${_selectedOffice!.code} | Nivel ${_selectedOffice!.level}',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: _selectedOffice == null
+                                      ? null
+                                      : AppPalette.orange,
+                                  fontWeight: _selectedOffice == null
+                                      ? null
+                                      : FontWeight.w600,
+                                ),
+                          ),
+                          const SizedBox(height: 12),
+                          CheckboxListTile(
+                            value: _hasCommission,
+                            contentPadding: EdgeInsets.zero,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            title: const Text('Comision'),
+                            onChanged: _isReadOnly
+                                ? null
+                                : (value) {
+                                    setState(() {
+                                      _hasCommission = value ?? false;
+
+                                      if (!_hasCommission) {
+                                        _selectedCommissionOffice = null;
+                                        _commissionOfficeController.clear();
+                                      }
+                                    });
+                                  },
+                          ),
+                          if (_hasCommission) ...[
+                            const SizedBox(height: 10),
+                            _PickerField(
+                              controller: _commissionOfficeController,
+                              label: 'Oficina de comision',
+                              hint: 'Selecciona la oficina de comision',
+                              icon: Icons.swap_horiz_rounded,
+                              isRequired: true,
+                              onTap: _pickCommissionOffice,
+                              validator: _requiredValidator(
+                                'Selecciona la oficina de comision.',
+                              ),
+                              enabled: !_isReadOnly,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _selectedCommissionOffice == null
+                                  ? 'Esta oficina contara como principal para eventos.'
+                                  : 'Comision: ${_selectedCommissionOffice!.name}',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: _selectedCommissionOffice == null
+                                        ? null
+                                        : AppPalette.orange,
+                                    fontWeight:
+                                        _selectedCommissionOffice == null
+                                        ? null
+                                        : FontWeight.w600,
+                                  ),
+                            ),
+                          ],
+                          const SizedBox(height: 14),
+                          _PickerField(
+                            controller: _cargoController,
+                            label: 'Cargo',
+                            hint: 'Selecciona un cargo registrado',
+                            icon: Icons.badge_outlined,
+                            isRequired: true,
+                            onTap: _pickCargo,
+                            validator: _requiredValidator(
+                              'Selecciona un cargo valido.',
+                            ),
+                            enabled: !_isReadOnly,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _selectedCargo == null
+                                ? '${widget.cargos.length} cargos cargados desde la base de datos.'
+                                : 'Codigo ${_selectedCargo!.code}',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: _selectedCargo == null
+                                      ? null
+                                      : AppPalette.orange,
+                                  fontWeight: _selectedCargo == null
+                                      ? null
+                                      : FontWeight.w600,
+                                ),
+                          ),
+                          const SizedBox(height: 14),
+                          _PickerField(
+                            controller: _subcargoController,
+                            label: 'Subcargo / funcion actual',
+                            hint:
+                                'Opcional: selecciona el cargo que cumple ahora',
+                            icon: Icons.assignment_ind_outlined,
+                            onTap: _pickSubcargo,
+                            enabled: !_isReadOnly,
+                            suffixIcon: _selectedSubcargo == null || _isReadOnly
+                                ? null
+                                : IconButton(
+                                    tooltip: 'Quitar subcargo',
+                                    onPressed: _clearSubcargo,
+                                    icon: const Icon(Icons.close_rounded),
+                                  ),
+                            validator: (_) => null,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _selectedSubcargo == null
+                                ? 'Si se asigna, este cargo contara para permisos y solicitudes.'
+                                : 'Funcion actual: ${_formatSubcargoName(_selectedSubcargo!.name)}',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: _selectedSubcargo == null
+                                      ? null
+                                      : AppPalette.orange,
+                                  fontWeight: _selectedSubcargo == null
+                                      ? null
+                                      : FontWeight.w600,
+                                ),
+                          ),
+                          if (_requiresLugarForCargo(_selectedCargo)) ...[
+                            const SizedBox(height: 14),
+                            _FormField(
+                              controller: _lugarController,
+                              label: 'Lugar',
+                              hint: 'Ingresa el lugar (opcional)',
+                              isRequired: false,
+                              validator: (_) => null,
+                              readOnly: _isReadOnly,
+                            ),
+                          ],
+                          if (_selectedTipoVinculo == 'ITEM') ...[
+                            const SizedBox(height: 14),
+                            _FormField(
+                              controller: _numeroItemController,
+                              label: 'Numero item',
+                              hint: 'Ingresa el numero item',
+                              isRequired: true,
+                              validator: _requiredValidator(
+                                'Ingresa el numero item.',
+                              ),
+                              readOnly: _isReadOnly,
+                            ),
+                          ],
+                          const SizedBox(height: 14),
+                          _DropdownField<bool>(
+                            label: 'Estado',
+                            isRequired: true,
+                            value: _selectedActivo,
+                            items: const [
+                              DropdownMenuItem(
+                                value: true,
+                                child: Text('Activo'),
+                              ),
+                              DropdownMenuItem(
+                                value: false,
+                                child: Text('Inactivo'),
+                              ),
+                            ],
+                            enabled: !_isReadOnly,
+                            onChanged: _isReadOnly
+                                ? (_) {}
+                                : (value) {
+                                    if (value == null) {
+                                      return;
+                                    }
+
+                                    setState(() {
+                                      _selectedActivo = value;
+                                    });
+                                  },
+                          ),
+                          if (!_isReadOnly) ...[
+                            const SizedBox(height: 14),
+                            _PhotoPickerField(
+                              photoBytes: _photoBytes,
+                              existingPhotoSource: widget.initialUser?.fotoUrl,
+                              isRequired: !_isEditing,
+                              showError: _showPhotoError,
+                              onPickPhoto: _pickPhoto,
+                            ),
+                            const SizedBox(height: 14),
+                            _AccessInfoCard(
+                              isEditing: _isEditing,
+                              ci: _ciController.text,
+                              primerApellido: _primerApellidoController.text,
+                            ),
+                          ],
+                          if (_isEditing && !_isReadOnly) ...[
+                            const SizedBox(height: 12),
+                            CheckboxListTile(
+                              value: _changePassword,
+                              contentPadding: EdgeInsets.zero,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              title: const Text('Cambiar contrasena'),
+                              onChanged: (value) {
+                                setState(() {
+                                  _changePassword = value ?? false;
+
+                                  if (!_changePassword) {
+                                    _passwordController.clear();
+                                    _confirmPasswordController.clear();
+                                  }
+                                });
+                              },
+                            ),
+                            if (_changePassword) ...[
+                              const SizedBox(height: 14),
+                              _FormField(
+                                controller: _passwordController,
+                                label: 'Nueva contrasena',
+                                hint: '*******',
+                                obscureText: _hidePassword,
+                                isRequired: true,
+                                suffixIcon: IconButton(
+                                  onPressed: () {
+                                    setState(() {
+                                      _hidePassword = !_hidePassword;
+                                    });
+                                  },
+                                  icon: Icon(
+                                    _hidePassword
+                                        ? Icons.visibility_outlined
+                                        : Icons.visibility_off_outlined,
+                                  ),
+                                ),
+                                validator: (value) {
+                                  final password = (value ?? '').trim();
+
+                                  if (password.length < 6) {
+                                    return 'La contrasena debe tener al menos 6 caracteres.';
+                                  }
+
+                                  return null;
+                                },
+                              ),
+                              const SizedBox(height: 14),
+                              _FormField(
+                                controller: _confirmPasswordController,
+                                label: 'Confirmar nueva contrasena',
+                                hint: '*******',
+                                obscureText: _hideConfirmPassword,
+                                isRequired: true,
+                                suffixIcon: IconButton(
+                                  onPressed: () {
+                                    setState(() {
+                                      _hideConfirmPassword =
+                                          !_hideConfirmPassword;
+                                    });
+                                  },
+                                  icon: Icon(
+                                    _hideConfirmPassword
+                                        ? Icons.visibility_outlined
+                                        : Icons.visibility_off_outlined,
+                                  ),
+                                ),
+                                validator: (value) {
+                                  final password = _passwordController.text
+                                      .trim();
+                                  final confirmation = (value ?? '').trim();
+
+                                  if (confirmation != password) {
+                                    return 'Las contrasenas no coinciden.';
+                                  }
+
+                                  return null;
+                                },
+                                onFieldSubmitted: (_) => _submit(),
+                              ),
+                            ],
+                          ],
                         ],
-                      ],
-                    ],
-                  ),
-                ),
+                      ),
+                    ),
+                  );
+
+                  return _isReadOnly ? SelectionArea(child: content) : content;
+                },
               ),
             ),
             const Divider(height: 1, color: AppPalette.line),
@@ -2737,6 +2877,9 @@ class _ManagedUserDraft {
     required this.role,
     required this.tipoVinculo,
     required this.activo,
+    required this.contratoNumero,
+    required this.contratoInicio,
+    required this.contratoFin,
     required this.ci,
     required this.celular,
     required this.nombreCompleto,
@@ -2757,6 +2900,9 @@ class _ManagedUserDraft {
   final AppUserRole role;
   final String tipoVinculo;
   final bool activo;
+  final String? contratoNumero;
+  final String? contratoInicio;
+  final String? contratoFin;
   final String ci;
   final String celular;
   final String nombreCompleto;
@@ -3444,8 +3590,10 @@ int _userRoleOrder(AppUserRole role) {
       return 5;
     case AppUserRole.lunch:
       return 6;
-    case AppUserRole.external:
+    case AppUserRole.userReader:
       return 7;
+    case AppUserRole.external:
+      return 8;
   }
 }
 
@@ -3749,6 +3897,13 @@ String _buildInitialPassword({
   final passwordPrefix = prefix.length > 3 ? prefix.substring(0, 3) : prefix;
 
   return '$passwordPrefix$normalizedCi';
+}
+
+String _formatDate(DateTime date) {
+  final month = date.month.toString().padLeft(2, '0');
+  final day = date.day.toString().padLeft(2, '0');
+
+  return '${date.year}-$month-$day';
 }
 
 class _RequiredFieldLabel extends StatelessWidget {

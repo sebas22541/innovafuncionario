@@ -17,6 +17,8 @@ import '../../../../shared/widgets/app_alert.dart';
 import '../../../auth/domain/entities/cargo_option.dart';
 import '../../infrastructure/services/ratings_api_service.dart';
 
+enum _RatingsReportFilter { dateRange, cargo, search }
+
 class RatingsScreen extends StatefulWidget {
   const RatingsScreen({super.key, required this.currentUser});
 
@@ -49,6 +51,7 @@ class _RatingsScreenState extends State<RatingsScreen> {
   String _startDate = _todayText();
   String _endDate = _todayText();
   CargoOption? _selectedCargo;
+  _RatingsReportFilter? _activeReportFilter;
   Timer? _searchDebounce;
   Timer? _reportSearchDebounce;
 
@@ -71,21 +74,7 @@ class _RatingsScreenState extends State<RatingsScreen> {
         .toList(growable: false);
   }
 
-  List<RatingSummary> get _filteredReport {
-    final query = _normalize(_reportQuery);
-
-    if (query.isEmpty) {
-      return _report;
-    }
-
-    return _report
-        .where(
-          (row) => _normalize(
-            '${row.ci} ${row.nombreCompleto} ${row.cargo} ${row.oficina}',
-          ).contains(query),
-        )
-        .toList(growable: false);
-  }
+  List<RatingSummary> get _filteredReport => _report;
 
   @override
   void initState() {
@@ -178,17 +167,25 @@ class _RatingsScreenState extends State<RatingsScreen> {
     }
   }
 
-  Future<void> _loadReport() async {
+  Future<void> _loadReport({
+    _RatingsReportFilter filter = _RatingsReportFilter.dateRange,
+  }) async {
     setState(() {
       _isLoadingReport = true;
       _hasLoadedReport = true;
+      _activeReportFilter = filter;
     });
 
     try {
       final report = await dependencies.ratingsApiService.fetchReport(
-        fechaInicio: _startDate,
-        fechaFin: _endDate,
-        cargoCodigo: _selectedCargo?.code,
+        fechaInicio: filter == _RatingsReportFilter.dateRange
+            ? _startDate
+            : null,
+        fechaFin: filter == _RatingsReportFilter.dateRange ? _endDate : null,
+        cargoCodigo: filter == _RatingsReportFilter.cargo
+            ? _selectedCargo?.code
+            : null,
+        query: filter == _RatingsReportFilter.search ? _reportQuery : null,
       );
       if (!mounted) {
         return;
@@ -357,10 +354,13 @@ class _RatingsScreenState extends State<RatingsScreen> {
               style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
             ),
             pw.SizedBox(height: 6),
-            pw.Text('Rango: $_startDate a $_endDate'),
-            if (_selectedCargo != null)
+            if (_activeReportFilter == _RatingsReportFilter.dateRange)
+              pw.Text('Rango: $_startDate a $_endDate'),
+            if (_activeReportFilter == _RatingsReportFilter.cargo &&
+                _selectedCargo != null)
               pw.Text('Cargo: ${_selectedCargo!.name}'),
-            if (_reportQuery.trim().isNotEmpty)
+            if (_activeReportFilter == _RatingsReportFilter.search &&
+                _reportQuery.trim().isNotEmpty)
               pw.Text('Filtro: ${_reportQuery.trim()}'),
             pw.SizedBox(height: 12),
             pw.TableHelper.fromTextArray(
@@ -485,6 +485,17 @@ class _RatingsScreenState extends State<RatingsScreen> {
     _reportSearchDebounce = Timer(const Duration(milliseconds: 180), () {
       if (mounted) {
         setState(() => _reportQuery = value);
+        final query = value.trim();
+
+        if (query.length >= 2) {
+          _loadReport(filter: _RatingsReportFilter.search);
+        } else if (query.isEmpty) {
+          setState(() {
+            _report = const [];
+            _hasLoadedReport = false;
+            _activeReportFilter = null;
+          });
+        }
       }
     });
   }
@@ -693,7 +704,9 @@ class _RatingsScreenState extends State<RatingsScreen> {
                                               (cargo) => cargo.code == value,
                                             );
                                     });
-                                    _loadReport();
+                                    _loadReport(
+                                      filter: _RatingsReportFilter.cargo,
+                                    );
                                   },
                           ),
                         ),

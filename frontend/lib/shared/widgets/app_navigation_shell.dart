@@ -440,7 +440,7 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
                 viewMode: UserEventsViewMode.attended,
               );
       case AppSection.users:
-        return _currentUser.canManageUsers
+        return _currentUser.canViewUsers
             ? UsersScreen(currentUser: _currentUser)
             : SettingsScreen(
                 currentUser: _currentUser,
@@ -2209,6 +2209,10 @@ class _UserAvatar extends StatelessWidget {
 }
 
 List<AppSection> _visibleSectionsForUser(AppUser user) {
+  if (user.isUserReader) {
+    return const [AppSection.users];
+  }
+
   if (user.isScopedUserAdmin) {
     return const [AppSection.users, AppSection.credentials];
   }
