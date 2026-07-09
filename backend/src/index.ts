@@ -10931,157 +10931,241 @@ function buildPublicRatingPage(token: string, funcionario: any) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
-  <title>Calificar atencion</title>
+  <title>Calificar atenci&oacute;n</title>
   <style>
+    @import url("https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap");
     * { box-sizing: border-box; }
+    :root {
+      --night: #6d56a0;
+      --night-deep: #54407e;
+      --accent: #7d67b1;
+      --surface: #ffffff;
+      --surface-soft: #fbfaff;
+      --line: #e7e7ec;
+      --ink: #4a396f;
+      --muted: #7c6e9e;
+      --danger: #d94841;
+      --success: #16a34a;
+    }
     body {
       margin: 0;
       min-height: 100vh;
-      font-family: Arial, Helvetica, sans-serif;
-      background: #f7f1e8;
-      color: #2d2520;
+      font-family: "Poppins", Arial, Helvetica, sans-serif;
+      background:
+        linear-gradient(180deg, rgba(109, 86, 160, 0.08), rgba(255, 255, 255, 0) 42%),
+        var(--surface);
+      color: var(--ink);
       display: grid;
       place-items: center;
-      padding: 18px;
+      padding: 24px 16px;
     }
     main {
-      width: min(100%, 520px);
-      background: #fff;
-      border: 1px solid #eadfd2;
-      border-radius: 18px;
-      box-shadow: 0 18px 48px rgba(45, 37, 32, 0.12);
-      padding: 24px;
+      width: min(100%, 560px);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      box-shadow: 0 24px 70px rgba(84, 64, 126, 0.14);
+      padding: clamp(22px, 6vw, 34px);
     }
     h1 {
-      margin: 0 0 8px;
-      font-size: 26px;
+      margin: 0 0 10px;
+      color: var(--ink);
+      font-size: clamp(30px, 8vw, 42px);
+      line-height: 1.08;
+      font-weight: 800;
+      letter-spacing: 0;
       text-align: center;
     }
     .person {
       text-align: center;
-      margin-bottom: 22px;
-      line-height: 1.35;
+      margin-bottom: 26px;
+      line-height: 1.4;
     }
     .person strong {
       display: block;
-      font-size: 18px;
+      color: var(--ink);
+      font-size: clamp(20px, 5vw, 28px);
+      font-weight: 700;
     }
     .muted {
-      color: #74675e;
-      font-size: 14px;
+      color: var(--muted);
+      font-size: clamp(15px, 4vw, 20px);
+      font-weight: 500;
+      text-transform: uppercase;
     }
     .ratings {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
+      gap: 12px;
     }
     button.rating {
-      height: 104px;
-      border: 2px solid #eadfd2;
-      border-radius: 16px;
-      background: #fbf8f4;
+      min-height: 122px;
+      border: 1.5px solid var(--line);
+      border-radius: 22px;
+      background: var(--surface-soft);
       cursor: pointer;
+      font-family: inherit;
+      font-size: 15px;
       font-weight: 700;
-      color: #2d2520;
+      color: var(--ink);
+      transition: border-color .16s ease, background .16s ease, color .16s ease, transform .16s ease, box-shadow .16s ease;
+    }
+    button.rating:hover {
+      border-color: rgba(109, 86, 160, .42);
+      transform: translateY(-1px);
     }
     button.rating span {
       display: block;
-      font-size: 38px;
+      font-size: 42px;
       line-height: 1;
-      margin-bottom: 8px;
+      margin-bottom: 12px;
+      color: var(--night-deep);
     }
     button.rating.selected {
-      border-color: #d8682a;
-      background: #fff3ea;
+      border-color: var(--night);
+      background: rgba(109, 86, 160, .10);
+      box-shadow: 0 14px 34px rgba(84, 64, 126, .14);
+      color: var(--night-deep);
     }
     label {
       display: block;
-      margin-top: 18px;
+      margin-top: 26px;
+      color: var(--ink);
+      font-size: 18px;
       font-weight: 700;
     }
     textarea {
       width: 100%;
-      margin-top: 8px;
-      min-height: 110px;
+      margin-top: 12px;
+      min-height: 132px;
       resize: vertical;
-      border: 1px solid #d9cbbd;
-      border-radius: 14px;
-      padding: 12px;
+      border: 1.5px solid var(--line);
+      border-radius: 18px;
+      background: var(--surface);
+      color: var(--ink);
+      padding: 16px 18px;
       font: inherit;
+      outline: none;
+      transition: border-color .16s ease, box-shadow .16s ease;
+    }
+    textarea::placeholder {
+      color: var(--muted);
+    }
+    textarea:focus {
+      border-color: var(--night);
+      box-shadow: 0 0 0 4px rgba(109, 86, 160, .10);
     }
     .submit {
       width: 100%;
-      margin-top: 18px;
+      margin-top: 26px;
       border: 0;
-      border-radius: 14px;
-      background: #d8682a;
+      border-radius: 18px;
+      background: var(--night-deep);
       color: #fff;
-      padding: 14px 16px;
-      font-weight: 800;
+      padding: 18px 20px;
+      font-family: inherit;
+      font-size: 16px;
+      font-weight: 700;
       cursor: pointer;
+      box-shadow: 0 16px 32px rgba(84, 64, 126, .22);
+      transition: background .16s ease, transform .16s ease, box-shadow .16s ease;
+    }
+    .submit:hover {
+      background: var(--night);
+      transform: translateY(-1px);
     }
     .submit:disabled {
       opacity: .65;
       cursor: default;
+      transform: none;
+      box-shadow: none;
     }
     .message {
-      margin-top: 14px;
-      padding: 12px;
-      border-radius: 12px;
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: 18px;
       display: none;
       text-align: center;
       font-weight: 700;
     }
     .message.ok {
       display: block;
-      color: #1b5e20;
-      background: #e8f5e9;
+      color: var(--success);
+      background: #eaf8ef;
     }
     .message.error {
       display: block;
-      color: #9f1f1f;
-      background: #ffebee;
+      color: var(--danger);
+      background: #fff0f0;
     }
     .done {
       display: none;
       text-align: center;
-      padding: 28px 4px;
+      padding: 32px 4px;
     }
     .done.visible {
       display: block;
     }
     .done .icon {
-      font-size: 56px;
-      color: #2e7d32;
+      width: 74px;
+      height: 74px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 18px;
+      border-radius: 24px;
+      background: rgba(22, 163, 74, .10);
+      color: var(--success);
+      font-size: 42px;
+      font-weight: 800;
     }
     .hidden {
       display: none;
+    }
+    @media (max-width: 430px) {
+      body {
+        align-items: center;
+        padding: 20px 12px;
+      }
+      main {
+        border-radius: 26px;
+      }
+      .ratings {
+        gap: 10px;
+      }
+      button.rating {
+        min-height: 112px;
+        border-radius: 20px;
+        font-size: 14px;
+      }
+      button.rating span {
+        font-size: 36px;
+      }
     }
   </style>
 </head>
 <body>
   <main>
     <section id="form">
-      <h1>Califica la atencion</h1>
+      <h1>Califica la atenci&oacute;n</h1>
       <div class="person">
         <strong>${safeName}</strong>
         <div class="muted">${safeCargo}</div>
         <div class="muted">${safeOffice}</div>
       </div>
-      <div class="ratings" role="group" aria-label="Calificacion">
-        <button class="rating" type="button" data-rating="feliz"><span>☺</span>Feliz</button>
-        <button class="rating" type="button" data-rating="neutral"><span>○</span>Neutral</button>
-        <button class="rating" type="button" data-rating="enojada"><span>☹</span>Enojada</button>
+      <div class="ratings" role="group" aria-label="Calificaci&oacute;n">
+        <button class="rating" type="button" data-rating="feliz"><span>&#9786;</span>Feliz</button>
+        <button class="rating" type="button" data-rating="neutral"><span>&#9675;</span>Neutral</button>
+        <button class="rating" type="button" data-rating="enojada"><span>&#9785;</span>Enojada</button>
       </div>
       <label for="comentario">Comentario opcional</label>
       <textarea id="comentario" maxlength="500" placeholder="Escribe un comentario si lo deseas"></textarea>
-      <button id="send" class="submit" type="button">Enviar calificacion</button>
+      <button id="send" class="submit" type="button">Enviar calificaci&oacute;n</button>
       <div id="message" class="message"></div>
     </section>
     <section id="done" class="done" aria-live="polite">
-      <div class="icon">✓</div>
+      <div class="icon">&#10003;</div>
       <h1>Gracias</h1>
-      <p>Tu calificacion fue registrada.</p>
+      <p>Tu calificaci&oacute;n fue registrada.</p>
     </section>
   </main>
   <script>
@@ -11101,7 +11185,7 @@ function buildPublicRatingPage(token: string, funcionario: any) {
 
     sendButton.addEventListener("click", async () => {
       if (!selectedRating) {
-        showMessage("Selecciona una calificacion.", "error");
+        showMessage("Selecciona una calificaci\u00f3n.", "error");
         return;
       }
 
@@ -11122,16 +11206,16 @@ function buildPublicRatingPage(token: string, funcionario: any) {
         const payload = await response.json().catch(() => ({}));
 
         if (!response.ok) {
-          throw new Error(payload.error || "No fue posible enviar la calificacion.");
+          throw new Error(payload.error || "No fue posible enviar la calificaci\u00f3n.");
         }
 
         document.getElementById("form").classList.add("hidden");
         document.getElementById("done").classList.add("visible");
       } catch (error) {
-        showMessage(error.message || "No fue posible enviar la calificacion.", "error");
+        showMessage(error.message || "No fue posible enviar la calificaci\u00f3n.", "error");
       } finally {
         sendButton.disabled = false;
-        sendButton.textContent = "Enviar calificacion";
+        sendButton.textContent = "Enviar calificaci\u00f3n";
       }
     });
 
