@@ -123,7 +123,7 @@ const CALIFICACION_QR_SECRET =
   createHash("sha256").update(`${DATABASE_URL}:calificaciones`).digest("hex");
 const CALIFICACION_QR_VERSION = "CAL1";
 const PUBLIC_RATING_LOGO_SRC = readAssetDataUri(
-  new URL("../../frontend/assets/images/letragris.png", import.meta.url),
+  new URL("../../frontend/assets/images/escuBla.png", import.meta.url),
   "image/png",
 );
 
@@ -10987,6 +10987,9 @@ function buildPublicRatingPage(token: string, funcionario: any) {
       border: 1px solid var(--line);
       border-radius: 30px;
       box-shadow: 0 24px 70px rgba(84, 64, 126, 0.14);
+      overflow: hidden;
+    }
+    .content {
       padding: clamp(22px, 6vw, 34px);
     }
     h1 {
@@ -11001,16 +11004,20 @@ function buildPublicRatingPage(token: string, funcionario: any) {
     .brand {
       display: flex;
       justify-content: center;
-      margin-bottom: 24px;
+      align-items: center;
+      min-height: 96px;
+      padding: 20px 24px;
+      background: linear-gradient(135deg, var(--night-deep), var(--night));
+      border-bottom: 1px solid rgba(255, 255, 255, .18);
     }
     .brand-logo {
       display: block;
-      width: min(78%, 310px);
-      max-height: 72px;
+      width: min(72%, 280px);
+      max-height: 62px;
       object-fit: contain;
     }
     .brand-fallback {
-      color: var(--night-deep);
+      color: #fff;
       font-size: 22px;
       font-weight: 800;
       text-align: center;
@@ -11055,10 +11062,9 @@ function buildPublicRatingPage(token: string, funcionario: any) {
     }
     button.rating span {
       display: block;
-      font-size: 42px;
+      font-size: 46px;
       line-height: 1;
       margin-bottom: 12px;
-      color: var(--night-deep);
     }
     button.rating.selected {
       border-color: var(--night);
@@ -11186,21 +11192,23 @@ function buildPublicRatingPage(token: string, funcionario: any) {
   <main>
     <section id="form">
       <div class="brand">${logoMarkup}</div>
-      <h1>Califica la atenci&oacute;n</h1>
-      <div class="person">
-        <strong>${safeName}</strong>
-        <div class="muted">${safeCargo}</div>
-        <div class="muted">${safeOffice}</div>
+      <div class="content">
+        <h1>Califica la atenci&oacute;n</h1>
+        <div class="person">
+          <strong>${safeName}</strong>
+          <div class="muted">${safeCargo}</div>
+          <div class="muted">${safeOffice}</div>
+        </div>
+        <div class="ratings" role="group" aria-label="Calificaci&oacute;n">
+          <button class="rating" type="button" data-rating="feliz"><span>&#128578;</span>Feliz</button>
+          <button class="rating" type="button" data-rating="neutral"><span>&#128528;</span>Neutral</button>
+          <button class="rating" type="button" data-rating="enojada"><span>&#128577;</span>Enojada</button>
+        </div>
+        <label for="comentario">Comentario opcional</label>
+        <textarea id="comentario" maxlength="500" placeholder="Escribe un comentario si lo deseas"></textarea>
+        <button id="send" class="submit" type="button">Enviar calificaci&oacute;n</button>
+        <div id="message" class="message"></div>
       </div>
-      <div class="ratings" role="group" aria-label="Calificaci&oacute;n">
-        <button class="rating" type="button" data-rating="feliz"><span>&#9786;</span>Feliz</button>
-        <button class="rating" type="button" data-rating="neutral"><span>&#128528;</span>Neutral</button>
-        <button class="rating" type="button" data-rating="enojada"><span>&#9785;</span>Enojada</button>
-      </div>
-      <label for="comentario">Comentario opcional</label>
-      <textarea id="comentario" maxlength="500" placeholder="Escribe un comentario si lo deseas"></textarea>
-      <button id="send" class="submit" type="button">Enviar calificaci&oacute;n</button>
-      <div id="message" class="message"></div>
     </section>
     <section id="done" class="done" aria-live="polite">
       <div class="icon">&#10003;</div>
