@@ -717,6 +717,7 @@ class _UsersScreenState extends State<UsersScreen> {
   Widget build(BuildContext context) {
     final visibleUsers = _visibleUsers;
     final filteredUsers = _filteredUsers;
+    final isReaderView = widget.currentUser.isUserReader;
 
     if (_isLoading && _users.isEmpty) {
       return const Center(child: CircularProgressIndicator());
@@ -737,92 +738,96 @@ class _UsersScreenState extends State<UsersScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Usuarios del sistema',
-                              style: Theme.of(context).textTheme.headlineMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Aqui el administrador puede gestionar las cuentas con rol administrador, control, credenciales y funcionario.',
-                              style: Theme.of(context).textTheme.bodyMedium,
-                            ),
-                          ],
+                  if (!isReaderView) ...[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Usuarios del sistema',
+                                style: Theme.of(
+                                  context,
+                                ).textTheme.headlineMedium,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Aqui el administrador puede gestionar las cuentas con rol administrador, control, credenciales y funcionario.',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: _loadData,
+                          tooltip: 'Recargar usuarios',
+                          icon: const Icon(Icons.refresh_rounded),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    _UserStatsGrid(
+                      stats: [
+                        _UserStatItem(
+                          label: 'Administradores',
+                          value: '$_adminCount',
+                          icon: Icons.verified_user_outlined,
+                        ),
+                        _UserStatItem(
+                          label: 'Control',
+                          value: '$_controlCount',
+                          icon: Icons.fact_check_outlined,
+                        ),
+                        _UserStatItem(
+                          label: 'Credenciales',
+                          value: '$_credentialsCount',
+                          icon: Icons.badge_outlined,
+                        ),
+                        _UserStatItem(
+                          label: 'Funcionarios',
+                          value: '$_externalCount',
+                          icon: Icons.person_outline_rounded,
+                        ),
+                        _UserStatItem(
+                          label: 'Activos',
+                          value: '$_activeUsersCount',
+                          icon: Icons.verified_user_outlined,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    if (_canEditUsers) ...[
+                      ElevatedButton.icon(
+                        onPressed: (_isCreating || _isLoadingReferenceData)
+                            ? null
+                            : _openCreateDialog,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppPalette.orange,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                        ),
+                        icon: (_isCreating || _isLoadingReferenceData)
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.person_add_alt_1_rounded),
+                        label: Text(
+                          _isCreating
+                              ? 'Creando usuario...'
+                              : _isLoadingReferenceData
+                              ? 'Cargando datos...'
+                              : 'Crear usuario',
                         ),
                       ),
-                      IconButton(
-                        onPressed: _loadData,
-                        tooltip: 'Recargar usuarios',
-                        icon: const Icon(Icons.refresh_rounded),
-                      ),
+                      const SizedBox(height: 16),
                     ],
-                  ),
-                  const SizedBox(height: 18),
-                  _UserStatsGrid(
-                    stats: [
-                      _UserStatItem(
-                        label: 'Administradores',
-                        value: '$_adminCount',
-                        icon: Icons.verified_user_outlined,
-                      ),
-                      _UserStatItem(
-                        label: 'Control',
-                        value: '$_controlCount',
-                        icon: Icons.fact_check_outlined,
-                      ),
-                      _UserStatItem(
-                        label: 'Credenciales',
-                        value: '$_credentialsCount',
-                        icon: Icons.badge_outlined,
-                      ),
-                      _UserStatItem(
-                        label: 'Funcionarios',
-                        value: '$_externalCount',
-                        icon: Icons.person_outline_rounded,
-                      ),
-                      _UserStatItem(
-                        label: 'Activos',
-                        value: '$_activeUsersCount',
-                        icon: Icons.verified_user_outlined,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  if (_canEditUsers) ...[
-                    ElevatedButton.icon(
-                      onPressed: (_isCreating || _isLoadingReferenceData)
-                          ? null
-                          : _openCreateDialog,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppPalette.orange,
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                      ),
-                      icon: (_isCreating || _isLoadingReferenceData)
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Icon(Icons.person_add_alt_1_rounded),
-                      label: Text(
-                        _isCreating
-                            ? 'Creando usuario...'
-                            : _isLoadingReferenceData
-                            ? 'Cargando datos...'
-                            : 'Crear usuario',
-                      ),
-                    ),
-                    const SizedBox(height: 16),
                   ],
                   TextField(
                     controller: _searchController,

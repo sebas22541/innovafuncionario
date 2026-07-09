@@ -526,7 +526,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
     final usePortalShell =
         !_currentUser.isAdmin &&
         !_currentUser.isCredentials &&
-        !_currentUser.isScopedUserAdmin;
+        !_currentUser.isScopedUserAdmin &&
+        !_currentUser.isUserReader;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -2328,6 +2329,10 @@ bool _isPermissionSection(AppSection section) {
 }
 
 AppSection _defaultSectionForUser(AppUser user) {
+  if (user.isUserReader) {
+    return AppSection.users;
+  }
+
   if (user.isScopedUserAdmin) {
     return AppSection.users;
   }
