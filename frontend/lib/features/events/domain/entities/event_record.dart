@@ -205,10 +205,12 @@ class EventRecord {
     this.attended = const [],
     this.observed = const [],
     this.late = const [],
+    this.nonRequired = const [],
     this.absentees = const [],
     this.attendedCount,
     this.observedCount,
     this.lateCount,
+    this.nonRequiredCount,
     this.absenteeCount,
     this.officeCountOverride,
     this.jobTitleCountOverride,
@@ -234,10 +236,12 @@ class EventRecord {
   final List<EventRosterEntry> attended;
   final List<EventRosterEntry> observed;
   final List<EventRosterEntry> late;
+  final List<EventRosterEntry> nonRequired;
   final List<EventAbsenteeEntry> absentees;
   final int? attendedCount;
   final int? observedCount;
   final int? lateCount;
+  final int? nonRequiredCount;
   final int? absenteeCount;
   final int? officeCountOverride;
   final int? jobTitleCountOverride;
@@ -248,6 +252,8 @@ class EventRecord {
   int get resolvedObservedCount => observedCount ?? observed.length;
 
   int get resolvedLateCount => lateCount ?? late.length;
+
+  int get resolvedNonRequiredCount => nonRequiredCount ?? nonRequired.length;
 
   int get resolvedAbsenteeCount => absenteeCount ?? absentees.length;
 

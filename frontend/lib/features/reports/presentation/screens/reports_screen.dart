@@ -81,6 +81,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
   bool _isExportingEventPdf = false;
   bool _isExportingLateEventPdf = false;
   bool _isExportingEventExcel = false;
+  bool _isExportingLateEventExcel = false;
+  bool _isExportingNonRequiredEventPdf = false;
+  bool _isExportingNonRequiredEventExcel = false;
   bool _isExportingPersonnelPdf = false;
   bool _isExportingPersonnelExcel = false;
   String? _errorMessage;
@@ -673,6 +676,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
       final attendedRows = _buildEventPdfRows(
         _sortEventRosterEntries(event.attended),
       );
+      final lateRows = _buildLateEventPdfRows(
+        _sortEventRosterEntries(event.late),
+      );
       final observedRows = _buildEventPdfRows(
         _sortEventRosterEntries(event.observed),
       );
@@ -705,11 +711,18 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ),
             pw.SizedBox(height: 12),
             pw.TableHelper.fromTextArray(
-              headers: const ['Total', 'Asistieron', 'Observados', 'Faltaron'],
+              headers: const [
+                'Total',
+                'Asistieron',
+                'Retrasados',
+                'Observados',
+                'Faltaron',
+              ],
               data: [
                 [
                   '${event.totalTrackedPeople}',
                   '${event.resolvedAttendedCount}',
+                  '${event.resolvedLateCount}',
                   '${event.resolvedObservedCount}',
                   '${event.resolvedAbsenteeCount}',
                 ],
@@ -756,6 +769,41 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 cellStyle: const pw.TextStyle(fontSize: _reportPdfFontSize),
                 headerDecoration: const pw.BoxDecoration(
                   color: PdfColor.fromInt(0xFFE7DFF6),
+                ),
+              ),
+            pw.SizedBox(height: 18),
+            pw.Text(
+              'Retrasados (${event.resolvedLateCount})',
+              style: pw.TextStyle(
+                fontSize: _reportPdfFontSize,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 8),
+            if (lateRows.isEmpty)
+              pw.Text(
+                'No hay personas registradas fuera de horario.',
+                style: const pw.TextStyle(fontSize: _reportPdfFontSize),
+              )
+            else
+              pw.TableHelper.fromTextArray(
+                headers: const [
+                  'Nro',
+                  'CI',
+                  'Nombre',
+                  'Tipo',
+                  'Oficina',
+                  'Escaneado',
+                ],
+                columnWidths: _eventReportPdfColumnWidths,
+                data: lateRows,
+                headerStyle: pw.TextStyle(
+                  fontSize: _reportPdfFontSize,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+                cellStyle: const pw.TextStyle(fontSize: _reportPdfFontSize),
+                headerDecoration: const pw.BoxDecoration(
+                  color: PdfColor.fromInt(0xFFFFE6CC),
                 ),
               ),
             pw.SizedBox(height: 18),
@@ -935,6 +983,190 @@ class _ReportsScreenState extends State<ReportsScreen> {
       if (mounted) {
         setState(() {
           _isExportingLateEventPdf = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _exportLateEventExcel() async {
+    final event = _eventReport;
+
+    if (event == null) {
+      return;
+    }
+
+    final rows = _buildEventExcelRowsForEntries(event, event.late);
+
+    if (rows.isEmpty) {
+      AppAlert.showWarning(
+        context,
+        'Este evento no tiene registros retrasados.',
+      );
+      return;
+    }
+
+    setState(() {
+      _isExportingLateEventExcel = true;
+    });
+
+    try {
+      await exportExcelWorkbook(
+        fileName: _buildLateEventExcelFilename(event),
+        sheetName: 'Retrasados',
+        headers: _buildEventExcelHeaders(event),
+        rows: rows,
+      );
+
+      if (mounted) {
+        AppAlert.showSuccess(context, 'Excel de retrasados generado.');
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible exportar retrasados.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExportingLateEventExcel = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _exportNonRequiredEventPdf() async {
+    final event = _eventReport;
+
+    if (event == null) {
+      return;
+    }
+
+    if (event.nonRequired.isEmpty) {
+      AppAlert.showWarning(
+        context,
+        'Este evento no tiene asistentes no obligados.',
+      );
+      return;
+    }
+
+    setState(() {
+      _isExportingNonRequiredEventPdf = true;
+    });
+
+    try {
+      final document = pw.Document();
+      final rows = _buildEventPdfRows(
+        _sortEventRosterEntries(event.nonRequired),
+      );
+
+      document.addPage(
+        pw.MultiPage(
+          build: (context) => [
+            pw.Text(
+              'Reporte de asistentes no obligados',
+              style: pw.TextStyle(
+                fontSize: _reportPdfFontSize,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 10),
+            pw.Text(
+              'Evento: ${event.name}',
+              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
+            ),
+            pw.Text(
+              'Fecha: ${_formatDateTime(event.date)}',
+              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
+            ),
+            pw.Text(
+              'Direccion: ${event.address?.trim().isNotEmpty == true ? event.address! : 'Sin direccion'}',
+              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
+            ),
+            pw.SizedBox(height: 16),
+            pw.Text(
+              'No obligados (${event.resolvedNonRequiredCount})',
+              style: pw.TextStyle(
+                fontSize: _reportPdfFontSize,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 8),
+            pw.TableHelper.fromTextArray(
+              headers: const [
+                'Nro',
+                'CI',
+                'Nombre',
+                'Tipo',
+                'Oficina',
+                'Escaneado',
+              ],
+              columnWidths: _eventReportPdfColumnWidths,
+              data: rows,
+              headerStyle: pw.TextStyle(
+                fontSize: _reportPdfFontSize,
+                fontWeight: pw.FontWeight.bold,
+              ),
+              cellStyle: const pw.TextStyle(fontSize: _reportPdfFontSize),
+              headerDecoration: const pw.BoxDecoration(
+                color: PdfColor.fromInt(0xFFDDEBFF),
+              ),
+            ),
+          ],
+        ),
+      );
+
+      await Printing.layoutPdf(
+        onLayout: (_) async => document.save(),
+        name: _buildNonRequiredEventReportFilename(event),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExportingNonRequiredEventPdf = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _exportNonRequiredEventExcel() async {
+    final event = _eventReport;
+
+    if (event == null) {
+      return;
+    }
+
+    final rows = _buildEventExcelRowsForEntries(event, event.nonRequired);
+
+    if (rows.isEmpty) {
+      AppAlert.showWarning(
+        context,
+        'Este evento no tiene asistentes no obligados.',
+      );
+      return;
+    }
+
+    setState(() {
+      _isExportingNonRequiredEventExcel = true;
+    });
+
+    try {
+      await exportExcelWorkbook(
+        fileName: _buildNonRequiredEventExcelFilename(event),
+        sheetName: 'No obligados',
+        headers: _buildEventExcelHeaders(event),
+        rows: rows,
+      );
+
+      if (mounted) {
+        AppAlert.showSuccess(context, 'Excel de no obligados generado.');
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible exportar no obligados.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExportingNonRequiredEventExcel = false;
         });
       }
     }
@@ -1536,6 +1768,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                   _isExportingEventPdf ||
                                   _isExportingLateEventPdf ||
                                   _isExportingEventExcel ||
+                                  _isExportingLateEventExcel ||
+                                  _isExportingNonRequiredEventPdf ||
+                                  _isExportingNonRequiredEventExcel ||
                                   _isLoadingEventReport
                               ? null
                               : _exportEventPdf,
@@ -1561,6 +1796,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                   _isExportingEventPdf ||
                                   _isExportingLateEventPdf ||
                                   _isExportingEventExcel ||
+                                  _isExportingLateEventExcel ||
+                                  _isExportingNonRequiredEventPdf ||
+                                  _isExportingNonRequiredEventExcel ||
                                   _isLoadingEventReport
                               ? null
                               : _exportLateEventPdf,
@@ -1582,9 +1820,96 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         OutlinedButton.icon(
                           onPressed:
                               eventReport == null ||
+                                  eventReport.late.isEmpty ||
                                   _isExportingEventPdf ||
                                   _isExportingLateEventPdf ||
                                   _isExportingEventExcel ||
+                                  _isExportingLateEventExcel ||
+                                  _isExportingNonRequiredEventPdf ||
+                                  _isExportingNonRequiredEventExcel ||
+                                  _isLoadingEventReport
+                              ? null
+                              : _exportLateEventExcel,
+                          icon: _isExportingLateEventExcel
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.table_view_rounded),
+                          label: Text(
+                            _isExportingLateEventExcel
+                                ? 'Exportando retrasados...'
+                                : 'Descargar retrasados Excel',
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed:
+                              eventReport == null ||
+                                  eventReport.nonRequired.isEmpty ||
+                                  _isExportingEventPdf ||
+                                  _isExportingLateEventPdf ||
+                                  _isExportingEventExcel ||
+                                  _isExportingLateEventExcel ||
+                                  _isExportingNonRequiredEventPdf ||
+                                  _isExportingNonRequiredEventExcel ||
+                                  _isLoadingEventReport
+                              ? null
+                              : _exportNonRequiredEventPdf,
+                          icon: _isExportingNonRequiredEventPdf
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.groups_2_outlined),
+                          label: Text(
+                            _isExportingNonRequiredEventPdf
+                                ? 'Generando no obligados...'
+                                : 'Descargar no obligados PDF',
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed:
+                              eventReport == null ||
+                                  eventReport.nonRequired.isEmpty ||
+                                  _isExportingEventPdf ||
+                                  _isExportingLateEventPdf ||
+                                  _isExportingEventExcel ||
+                                  _isExportingLateEventExcel ||
+                                  _isExportingNonRequiredEventPdf ||
+                                  _isExportingNonRequiredEventExcel ||
+                                  _isLoadingEventReport
+                              ? null
+                              : _exportNonRequiredEventExcel,
+                          icon: _isExportingNonRequiredEventExcel
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.file_download_outlined),
+                          label: Text(
+                            _isExportingNonRequiredEventExcel
+                                ? 'Exportando no obligados...'
+                                : 'Descargar no obligados Excel',
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed:
+                              eventReport == null ||
+                                  _isExportingEventPdf ||
+                                  _isExportingLateEventPdf ||
+                                  _isExportingEventExcel ||
+                                  _isExportingLateEventExcel ||
+                                  _isExportingNonRequiredEventPdf ||
+                                  _isExportingNonRequiredEventExcel ||
                                   _isLoadingEventReport
                               ? null
                               : _exportEventExcel,
@@ -1987,6 +2312,10 @@ class _EventReportCard extends StatelessWidget {
                   icon: Icons.person_off_outlined,
                   label: '${event.absentees.length} faltaron',
                 ),
+                _ReportChip(
+                  icon: Icons.groups_2_outlined,
+                  label: '${event.nonRequired.length} no obligados',
+                ),
               ],
             ),
             const SizedBox(height: 18),
@@ -2019,6 +2348,14 @@ class _EventReportCard extends StatelessWidget {
               emptyMessage:
                   'No hay funcionarios elegidos pendientes de asistencia.',
               accentBackground: const Color(0xFFFFF3E0),
+            ),
+            const SizedBox(height: 18),
+            _EventRosterTableSection(
+              title: 'No obligados',
+              entries: _sortEventRosterEntries(event.nonRequired),
+              emptyMessage:
+                  'No hay personas registradas fuera de la asignacion del evento.',
+              accentBackground: const Color(0xFFDDEBFF),
             ),
           ],
         ),
@@ -2950,14 +3287,21 @@ List<String> _buildEventExcelHeaders(EventRecord event) {
 }
 
 List<List<Object?>> _buildEventExcelRows(EventRecord event) {
-  final controls = _sortedEventControls(event.controls);
-  final rows = <List<Object?>>[];
-  final entries = _sortEventRosterEntriesByItem([
+  return _buildEventExcelRowsForEntries(event, [
     ...event.attended,
     ...event.observed,
   ]);
+}
 
-  for (final entry in entries) {
+List<List<Object?>> _buildEventExcelRowsForEntries(
+  EventRecord event,
+  List<EventRosterEntry> entries,
+) {
+  final controls = _sortedEventControls(event.controls);
+  final rows = <List<Object?>>[];
+  final sortedEntries = _sortEventRosterEntriesByItem(entries);
+
+  for (final entry in sortedEntries) {
     rows.add(
       _buildEventAttendanceExcelRow(
         event: event,
@@ -3403,14 +3747,33 @@ String _buildEventReportFilename(EventRecord event) {
 }
 
 String _buildLateEventReportFilename(EventRecord event) {
+  final safeName = _eventSafeFilenameName(event);
+  return 'retrasados-evento-${event.id}-$safeName.pdf';
+}
+
+String _buildLateEventExcelFilename(EventRecord event) {
+  final safeName = _eventSafeFilenameName(event);
+  return 'retrasados-evento-${event.id}-$safeName.xlsx';
+}
+
+String _buildNonRequiredEventReportFilename(EventRecord event) {
+  final safeName = _eventSafeFilenameName(event);
+  return 'no-obligados-evento-${event.id}-$safeName.pdf';
+}
+
+String _buildNonRequiredEventExcelFilename(EventRecord event) {
+  final safeName = _eventSafeFilenameName(event);
+  return 'no-obligados-evento-${event.id}-$safeName.xlsx';
+}
+
+String _eventSafeFilenameName(EventRecord event) {
   final normalizedName = event.name
       .trim()
       .toLowerCase()
       .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
       .replaceAll(RegExp(r'^-+|-+$'), '');
 
-  final safeName = normalizedName.isEmpty ? 'evento' : normalizedName;
-  return 'retrasados-evento-${event.id}-$safeName.pdf';
+  return normalizedName.isEmpty ? 'evento' : normalizedName;
 }
 
 String _buildEventExcelFilename(EventRecord event) {

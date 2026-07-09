@@ -46,21 +46,26 @@ class EventsApiService {
 
   Future<List<EventRecord>> fetchEvents({
     bool includeDetails = false,
+    bool assignedOnly = false,
     bool forceRefresh = false,
   }) async {
     if (!includeDetails &&
+        !assignedOnly &&
         !forceRefresh &&
         _isCacheFresh(_eventSummaryCacheAt, _eventSummaryCacheTtl)) {
       return _eventSummaryCache ?? const [];
     }
 
-    final payload = await _apiClient.getJson(
-      '/api/eventos?view=${includeDetails ? 'detail' : 'summary'}',
-    );
+    final view = assignedOnly
+        ? 'assigned'
+        : includeDetails
+        ? 'detail'
+        : 'summary';
+    final payload = await _apiClient.getJson('/api/eventos?view=$view');
     final items = _readList(payload['data'], 'eventos');
     final events = items.map(_parseEvent).toList(growable: false);
 
-    if (!includeDetails) {
+    if (!includeDetails && !assignedOnly) {
       _eventSummaryCache = events;
       _eventSummaryCacheAt = DateTime.now();
     }
@@ -201,6 +206,10 @@ class EventsApiService {
       source['retrasados'] ?? const [],
       'retrasados',
     ).map(_parseRosterEntry).toList(growable: false);
+    final nonRequired = _readList(
+      source['noObligados'] ?? const [],
+      'noObligados',
+    ).map(_parseRosterEntry).toList(growable: false);
     final absentees = _readList(
       source['faltaron'] ?? const [],
       'faltaron',
@@ -244,12 +253,15 @@ class EventsApiService {
       attended: attended,
       observed: observed,
       late: late,
+      nonRequired: nonRequired,
       absentees: absentees,
       attendedCount:
           _readNullableInt(source['asistieronCount']) ?? attended.length,
       observedCount:
           _readNullableInt(source['observaronCount']) ?? observed.length,
       lateCount: _readNullableInt(source['retrasadosCount']) ?? late.length,
+      nonRequiredCount:
+          _readNullableInt(source['noObligadosCount']) ?? nonRequired.length,
       absenteeCount:
           _readNullableInt(source['faltaronCount']) ?? absentees.length,
       officeCountOverride: _readNullableInt(source['oficinasCount']),

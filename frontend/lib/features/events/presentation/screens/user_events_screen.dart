@@ -141,7 +141,9 @@ class _UserEventsScreenState extends State<UserEventsScreen> {
     });
 
     try {
-      final events = await dependencies.eventsApiService.fetchEvents();
+      final events = await dependencies.eventsApiService.fetchEvents(
+        assignedOnly: true,
+      );
 
       if (!mounted) {
         return;
@@ -150,7 +152,9 @@ class _UserEventsScreenState extends State<UserEventsScreen> {
       setState(() {
         _attendedReport = null;
         _availableEvents = _sortOfficeEvents(
-          _filterEventsForCurrentUser(events, widget.currentUser),
+          _filterUpcomingEvents(
+            _filterEventsForCurrentUser(events, widget.currentUser),
+          ),
         );
       });
     } on BackendApiException catch (error) {
@@ -259,7 +263,10 @@ class _UserEventsScreenState extends State<UserEventsScreen> {
                               if (!_isAttendedView)
                                 _MiniStatCard(
                                   label: 'Cargo',
-                                  value: widget.currentUser.effectiveCargo.trim().isEmpty
+                                  value:
+                                      widget.currentUser.effectiveCargo
+                                          .trim()
+                                          .isEmpty
                                       ? 'Sin cargo'
                                       : widget.currentUser.effectiveCargo,
                                   icon: Icons.badge_rounded,
@@ -940,7 +947,9 @@ List<EventRecord> _filterEventsForCurrentUser(
         ? currentUser.commissionOfficeName ?? ''
         : _resolvedOfficeName(currentUser),
   );
-  final cargoCodigo = (currentUser.effectiveCargoCode ?? '').trim().toUpperCase();
+  final cargoCodigo = (currentUser.effectiveCargoCode ?? '')
+      .trim()
+      .toUpperCase();
   final cargoName = _normalizeOfficeSearchText(currentUser.effectiveCargo);
 
   return events
@@ -1103,16 +1112,8 @@ bool _eventOfficeMatchesUserOffice(
 
 List<EventRecord> _sortOfficeEvents(List<EventRecord> events) {
   final sortedEvents = [...events];
-  final now = DateTime.now();
 
   sortedEvents.sort((left, right) {
-    final leftIsPast = left.date.isBefore(now);
-    final rightIsPast = right.date.isBefore(now);
-
-    if (leftIsPast != rightIsPast) {
-      return leftIsPast ? 1 : -1;
-    }
-
     final dateComparison = left.date.compareTo(right.date);
 
     if (dateComparison != 0) {
@@ -1123,6 +1124,14 @@ List<EventRecord> _sortOfficeEvents(List<EventRecord> events) {
   });
 
   return sortedEvents;
+}
+
+List<EventRecord> _filterUpcomingEvents(List<EventRecord> events) {
+  final now = DateTime.now();
+
+  return events
+      .where((event) => !event.date.isBefore(now))
+      .toList(growable: false);
 }
 
 String _normalizeOfficeSearchText(String value) {

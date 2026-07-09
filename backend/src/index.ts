@@ -172,6 +172,11 @@ type AuthenticatedUser = {
   activo: boolean;
 };
 
+type EventAttendanceRequirement = {
+  obligatorio: boolean;
+  motivo: string | null;
+};
+
 const userWithOfficeInclude = {
   oficinas: true,
   oficina_comision: true,
@@ -1726,6 +1731,8 @@ const server = http.createServer(async (request, response) => {
         data:
           view === "summary"
             ? await loadSerializedEventSummaries(authenticatedUser)
+            : view === "assigned"
+              ? await loadSerializedAssignedEventSummaries(authenticatedUser)
             : (await prisma.eventos.findMany({
                 where: healthEventWhereForRequester(authenticatedUser),
                 orderBy: [{ fecha_evento: "desc" }, { id: "desc" }],
@@ -2284,7 +2291,10 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(404, "No se encontro una persona con ese CI.");
       }
 
-      await assertPersonCanAttendEvent(persona, evento);
+      const eventRequirement = await resolvePersonEventRequirement(
+        persona,
+        evento,
+      );
 
       const operador = await assertEventOperator(authenticatedUser.id);
       const resolvedObservation = buildAttendanceObservation(input);
@@ -2298,6 +2308,7 @@ const server = http.createServer(async (request, response) => {
           registrationCi: input.ci,
           scannedAt: input.scannedAt,
           registrationLocation: buildAttendanceRegistrationLocation(input),
+          eventRequirement,
         },
       );
       const asistencia = await prisma.$transaction(async (tx) => {
@@ -5831,7 +5842,7 @@ function parseAttendanceReportQuery(url: URL): AttendanceReportQuery {
 function parseEventListView(url: URL) {
   const view = (url.searchParams.get("view") ?? "summary").trim().toLowerCase();
 
-  if (view === "summary" || view === "detail") {
+  if (view === "summary" || view === "detail" || view === "assigned") {
     return view;
   }
 
@@ -9003,6 +9014,7 @@ function buildAttendanceQrSnapshot(
       longitud: number;
       accuracy: number | null;
     } | null;
+    eventRequirement?: EventAttendanceRequirement | null;
   },
 ) {
   // Snapshot tecnico del registro:
@@ -9030,6 +9042,7 @@ function buildAttendanceQrSnapshot(
     registrationCi: normalizeOptionalText(options?.registrationCi) ?? null,
     scannedAt: options?.scannedAt?.toISOString() ?? null,
     registrationLocation: options?.registrationLocation ?? null,
+    eventRequirement: options?.eventRequirement ?? null,
   };
 }
 
@@ -10215,6 +10228,62 @@ async function loadSerializedEventSummaries(requester?: AuthenticatedUser) {
   return serializedEvents;
 }
 
+async function loadSerializedAssignedEventSummaries(requester: AuthenticatedUser) {
+  const linkedPerson = await prisma.personas.findFirst({
+    where: {
+      OR: [
+        { usuario_id: requester.id },
+        ...(requester.ci != null && requester.ci.trim().length >= 3
+          ? [{ ci: requester.ci.trim() }]
+          : []),
+      ],
+    },
+    select: {
+      id: true,
+    },
+  });
+  const whereParts: Prisma.eventosWhereInput[] = [
+    {
+      fecha_evento: {
+        gte: new Date(),
+      },
+    },
+  ];
+  const scopedEventWhere = healthEventWhereForRequester(requester);
+
+  if (scopedEventWhere != null) {
+    whereParts.push(scopedEventWhere);
+  }
+
+  if (linkedPerson != null) {
+    whereParts.push({
+      NOT: {
+        asistencias: {
+          some: {
+            persona_id: linkedPerson.id,
+            estado: estado_asistencia.ASISTIO,
+          },
+        },
+      },
+    });
+  }
+
+  const events = await prisma.eventos.findMany({
+    where: {
+      AND: whereParts,
+    },
+    orderBy: [{ fecha_evento: "asc" }, { id: "asc" }],
+    include: eventSummaryInclude,
+  });
+  const attendanceCountMap = await loadEventAttendanceCountMap(
+    events.map((event) => event.id),
+  );
+
+  return events.map((event) =>
+    serializeEventSummary(event, attendanceCountMap.get(event.id)),
+  );
+}
+
 async function loadEventAttendanceCountMap(eventIds: number[]) {
   const uniqueEventIds = [...new Set(eventIds.filter((eventId) => eventId > 0))];
   const countMap = new Map<number, EventAttendanceCounts>();
@@ -10514,22 +10583,30 @@ function serializeEventSummary(
     asistieron: [],
     observaron: [],
     retrasados: [],
+    noObligados: [],
     asistieronCount: resolvedCounts.attended,
     observaronCount: resolvedCounts.observed,
     retrasadosCount: 0,
+    noObligadosCount: 0,
     personasListadasCount: resolvedCounts.total,
     detalleCompleto: false,
   };
 }
 
 function serializeEvent(event: any) {
-  const attended = (event.asistencias ?? [])
+  const requiredAttendances = (event.asistencias ?? []).filter(
+    (item: any) => !isNonRequiredEventAttendance(item),
+  );
+  const nonRequired = (event.asistencias ?? [])
+    .filter(isNonRequiredEventAttendance)
+    .map(serializeAttendanceRecord);
+  const attended = requiredAttendances
     .filter((item: any) => item.estado === estado_asistencia.ASISTIO)
     .map(serializeAttendanceRecord);
-  const observed = (event.asistencias ?? [])
+  const observed = requiredAttendances
     .filter((item: any) => item.estado === estado_asistencia.OBSERVADO)
     .map(serializeAttendanceRecord);
-  const late = (event.asistencias ?? [])
+  const late = requiredAttendances
     .filter((item: any) =>
       (item.asistencia_controles ?? []).some(
         (control: any) => control.retrasado === true,
@@ -10542,9 +10619,11 @@ function serializeEvent(event: any) {
     asistieron: attended,
     observaron: observed,
     retrasados: late,
+    noObligados: nonRequired,
     asistieronCount: attended.length,
     observaronCount: observed.length,
     retrasadosCount: late.length,
+    noObligadosCount: nonRequired.length,
     personasListadasCount: attended.length + observed.length,
     detalleCompleto: true,
   };
@@ -11691,6 +11770,43 @@ function serializeLunchRecord(record: any) {
   };
 }
 
+function isNonRequiredEventAttendance(attendance: any) {
+  const snapshot = attendance?.datos_qr_snapshot;
+
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    return false;
+  }
+
+  const eventRequirement = (snapshot as JsonRecord).eventRequirement;
+
+  return (
+    eventRequirement != null &&
+    typeof eventRequirement === "object" &&
+    !Array.isArray(eventRequirement) &&
+    (eventRequirement as JsonRecord).obligatorio === false
+  );
+}
+
+function readEventAttendanceRequirementReason(attendance: any) {
+  const snapshot = attendance?.datos_qr_snapshot;
+
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    return null;
+  }
+
+  const eventRequirement = (snapshot as JsonRecord).eventRequirement;
+
+  if (
+    eventRequirement == null ||
+    typeof eventRequirement !== "object" ||
+    Array.isArray(eventRequirement)
+  ) {
+    return null;
+  }
+
+  return normalizeOptionalText((eventRequirement as JsonRecord).motivo);
+}
+
 function serializeAttendanceRecord(attendance: any) {
   const linkedUser = attendance.personas.usuario ?? null;
   const officeName = resolveLinkedOfficeName(linkedUser);
@@ -11737,6 +11853,8 @@ function serializeAttendanceRecord(attendance: any) {
     controlesAsistidos: controlSummary.attendedCount,
     controlesObservados: controlSummary.observedCount,
     controlesRetrasados: controlSummary.lateCount,
+    obligatorio: !isNonRequiredEventAttendance(attendance),
+    motivoRegistroEvento: readEventAttendanceRequirementReason(attendance),
     eventoId: attendance.evento_id,
     eventoNombre:
       "eventos" in attendance ? attendance.eventos.nombre : undefined,
@@ -11861,26 +11979,32 @@ async function resolvePersonEventPermission(person: any, eventId: number) {
     throw new HttpError(404, "No se encontro el evento seleccionado.");
   }
 
-  try {
-    await assertPersonCanAttendEvent(person, event);
+  const requirement = await resolvePersonEventRequirement(person, event);
 
-    return {
-      permitido: true,
-      mensaje: null,
-    };
-  } catch (error) {
-    if (error instanceof HttpError && error.statusCode === 403) {
-      return {
-        permitido: false,
-        mensaje: error.message,
-      };
-    }
-
-    throw error;
-  }
+  return {
+    permitido: true,
+    obligatorio: requirement.obligatorio,
+    mensaje: requirement.obligatorio
+      ? null
+      : "Este funcionario no esta obligado a este evento; se registrara como no obligado.",
+  };
 }
 
 async function assertPersonCanAttendEvent(person: any, event: any) {
+  const requirement = await resolvePersonEventRequirement(person, event);
+
+  if (!requirement.obligatorio) {
+    throw new HttpError(
+      403,
+      "Este usuario no esta permitido asistir a este evento.",
+    );
+  }
+}
+
+async function resolvePersonEventRequirement(
+  person: any,
+  event: any,
+): Promise<EventAttendanceRequirement> {
   const linkedUser = person.usuario ?? null;
   const userOfficeId =
     resolveLinkedOfficeId(linkedUser) ??
@@ -11967,12 +12091,31 @@ async function assertPersonCanAttendEvent(person: any, event: any) {
 
   const matchesOfficeRule = matchesOffice && matchesOfficeCargo;
 
-  if (!matchesOfficeRule && !matchesCargo) {
-    throw new HttpError(
-      403,
-      "Este usuario no esta permitido asistir a este evento.",
-    );
+  if (matchesOfficeRule && matchesCargo) {
+    return {
+      obligatorio: true,
+      motivo: "Oficina y cargo",
+    };
   }
+
+  if (matchesOfficeRule) {
+    return {
+      obligatorio: true,
+      motivo: "Oficina",
+    };
+  }
+
+  if (matchesCargo) {
+    return {
+      obligatorio: true,
+      motivo: "Cargo",
+    };
+  }
+
+  return {
+    obligatorio: false,
+    motivo: "No asignado por oficina o cargo",
+  };
 }
 
 function buildUserDisplayNameFromParts(user: {

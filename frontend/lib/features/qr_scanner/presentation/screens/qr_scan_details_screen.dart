@@ -800,6 +800,25 @@ class _QrScanDetailsScreenState extends State<QrScanDetailsScreen> {
                                 ),
                               ),
                             ],
+                            if (qrDetails.eventRegistrationMessage
+                                    ?.trim()
+                                    .isNotEmpty ==
+                                true) ...[
+                              const SizedBox(height: 12),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: AppPalette.orangeSoft,
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(color: AppPalette.line),
+                                ),
+                                child: Text(
+                                  qrDetails.eventRegistrationMessage!.trim(),
+                                  style: textTheme.bodySmall,
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 14),
                             for (final control
                                 in widget.activeEventControls) ...[
