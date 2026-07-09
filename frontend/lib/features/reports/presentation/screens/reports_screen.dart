@@ -16,23 +16,6 @@ import '../../../events/domain/entities/event_record.dart';
 import '../../domain/entities/attendance_report.dart';
 
 const double _reportPdfFontSize = 8;
-const Map<int, pw.TableColumnWidth> _eventReportPdfColumnWidths = {
-  0: pw.FixedColumnWidth(20),
-  1: pw.FixedColumnWidth(62),
-  2: pw.FixedColumnWidth(92),
-  3: pw.FixedColumnWidth(45),
-  4: pw.FixedColumnWidth(163),
-  5: pw.FixedColumnWidth(60),
-};
-const Map<int, pw.TableColumnWidth> _eventAbsenteePdfColumnWidths = {
-  0: pw.FixedColumnWidth(20),
-  1: pw.FixedColumnWidth(55),
-  2: pw.FixedColumnWidth(92),
-  3: pw.FixedColumnWidth(42),
-  4: pw.FixedColumnWidth(126),
-  5: pw.FixedColumnWidth(72),
-  6: pw.FixedColumnWidth(55),
-};
 const Map<int, pw.TableColumnWidth> _personnelPdfColumnWidths = {
   0: pw.FixedColumnWidth(45),
   1: pw.FixedColumnWidth(58),
@@ -79,9 +62,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   bool _isLoadingEventReport = false;
   bool _isExporting = false;
   bool _isExportingEventPdf = false;
-  bool _isExportingLateEventPdf = false;
   bool _isExportingEventExcel = false;
-  bool _isExportingLateEventExcel = false;
   bool _isExportingNonRequiredEventPdf = false;
   bool _isExportingNonRequiredEventExcel = false;
   bool _isExportingPersonnelPdf = false;
@@ -674,20 +655,37 @@ class _ReportsScreenState extends State<ReportsScreen> {
     try {
       final document = pw.Document();
       final attendedRows = _buildEventPdfRows(
+        event,
         _sortEventRosterEntries(event.attended),
       );
       final lateRows = _buildLateEventPdfRows(
+        event,
         _sortEventRosterEntries(event.late),
       );
       final observedRows = _buildEventPdfRows(
+        event,
         _sortEventRosterEntries(event.observed),
       );
       final absenteeRows = _buildEventAbsenteePdfRows(
+        event,
         _sortEventAbsenteeEntries(event.absentees),
+      );
+      final rosterHeaders = _buildEventPdfHeaders(event);
+      final absenteeHeaders = _buildEventPdfHeaders(
+        event,
+        includeRequirementReason: true,
+      );
+      final rosterColumnWidths = _buildEventPdfColumnWidths(
+        rosterHeaders.length,
+      );
+      final absenteeColumnWidths = _buildEventPdfColumnWidths(
+        absenteeHeaders.length,
+        includeRequirementReason: true,
       );
 
       document.addPage(
         pw.MultiPage(
+          pageFormat: PdfPageFormat.a4.landscape,
           build: (context) => [
             pw.Text(
               'Reporte del evento',
@@ -752,15 +750,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
               )
             else
               pw.TableHelper.fromTextArray(
-                headers: const [
-                  'N°',
-                  'CI',
-                  'Nombre',
-                  'Tipo',
-                  'Oficina',
-                  'Escaneado',
-                ],
-                columnWidths: _eventReportPdfColumnWidths,
+                headers: rosterHeaders,
+                columnWidths: rosterColumnWidths,
                 data: attendedRows,
                 headerStyle: pw.TextStyle(
                   fontSize: _reportPdfFontSize,
@@ -787,15 +778,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
               )
             else
               pw.TableHelper.fromTextArray(
-                headers: const [
-                  'Nro',
-                  'CI',
-                  'Nombre',
-                  'Tipo',
-                  'Oficina',
-                  'Escaneado',
-                ],
-                columnWidths: _eventReportPdfColumnWidths,
+                headers: rosterHeaders,
+                columnWidths: rosterColumnWidths,
                 data: lateRows,
                 headerStyle: pw.TextStyle(
                   fontSize: _reportPdfFontSize,
@@ -822,15 +806,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
               )
             else
               pw.TableHelper.fromTextArray(
-                headers: const [
-                  'N°',
-                  'CI',
-                  'Nombre',
-                  'Tipo',
-                  'Oficina',
-                  'Escaneado',
-                ],
-                columnWidths: _eventReportPdfColumnWidths,
+                headers: rosterHeaders,
+                columnWidths: rosterColumnWidths,
                 data: observedRows,
                 headerStyle: pw.TextStyle(
                   fontSize: _reportPdfFontSize,
@@ -857,16 +834,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
               )
             else
               pw.TableHelper.fromTextArray(
-                headers: const [
-                  'Nro',
-                  'CI',
-                  'Nombre',
-                  'Tipo',
-                  'Oficina',
-                  'Debia ir por',
-                  'Estado',
-                ],
-                columnWidths: _eventAbsenteePdfColumnWidths,
+                headers: absenteeHeaders,
+                columnWidths: absenteeColumnWidths,
                 data: absenteeRows,
                 headerStyle: pw.TextStyle(
                   fontSize: _reportPdfFontSize,
@@ -894,145 +863,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
-  Future<void> _exportLateEventPdf() async {
-    final event = _eventReport;
-
-    if (event == null) {
-      return;
-    }
-
-    if (event.late.isEmpty) {
-      AppAlert.showWarning(
-        context,
-        'Este evento no tiene registros retrasados.',
-      );
-      return;
-    }
-
-    setState(() {
-      _isExportingLateEventPdf = true;
-    });
-
-    try {
-      final document = pw.Document();
-      final lateRows = _buildLateEventPdfRows(
-        _sortEventRosterEntries(event.late),
-      );
-
-      document.addPage(
-        pw.MultiPage(
-          build: (context) => [
-            pw.Text(
-              'Reporte de retrasados',
-              style: pw.TextStyle(
-                fontSize: _reportPdfFontSize,
-                fontWeight: pw.FontWeight.bold,
-              ),
-            ),
-            pw.SizedBox(height: 10),
-            pw.Text(
-              'Evento: ${event.name}',
-              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
-            ),
-            pw.Text(
-              'Fecha: ${_formatDateTime(event.date)}',
-              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
-            ),
-            pw.Text(
-              'Direccion: ${event.address?.trim().isNotEmpty == true ? event.address! : 'Sin direccion'}',
-              style: const pw.TextStyle(fontSize: _reportPdfFontSize),
-            ),
-            pw.SizedBox(height: 16),
-            pw.Text(
-              'Retrasados (${event.resolvedLateCount})',
-              style: pw.TextStyle(
-                fontSize: _reportPdfFontSize,
-                fontWeight: pw.FontWeight.bold,
-              ),
-            ),
-            pw.SizedBox(height: 8),
-            pw.TableHelper.fromTextArray(
-              headers: const [
-                'Nro',
-                'CI',
-                'Nombre',
-                'Tipo',
-                'Oficina',
-                'Escaneado',
-              ],
-              columnWidths: _eventReportPdfColumnWidths,
-              data: lateRows,
-              headerStyle: pw.TextStyle(
-                fontSize: _reportPdfFontSize,
-                fontWeight: pw.FontWeight.bold,
-              ),
-              cellStyle: const pw.TextStyle(fontSize: _reportPdfFontSize),
-              headerDecoration: const pw.BoxDecoration(
-                color: PdfColor.fromInt(0xFFFFE6CC),
-              ),
-            ),
-          ],
-        ),
-      );
-
-      await Printing.layoutPdf(
-        onLayout: (_) async => document.save(),
-        name: _buildLateEventReportFilename(event),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isExportingLateEventPdf = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _exportLateEventExcel() async {
-    final event = _eventReport;
-
-    if (event == null) {
-      return;
-    }
-
-    final rows = _buildEventExcelRowsForEntries(event, event.late);
-
-    if (rows.isEmpty) {
-      AppAlert.showWarning(
-        context,
-        'Este evento no tiene registros retrasados.',
-      );
-      return;
-    }
-
-    setState(() {
-      _isExportingLateEventExcel = true;
-    });
-
-    try {
-      await exportExcelWorkbook(
-        fileName: _buildLateEventExcelFilename(event),
-        sheetName: 'Retrasados',
-        headers: _buildEventExcelHeaders(event),
-        rows: rows,
-      );
-
-      if (mounted) {
-        AppAlert.showSuccess(context, 'Excel de retrasados generado.');
-      }
-    } catch (_) {
-      if (mounted) {
-        AppAlert.showError(context, 'No fue posible exportar retrasados.');
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isExportingLateEventExcel = false;
-        });
-      }
-    }
-  }
-
   Future<void> _exportNonRequiredEventPdf() async {
     final event = _eventReport;
 
@@ -1055,11 +885,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
     try {
       final document = pw.Document();
       final rows = _buildEventPdfRows(
+        event,
         _sortEventRosterEntries(event.nonRequired),
+      );
+      final rosterHeaders = _buildEventPdfHeaders(event);
+      final rosterColumnWidths = _buildEventPdfColumnWidths(
+        rosterHeaders.length,
       );
 
       document.addPage(
         pw.MultiPage(
+          pageFormat: PdfPageFormat.a4.landscape,
           build: (context) => [
             pw.Text(
               'Reporte de asistentes no obligados',
@@ -1091,15 +927,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ),
             pw.SizedBox(height: 8),
             pw.TableHelper.fromTextArray(
-              headers: const [
-                'Nro',
-                'CI',
-                'Nombre',
-                'Tipo',
-                'Oficina',
-                'Escaneado',
-              ],
-              columnWidths: _eventReportPdfColumnWidths,
+              headers: rosterHeaders,
+              columnWidths: rosterColumnWidths,
               data: rows,
               headerStyle: pw.TextStyle(
                 fontSize: _reportPdfFontSize,
@@ -1766,9 +1595,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           onPressed:
                               eventReport == null ||
                                   _isExportingEventPdf ||
-                                  _isExportingLateEventPdf ||
                                   _isExportingEventExcel ||
-                                  _isExportingLateEventExcel ||
                                   _isExportingNonRequiredEventPdf ||
                                   _isExportingNonRequiredEventExcel ||
                                   _isLoadingEventReport
@@ -1792,67 +1619,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         OutlinedButton.icon(
                           onPressed:
                               eventReport == null ||
-                                  eventReport.late.isEmpty ||
-                                  _isExportingEventPdf ||
-                                  _isExportingLateEventPdf ||
-                                  _isExportingEventExcel ||
-                                  _isExportingLateEventExcel ||
-                                  _isExportingNonRequiredEventPdf ||
-                                  _isExportingNonRequiredEventExcel ||
-                                  _isLoadingEventReport
-                              ? null
-                              : _exportLateEventPdf,
-                          icon: _isExportingLateEventPdf
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.schedule_rounded),
-                          label: Text(
-                            _isExportingLateEventPdf
-                                ? 'Generando retrasados...'
-                                : 'Descargar retrasados PDF',
-                          ),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed:
-                              eventReport == null ||
-                                  eventReport.late.isEmpty ||
-                                  _isExportingEventPdf ||
-                                  _isExportingLateEventPdf ||
-                                  _isExportingEventExcel ||
-                                  _isExportingLateEventExcel ||
-                                  _isExportingNonRequiredEventPdf ||
-                                  _isExportingNonRequiredEventExcel ||
-                                  _isLoadingEventReport
-                              ? null
-                              : _exportLateEventExcel,
-                          icon: _isExportingLateEventExcel
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.table_view_rounded),
-                          label: Text(
-                            _isExportingLateEventExcel
-                                ? 'Exportando retrasados...'
-                                : 'Descargar retrasados Excel',
-                          ),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed:
-                              eventReport == null ||
                                   eventReport.nonRequired.isEmpty ||
                                   _isExportingEventPdf ||
-                                  _isExportingLateEventPdf ||
                                   _isExportingEventExcel ||
-                                  _isExportingLateEventExcel ||
                                   _isExportingNonRequiredEventPdf ||
                                   _isExportingNonRequiredEventExcel ||
                                   _isLoadingEventReport
@@ -1878,9 +1647,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                               eventReport == null ||
                                   eventReport.nonRequired.isEmpty ||
                                   _isExportingEventPdf ||
-                                  _isExportingLateEventPdf ||
                                   _isExportingEventExcel ||
-                                  _isExportingLateEventExcel ||
                                   _isExportingNonRequiredEventPdf ||
                                   _isExportingNonRequiredEventExcel ||
                                   _isLoadingEventReport
@@ -1905,9 +1672,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           onPressed:
                               eventReport == null ||
                                   _isExportingEventPdf ||
-                                  _isExportingLateEventPdf ||
                                   _isExportingEventExcel ||
-                                  _isExportingLateEventExcel ||
                                   _isExportingNonRequiredEventPdf ||
                                   _isExportingNonRequiredEventExcel ||
                                   _isLoadingEventReport
@@ -3209,65 +2974,97 @@ String _formatTime(DateTime dateTime) {
   return '$hour:$minute';
 }
 
-List<List<String>> _buildEventPdfRows(List<EventRosterEntry> entries) {
+List<String> _buildEventPdfHeaders(
+  EventRecord event, {
+  bool includeRequirementReason = false,
+}) {
+  return [
+    'Item',
+    'CI',
+    'Nombre',
+    'Tipo',
+    'Oficina',
+    if (includeRequirementReason) 'Debia ir por',
+    for (final control in _sortedEventControls(event.controls)) control.name,
+  ];
+}
+
+Map<int, pw.TableColumnWidth> _buildEventPdfColumnWidths(
+  int headerCount, {
+  bool includeRequirementReason = false,
+}) {
+  final widths = <int, pw.TableColumnWidth>{
+    0: const pw.FixedColumnWidth(38),
+    1: const pw.FixedColumnWidth(52),
+    2: const pw.FixedColumnWidth(105),
+    3: const pw.FixedColumnWidth(42),
+    4: const pw.FixedColumnWidth(118),
+  };
+  var controlStartIndex = 5;
+
+  if (includeRequirementReason) {
+    widths[5] = const pw.FixedColumnWidth(66);
+    controlStartIndex = 6;
+  }
+
+  for (var index = controlStartIndex; index < headerCount; index++) {
+    widths[index] = const pw.FixedColumnWidth(46);
+  }
+
+  return widths;
+}
+
+List<List<String>> _buildEventPdfRows(
+  EventRecord event,
+  List<EventRosterEntry> entries,
+) {
+  final controls = _sortedEventControls(event.controls);
+
   return entries
-      .asMap()
-      .entries
-      .map(
-        (entry) => [
-          '${entry.key + 1}',
-          entry.value.ci?.trim().isNotEmpty == true
-              ? entry.value.ci!.trim()
-              : 'Sin CI',
-          entry.value.fullName,
-          _eventRosterTipoLabel(entry.value.tipoVinculo),
-          entry.value.officeName ?? 'Sin oficina',
-          _formatDateTime(entry.value.registeredAt),
-        ],
-      )
+      .map((entry) {
+        final controlsById = _resolveEventExcelControlsById(
+          entry: entry,
+          controls: controls,
+        );
+
+        return [
+          entry.numeroItem?.trim() ?? '',
+          entry.ci?.trim().isNotEmpty == true ? entry.ci!.trim() : 'Sin CI',
+          entry.fullName,
+          _eventRosterTipoLabel(entry.tipoVinculo),
+          entry.officeName ?? 'Sin oficina',
+          for (final control in controls)
+            _formatEventControlReportCell(controlsById[control.id]),
+        ];
+      })
       .toList(growable: false);
 }
 
-List<List<String>> _buildLateEventPdfRows(List<EventRosterEntry> entries) {
-  return entries
-      .asMap()
-      .entries
-      .map(
-        (entry) => [
-          '${entry.key + 1}',
-          entry.value.ci?.trim().isNotEmpty == true
-              ? entry.value.ci!.trim()
-              : 'Sin CI',
-          entry.value.fullName,
-          _eventRosterTipoLabel(entry.value.tipoVinculo),
-          entry.value.officeName ?? 'Sin oficina',
-          _formatDateTime(
-            entry.value.lateRegisteredAt ?? entry.value.registeredAt,
-          ),
-        ],
-      )
-      .toList(growable: false);
+List<List<String>> _buildLateEventPdfRows(
+  EventRecord event,
+  List<EventRosterEntry> entries,
+) {
+  return _buildEventPdfRows(event, entries);
 }
 
 List<List<String>> _buildEventAbsenteePdfRows(
+  EventRecord event,
   List<EventAbsenteeEntry> entries,
 ) {
+  final controls = _sortedEventControls(event.controls);
+
   return entries
-      .asMap()
-      .entries
       .map(
         (entry) => [
-          '${entry.key + 1}',
-          entry.value.ci?.trim().isNotEmpty == true
-              ? entry.value.ci!.trim()
-              : 'Sin CI',
-          entry.value.fullName,
-          _eventRosterTipoLabel(entry.value.tipoVinculo),
-          entry.value.officeName ?? 'Sin oficina',
-          entry.value.requirementReason?.trim().isNotEmpty == true
-              ? entry.value.requirementReason!.trim()
+          '',
+          entry.ci?.trim().isNotEmpty == true ? entry.ci!.trim() : 'Sin CI',
+          entry.fullName,
+          _eventRosterTipoLabel(entry.tipoVinculo),
+          entry.officeName ?? 'Sin oficina',
+          entry.requirementReason?.trim().isNotEmpty == true
+              ? entry.requirementReason!.trim()
               : 'Regla del evento',
-          'No asistio',
+          for (final _ in controls) 'F',
         ],
       )
       .toList(growable: false);
@@ -3287,10 +3084,36 @@ List<String> _buildEventExcelHeaders(EventRecord event) {
 }
 
 List<List<Object?>> _buildEventExcelRows(EventRecord event) {
-  return _buildEventExcelRowsForEntries(event, [
-    ...event.attended,
-    ...event.observed,
-  ]);
+  return [
+    ..._buildEventExcelRowsForEntries(event, [
+      ...event.attended,
+      ...event.observed,
+    ]),
+    ..._buildEventAbsenteeExcelRows(event, event.absentees),
+  ];
+}
+
+List<List<Object?>> _buildEventAbsenteeExcelRows(
+  EventRecord event,
+  List<EventAbsenteeEntry> entries,
+) {
+  final controls = _sortedEventControls(event.controls);
+  final sortedEntries = _sortEventAbsenteeEntries(entries);
+
+  return sortedEntries
+      .map(
+        (entry) => [
+          _formatDateOnly(event.date),
+          '',
+          entry.ci?.trim().isNotEmpty == true ? entry.ci!.trim() : '',
+          entry.fullName,
+          _eventRosterTipoLabel(entry.tipoVinculo),
+          entry.officeName ?? '',
+          entry.jobTitle ?? '',
+          for (final _ in controls) 'F',
+        ],
+      )
+      .toList(growable: false);
 }
 
 List<List<Object?>> _buildEventExcelRowsForEntries(
@@ -3334,9 +3157,23 @@ List<Object?> _buildEventAttendanceExcelRow({
     entry.jobTitle ?? '',
     for (final control in controls)
       controlsById[control.id] == null
-          ? ''
-          : _formatTime(controlsById[control.id]!.registeredAt),
+          ? 'F'
+          : _formatEventControlReportCell(controlsById[control.id]),
   ];
+}
+
+String _formatEventControlReportCell(EventAttendanceControl? control) {
+  if (control == null) {
+    return 'F';
+  }
+
+  final marker = control.isLate
+      ? 'R'
+      : control.isAttended
+      ? 'P'
+      : 'O';
+
+  return '${_formatTime(control.registeredAt)} $marker';
 }
 
 Map<int, EventAttendanceControl> _resolveEventExcelControlsById({
@@ -3744,16 +3581,6 @@ String _buildEventReportFilename(EventRecord event) {
 
   final safeName = normalizedName.isEmpty ? 'evento' : normalizedName;
   return 'reporte-evento-${event.id}-$safeName.pdf';
-}
-
-String _buildLateEventReportFilename(EventRecord event) {
-  final safeName = _eventSafeFilenameName(event);
-  return 'retrasados-evento-${event.id}-$safeName.pdf';
-}
-
-String _buildLateEventExcelFilename(EventRecord event) {
-  final safeName = _eventSafeFilenameName(event);
-  return 'retrasados-evento-${event.id}-$safeName.xlsx';
 }
 
 String _buildNonRequiredEventReportFilename(EventRecord event) {
