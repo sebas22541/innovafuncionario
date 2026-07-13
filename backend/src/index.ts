@@ -18,7 +18,7 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
-import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 
 import {
   generateAndStoreUserCredential,
@@ -12306,31 +12306,16 @@ function readSwornDeclarationTemplate() {
 function drawSwornDeclarationHeader(
   page: any,
   record: any,
-  pageNumber: number,
-  totalPages: number,
+  _pageNumber: number,
+  _totalPages: number,
   font: any,
 ) {
   const dateText = formatSwornDeclarationDate(record.created_at);
   const code = buildSwornDeclarationCode(record);
 
-  erasePdfArea(page, 108, 126, 132, 14);
-  erasePdfArea(page, 316, 126, 132, 14);
-  erasePdfArea(page, 496, 126, 88, 14);
-  erasePdfArea(page, 124, 788, 132, 12);
-  erasePdfArea(page, 452, 788, 88, 12);
-  drawPdfText(page, 122, 126, dateText, { font, size: 7.4, maxWidth: 126 });
-  drawPdfText(page, 334, 126, code, { font, size: 7.4, maxWidth: 122 });
-  drawPdfText(page, 508, 126, `Pagina ${pageNumber} de ${totalPages}`, {
-    font,
-    size: 7.4,
-    maxWidth: 72,
-  });
-  drawPdfText(page, 138, 789, dateText, { font, size: 6.4, maxWidth: 120 });
-  drawPdfText(page, 465, 789, `Pagina ${pageNumber} de ${totalPages}`, {
-    font,
-    size: 6.4,
-    maxWidth: 72,
-  });
+  drawPdfText(page, 122, 126, dateText, { font, size: 8, maxWidth: 126 });
+  drawPdfText(page, 334, 126, code, { font, size: 8, maxWidth: 122 });
+  drawPdfText(page, 138, 789, dateText, { font, size: 7, maxWidth: 120 });
 }
 
 function drawSwornDeclarationPageOne(page: any, record: any, font: any) {
@@ -12341,7 +12326,7 @@ function drawSwornDeclarationPageOne(page: any, record: any, font: any) {
   drawCellText(page, 386, 229, null, 84, font);
   drawCellText(page, 145, 252, null, 130, font);
   drawCellText(page, 319, 252, null, 80, font);
-  drawCellText(page, 137, 275, record.funcionario_oficina, 395, font);
+  drawCellText(page, 205, 275, record.funcionario_oficina, 325, font);
   drawCellText(page, 88, 297, record.funcionario_cargo, 112, font);
   drawCellText(page, 228, 297, record.funcionario_numero_item, 104, font);
   drawCellText(page, 386, 297, null, 132, font);
@@ -12539,15 +12524,15 @@ function drawCellText(
   value: unknown,
   width: number,
   font: any,
-  size = 6.8,
+  size = 8,
 ) {
-  const effectiveSize = Math.max(size, 6.4);
-  const text = fitPdfCellText(value, width - 4, effectiveSize);
+  const effectiveSize = Math.max(size, 7.2);
+  const text = fitPdfCellText(value, width - 10, effectiveSize);
 
-  drawPdfText(page, x + 8, topY - 8, text, {
+  drawPdfText(page, x + 10, topY - 12, text, {
     font,
     size: effectiveSize,
-    maxWidth: width - 4,
+    maxWidth: width - 10,
   });
 }
 
@@ -12580,20 +12565,9 @@ function drawCenteredPdfText(
 
   page.drawText(fitted, {
     x: centerX - textWidth / 2 + 4,
-    y: topToPdfY(page, topY + options.size - 7),
+    y: topToPdfY(page, topY + options.size - 10),
     size: options.size,
     font: options.font,
-  });
-}
-
-function erasePdfArea(page: any, x: number, topY: number, width: number, height: number) {
-  page.drawRectangle({
-    x,
-    y: topToPdfY(page, topY + height),
-    width,
-    height,
-    color: rgb(1, 1, 1),
-    borderWidth: 0,
   });
 }
 
@@ -12614,7 +12588,7 @@ function drawSignatureLine(page: any, x: number, topY: number, label: string, fo
 
 function fitPdfCellText(value: unknown, width: number, size: number) {
   const raw = normalizePdfValue(value);
-  const maxChars = Math.max(4, Math.floor(width / (size * 0.52)));
+  const maxChars = Math.max(4, Math.floor(width / (size * 0.58)));
   const text = raw.length === 0 ? "-".repeat(maxChars) : raw;
 
   if (text.length <= maxChars) {
