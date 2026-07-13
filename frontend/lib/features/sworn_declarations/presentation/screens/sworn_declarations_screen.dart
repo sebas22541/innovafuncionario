@@ -2159,30 +2159,21 @@ Future<Uint8List> _buildSwornDeclarationPdf(
   }
 
   final pages = templatePages.isEmpty
-      ? [
-          _TemplatePageImage(
-            image: null,
-            format: PdfPageFormat.a4,
-          ),
-        ]
+      ? [const _TemplatePageImage(image: null, format: PdfPageFormat.a4)]
       : templatePages;
-  final dataWidgets = _buildSwornDeclarationPdfBlocks(record);
-  final chunks = <List<pw.Widget>>[];
+  const outputPageCount = 6;
 
-  for (var index = 0; index < dataWidgets.length; index += 8) {
-    chunks.add(
-      dataWidgets.sublist(
-        index,
-        (index + 8).clamp(0, dataWidgets.length),
-      ),
-    );
-  }
-
-  final pageCount = pages.length > chunks.length ? pages.length : chunks.length;
-
-  for (var index = 0; index < pageCount; index++) {
-    final template = pages[index < pages.length ? index : pages.length - 1];
-    final chunk = index < chunks.length ? chunks[index] : <pw.Widget>[];
+  for (var pageIndex = 0; pageIndex < outputPageCount; pageIndex++) {
+    final template = pages[pageIndex < pages.length ? pageIndex : pages.length - 1];
+    final overlay = switch (pageIndex) {
+      0 => _buildPdfPageOneOverlay(record),
+      1 => _buildPdfPageTwoOverlay(record),
+      2 => <pw.Widget>[],
+      3 => _buildPdfPageFourOverlay(record),
+      4 => _buildPdfPageFiveOverlay(record),
+      5 => _buildPdfPageSixOverlay(record),
+      _ => <pw.Widget>[],
+    };
 
     document.addPage(
       pw.Page(
@@ -2194,43 +2185,8 @@ Future<Uint8List> _buildSwornDeclarationPdf(
               pw.Positioned.fill(
                 child: pw.Image(template.image!, fit: pw.BoxFit.fill),
               ),
-            pw.Positioned(
-              left: 36,
-              top: 36,
-              right: 36,
-              bottom: 36,
-              child: pw.Container(
-                padding: const pw.EdgeInsets.all(14),
-                decoration: pw.BoxDecoration(
-                  color: PdfColors.white,
-                  border: pw.Border.all(color: PdfColors.grey500, width: 0.5),
-                ),
-                child: pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.start,
-                  children: [
-                    if (index == 0) ...[
-                      pw.Text(
-                        'Declaracion Jurada - Datos registrados',
-                        style: pw.TextStyle(
-                          fontSize: 15,
-                          fontWeight: pw.FontWeight.bold,
-                        ),
-                      ),
-                      pw.SizedBox(height: 8),
-                      _pdfKeyValue('Funcionario', record.employeeFullName),
-                      _pdfKeyValue('CI', record.employeeCi),
-                      _pdfKeyValue('Item', record.employeeItemNumber),
-                      _pdfKeyValue('Cargo', record.employeeJobTitle),
-                      _pdfKeyValue('Oficina', record.employeeOffice),
-                      _pdfKeyValue('Gestion', '${record.managementYear}'),
-                      _pdfKeyValue('Estado', record.status.label),
-                      pw.Divider(height: 14),
-                    ],
-                    ...chunk,
-                  ],
-                ),
-              ),
-            ),
+            ..._buildPdfHeaderOverlay(record, pageIndex + 1, outputPageCount),
+            ...overlay,
           ],
         ),
       ),
@@ -2240,136 +2196,313 @@ Future<Uint8List> _buildSwornDeclarationPdf(
   return document.save();
 }
 
-List<pw.Widget> _buildSwornDeclarationPdfBlocks(
+List<pw.Widget> _buildPdfHeaderOverlay(
   SwornDeclarationRecord record,
+  int page,
+  int totalPages,
 ) {
-  final payload = record.payload;
-  final address = _payloadMap(payload['datosDomiciliarios']);
-  final mapImage = _readBase64Png(address['mapaImagenPngBase64']);
+  final dateText = _formatSpanishDate(record.createdAt);
+  final code = _buildSwornDeclarationCode(record);
 
   return [
-    _pdfSection(
-      'Consanguinidad y afinidad',
-      _formatPayloadForPdf(payload['consanguinidadAfinidad']),
-    ),
-    _pdfSection(
-      'Doble percepcion',
-      _formatPayloadForPdf(payload['doblePercepcion']),
-    ),
-    _pdfSection(
-      'Sentencias y procesos',
-      _formatPayloadForPdf(payload['sentenciasProcesos']),
-    ),
-    _pdfSection(
-      'Otras incompatibilidades',
-      _formatPayloadForPdf(payload['otrasIncompatibilidades']),
-    ),
-    _pdfSection(
-      'Datos domiciliarios',
-      _formatPayloadForPdf({
-        ...address,
-        'mapaImagenPngBase64': mapImage == null
-            ? 'No se capturo imagen del mapa'
-            : 'Imagen adjunta abajo',
-      }),
-    ),
-    if (mapImage != null)
-      pw.Container(
-        width: double.infinity,
-        margin: const pw.EdgeInsets.only(bottom: 10),
-        padding: const pw.EdgeInsets.all(8),
-        decoration: pw.BoxDecoration(
-          border: pw.Border.all(color: PdfColors.grey400, width: 0.5),
-        ),
-        child: pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: [
-            pw.Text(
-              'Mapa del domicilio',
-              style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
-            ),
-            pw.SizedBox(height: 6),
-            pw.Image(pw.MemoryImage(mapImage), height: 150, fit: pw.BoxFit.cover),
-          ],
-        ),
-      ),
-    _pdfSection(
-      'Familiares trabajando en la alcaldia',
-      _formatPayloadForPdf(payload['familiaresAlcaldia']),
-    ),
+    _pdfErase(34, 110, 140, 12),
+    _pdfText(36, 111, dateText, size: 7, italic: true),
+    _pdfErase(285, 110, 160, 12),
+    _pdfText(286, 111, code, size: 7, italic: true),
+    _pdfErase(452, 110, 82, 12),
+    _pdfText(455, 111, 'Pagina $page de $totalPages', size: 7, italic: true),
+    _pdfErase(83, 793, 116, 10),
+    _pdfText(84, 794, dateText, size: 6, italic: true),
+    _pdfErase(423, 793, 78, 10),
+    _pdfText(425, 794, 'Pagina $page de $totalPages', size: 6, italic: true),
   ];
 }
 
-pw.Widget _pdfSection(String title, String body) {
-  return pw.Container(
-    width: double.infinity,
-    margin: const pw.EdgeInsets.only(bottom: 10),
-    padding: const pw.EdgeInsets.all(8),
-    decoration: pw.BoxDecoration(
-      border: pw.Border.all(color: PdfColors.grey400, width: 0.5),
+List<pw.Widget> _buildPdfPageOneOverlay(SwornDeclarationRecord record) {
+  final relatives = _relativeRows(record);
+
+  return [
+    _pdfText(91, 229, record.employeeFullName, size: 6.2),
+    _pdfText(316, 229, record.employeeCi, size: 6.2),
+    _pdfText(386, 229, 'Sin dato', size: 6.2),
+    _pdfText(145, 252, 'Sin dato', size: 6.2),
+    _pdfText(319, 252, 'Sin dato', size: 6.2),
+    _pdfText(137, 275, record.employeeOffice, size: 6.2),
+    _pdfText(88, 297, record.employeeJobTitle, size: 6.2),
+    _pdfText(228, 297, record.employeeItemNumber, size: 6.2),
+    _pdfText(386, 297, 'Sin dato', size: 6.2),
+    ..._pdfRelativeGroup(relatives, const ['ESPOSO(A)'], [371]),
+    ..._pdfRelativeGroup(relatives, const ['UNION LIBRE'], [441]),
+    ..._pdfRelativeGroup(relatives, const ['DIVORCIADO(A)'], [510]),
+    ..._pdfRelativeGroup(relatives, const ['SEPARADO(A)'], [579]),
+    ..._pdfRelativeGroup(relatives, const ['PADRE O MADRE DE LOS HIJOS'], [649]),
+    ..._pdfRelativeGroup(relatives, const ['PADRES'], [719, 741]),
+  ];
+}
+
+List<pw.Widget> _buildPdfPageTwoOverlay(SwornDeclarationRecord record) {
+  final relatives = _relativeRows(record);
+
+  return [
+    ..._pdfRelativeGroup(relatives, const ['HERMANOS'], [194]),
+    ..._pdfRelativeGroup(relatives, const ['HIJOS'], [252]),
+    ..._pdfRelativeGroup(relatives, const ['TIOS'], [323, 344, 365, 386]),
+    ..._pdfRelativeGroup(relatives, const ['PRIMOS'], [470, 491]),
+    ..._pdfRelativeGroup(relatives, const ['SOBRINOS'], [555, 576]),
+    ..._pdfRelativeGroup(relatives, const ['SUEGROS'], [650]),
+    ..._pdfRelativeGroup(relatives, const ['YERNOS - NUERAS', 'YERNOS', 'NUERAS'], [719]),
+    ..._pdfRelativeGroup(relatives, const ['CUNADOS', 'CUÑADOS'], [792]),
+  ];
+}
+
+List<pw.Widget> _buildPdfPageFourOverlay(SwornDeclarationRecord record) {
+  final doublePerception = _payloadMap(record.payload['doblePercepcion']);
+  final sentences = _payloadMap(record.payload['sentenciasProcesos']);
+  final perceives = doublePerception['percibeDoblePercepcion'] == true;
+  final hasSentences = sentences['tieneSentencias'] == true;
+  final hasProcesses = sentences['tieneProcesos'] == true;
+  final wasDismissed = sentences['fueDestituido'] == true;
+
+  return [
+    _pdfCenteredText(296, 250, perceives ? 'SI PERCIBO DOBLE PERCEPCION' : 'NO PERCIBO DOBLE PERCEPCION'),
+    _pdfText(303, 337, _pdfValue(doublePerception['institucion'], dashIfEmpty: true), size: 7),
+    _pdfText(303, 360, _pdfValue(doublePerception['funcion'], fallback: 'NINGUNA'), size: 7),
+    _pdfText(303, 383, _pdfValue(doublePerception['montoPercibe'], dashIfEmpty: true), size: 7),
+    _pdfCenteredText(296, 480, hasSentences ? 'SI' : 'NO'),
+    if (hasSentences)
+      _pdfText(55, 490, _pdfValue(sentences['detalleSentencias']), size: 6, maxWidth: 485),
+    _pdfCenteredText(296, 528, hasProcesses ? 'SI' : 'NINGUNO'),
+    if (hasProcesses)
+      _pdfText(55, 538, _pdfValue(sentences['detalleProcesos']), size: 6, maxWidth: 485),
+    _pdfCenteredText(296, 574, wasDismissed ? 'SI' : 'NO'),
+    if (wasDismissed)
+      _pdfText(55, 584, _pdfValue(sentences['detalleDestitucion']), size: 6, maxWidth: 485),
+  ];
+}
+
+List<pw.Widget> _buildPdfPageFiveOverlay(SwornDeclarationRecord record) {
+  final incompatibilities = _payloadMap(record.payload['otrasIncompatibilidades']);
+  final receivesPension = incompatibilities['recibeRenta'] == true;
+  final marriageCommitment = incompatibilities['compromisoMatrimonio'] == true;
+  final representsCompanies = incompatibilities['representaEmpresas'] == true;
+
+  return [
+    _pdfCenteredText(296, 224, receivesPension ? 'SI' : 'NO'),
+    if (receivesPension)
+      _pdfText(55, 234, _pdfValue(incompatibilities['detalleRenta']), size: 6, maxWidth: 485),
+    _pdfCenteredText(296, 294, marriageCommitment ? 'SI' : 'NO'),
+    _pdfCenteredText(296, 364, representsCompanies ? 'SI' : 'NO'),
+    if (representsCompanies)
+      _pdfText(55, 374, _pdfValue(incompatibilities['nombreEmpresa']), size: 6, maxWidth: 485),
+  ];
+}
+
+List<pw.Widget> _buildPdfPageSixOverlay(SwornDeclarationRecord record) {
+  final address = _payloadMap(record.payload['datosDomiciliarios']);
+  final mapImage = _readBase64Png(address['mapaImagenPngBase64']);
+
+  return [
+    _pdfText(170, 236, record.employeeFullName, size: 6.5),
+    _pdfText(170, 259, record.employeeCi, size: 6.5),
+    _pdfText(316, 259, _pdfValue(address['barrioZona']), size: 6.5),
+    _pdfText(170, 282, _pdfValue(address['calleAvenida']), size: 6.5),
+    _pdfText(371, 282, _pdfValue(address['numeroDomicilio']), size: 6.5),
+    _pdfText(485, 282, _pdfValue(address['tipoVivienda']), size: 6.5),
+    _pdfText(130, 305, _pdfValue(address['telefonoFijo'], fallback: 'S/N'), size: 6.5),
+    _pdfText(285, 305, _pdfValue(address['telefonoCelular']), size: 6.5),
+    _pdfText(486, 305, _pdfValue(address['telefonoReferencia']), size: 6.5),
+    if (mapImage != null)
+      pw.Positioned(
+        left: 45,
+        top: 355,
+        child: pw.Image(
+          pw.MemoryImage(mapImage),
+          width: 482,
+          height: 217,
+          fit: pw.BoxFit.cover,
+        ),
+      )
+    else
+      _pdfText(55, 420, 'No se capturo imagen del mapa.', size: 8),
+    _pdfLegalText(55, 606),
+    _pdfSignatureLine(45, 732, 'FIRMA'),
+    _pdfSignatureLine(357, 732, 'ACLARACION DE FIRMA'),
+  ];
+}
+
+List<_PdfRelativeRow> _relativeRows(SwornDeclarationRecord record) {
+  final raw = record.payload['consanguinidadAfinidad'];
+
+  if (raw is! List) {
+    return const [];
+  }
+
+  return raw.whereType<Map>().map((item) {
+    return _PdfRelativeRow(
+      relationship: _pdfValue(item['parentesco']).toUpperCase(),
+      fullName: [
+        _pdfValue(item['apellidoPaterno']),
+        _pdfValue(item['apellidoMaterno']),
+        _pdfValue(item['nombres']),
+      ].where((part) => part.isNotEmpty && part != 'Sin dato').join(' '),
+      occupation: _pdfValue(item['ocupacion'], dashIfEmpty: true),
+      workplace: _pdfValue(item['lugarTrabajo'], dashIfEmpty: true),
+      document: _pdfValue(item['documentoIdentidad'], dashIfEmpty: true),
+      deceased: item['fallecido'] == true ? 'SI' : '',
+    );
+  }).toList(growable: false);
+}
+
+List<pw.Widget> _pdfRelativeGroup(
+  List<_PdfRelativeRow> rows,
+  List<String> relationships,
+  List<double> yPositions,
+) {
+  final normalizedRelationships = relationships
+      .map((relationship) => relationship.toUpperCase())
+      .toSet();
+  final matches = rows
+      .where((row) => normalizedRelationships.contains(row.relationship))
+      .take(yPositions.length)
+      .toList(growable: false);
+  final widgets = <pw.Widget>[];
+
+  for (var index = 0; index < matches.length; index++) {
+    final row = matches[index];
+    final y = yPositions[index];
+
+    widgets.addAll([
+      _pdfText(52, y, row.fullName, size: 5.7, maxWidth: 142),
+      _pdfText(201, y, row.occupation, size: 5.7, maxWidth: 140),
+      _pdfText(352, y, row.workplace, size: 5.7, maxWidth: 95),
+      _pdfText(456, y, row.document, size: 5.7, maxWidth: 35),
+      _pdfText(502, y, row.deceased, size: 5.7, maxWidth: 35),
+    ]);
+  }
+
+  return widgets;
+}
+
+pw.Widget _pdfText(
+  double x,
+  double y,
+  String value, {
+  double size = 7,
+  double? maxWidth,
+  bool italic = false,
+}) {
+  return pw.Positioned(
+    left: x,
+    top: y,
+    child: pw.SizedBox(
+      width: maxWidth,
+      child: pw.Text(
+        value,
+        maxLines: 2,
+        overflow: pw.TextOverflow.clip,
+        style: pw.TextStyle(
+          fontSize: size,
+          fontStyle: italic ? pw.FontStyle.italic : pw.FontStyle.normal,
+        ),
+      ),
     ),
+  );
+}
+
+pw.Widget _pdfCenteredText(double centerX, double y, String value) {
+  return pw.Positioned(
+    left: centerX - 120,
+    top: y,
+    child: pw.SizedBox(
+      width: 240,
+      child: pw.Center(
+        child: pw.Text(
+          value,
+          style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
+          textAlign: pw.TextAlign.center,
+        ),
+      ),
+    ),
+  );
+}
+
+pw.Widget _pdfErase(double x, double y, double width, double height) {
+  return pw.Positioned(
+    left: x,
+    top: y,
+    child: pw.Container(width: width, height: height, color: PdfColors.white),
+  );
+}
+
+pw.Widget _pdfLegalText(double x, double y) {
+  return _pdfText(
+    x,
+    y,
+    'Tengo conocimiento que de existir falsedad en los datos consignados en el presente formulario, '
+    'la misma constituye un delito tipificado en el parrafo II del articulo 345 Bis del Codigo Penal Boliviano, '
+    'declaro que la informacion que detallo es fidedigna, caso contrario sere sujeto a responsabilidad penal y administrativa.',
+    size: 6.2,
+    maxWidth: 490,
+  );
+}
+
+pw.Widget _pdfSignatureLine(double x, double y, String label) {
+  return pw.Positioned(
+    left: x,
+    top: y,
     child: pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
+        pw.Container(width: 160, height: 0.7, color: PdfColors.black),
+        pw.SizedBox(height: 5),
         pw.Text(
-          title,
-          style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
-        ),
-        pw.SizedBox(height: 4),
-        pw.Text(body, style: const pw.TextStyle(fontSize: 8), maxLines: 18),
-      ],
-    ),
-  );
-}
-
-pw.Widget _pdfKeyValue(String label, String value) {
-  return pw.Padding(
-    padding: const pw.EdgeInsets.only(bottom: 2),
-    child: pw.Row(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
-      children: [
-        pw.SizedBox(
-          width: 74,
-          child: pw.Text(
-            label,
-            style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
-          ),
-        ),
-        pw.Expanded(
-          child: pw.Text(
-            value.trim().isEmpty ? 'Sin dato' : value.trim(),
-            style: const pw.TextStyle(fontSize: 8),
-          ),
+          label,
+          style: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold),
         ),
       ],
     ),
   );
 }
 
-String _formatPayloadForPdf(Object? value, [int indent = 0]) {
-  final prefix = '  ' * indent;
-
-  if (value is Map) {
-    return value.entries
-        .map(
-          (entry) =>
-              '$prefix${_humanizeKey(entry.key.toString())}: ${_formatPayloadForPdf(entry.value, indent + 1).trim()}',
-        )
-        .join('\n');
+String _pdfValue(
+  Object? value, {
+  String fallback = 'Sin dato',
+  bool dashIfEmpty = false,
+}) {
+  if (value == null) {
+    return dashIfEmpty ? '----------------' : fallback;
   }
 
-  if (value is List) {
-    if (value.isEmpty) {
-      return 'Sin registros';
-    }
+  final text = value.toString().trim();
 
-    return [
-      for (var index = 0; index < value.length; index++)
-        '$prefix${index + 1}. ${_formatPayloadForPdf(value[index], indent + 1).trim()}',
-    ].join('\n');
+  if (text.isEmpty || text.toUpperCase() == 'NO APLICA') {
+    return dashIfEmpty ? '----------------' : fallback;
   }
 
-  return _formatPayloadLeaf(value);
+  return text;
+}
+
+String _buildSwornDeclarationCode(SwornDeclarationRecord record) {
+  return 'DJ-${record.id}-${record.employeeCi}'.replaceAll(RegExp(r'\\s+'), '');
+}
+
+String _formatSpanishDate(DateTime date) {
+  const months = [
+    'ENERO',
+    'FEBRERO',
+    'MARZO',
+    'ABRIL',
+    'MAYO',
+    'JUNIO',
+    'JULIO',
+    'AGOSTO',
+    'SEPTIEMBRE',
+    'OCTUBRE',
+    'NOVIEMBRE',
+    'DICIEMBRE',
+  ];
+  final local = date.toLocal();
+
+  return '${local.day.toString().padLeft(2, '0')} ${months[local.month - 1]} DE ${local.year}';
 }
 
 Map<String, dynamic> _payloadMap(Object? value) {
@@ -2402,6 +2535,24 @@ String _buildSwornDeclarationFilename(SwornDeclarationRecord record) {
       : record.employeeCi.trim().replaceAll(RegExp(r'[^A-Za-z0-9_-]+'), '_');
 
   return 'DJ-${record.id}-$safeCi.pdf';
+}
+
+class _PdfRelativeRow {
+  const _PdfRelativeRow({
+    required this.relationship,
+    required this.fullName,
+    required this.occupation,
+    required this.workplace,
+    required this.document,
+    required this.deceased,
+  });
+
+  final String relationship;
+  final String fullName;
+  final String occupation;
+  final String workplace;
+  final String document;
+  final String deceased;
 }
 
 class _TemplatePageImage {
