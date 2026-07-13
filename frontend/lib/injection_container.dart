@@ -6,6 +6,7 @@ import 'features/notifications/infrastructure/services/notifications_api_service
 import 'features/permissions/infrastructure/services/exit_permits_api_service.dart';
 import 'features/ratings/infrastructure/services/ratings_api_service.dart';
 import 'features/reports/infrastructure/services/reports_api_service.dart';
+import 'features/sworn_declarations/infrastructure/services/sworn_declarations_api_service.dart';
 import 'features/qr_scanner/domain/repositories/qr_details_repository.dart';
 import 'features/qr_scanner/domain/usecases/get_qr_details_by_scan.dart';
 import 'features/qr_scanner/infrastructure/datasources/api_qr_details_datasource.dart';
@@ -27,6 +28,9 @@ Future<void> initDependencies() async {
   final notificationsApiService = NotificationsApiService(backendApiClient);
   final reportsApiService = ReportsApiService(backendApiClient);
   final ratingsApiService = RatingsApiService(backendApiClient);
+  final swornDeclarationsApiService = SwornDeclarationsApiService(
+    backendApiClient,
+  );
 
   dependencies = AppDependencies._(
     authApiService: authApiService,
@@ -38,6 +42,7 @@ Future<void> initDependencies() async {
     notificationsApiService: notificationsApiService,
     reportsApiService: reportsApiService,
     ratingsApiService: ratingsApiService,
+    swornDeclarationsApiService: swornDeclarationsApiService,
     qrDetailsDataSource: qrDetailsDataSource,
     qrDetailsRepository: qrDetailsRepository,
     getQrDetailsByScan: GetQrDetailsByScan(qrDetailsRepository),
@@ -55,6 +60,7 @@ class AppDependencies {
     required this.notificationsApiService,
     required this.reportsApiService,
     required this.ratingsApiService,
+    required this.swornDeclarationsApiService,
     required this.qrDetailsDataSource,
     required this.qrDetailsRepository,
     required this.getQrDetailsByScan,
@@ -69,6 +75,7 @@ class AppDependencies {
   final NotificationsApiService notificationsApiService;
   final ReportsApiService reportsApiService;
   final RatingsApiService ratingsApiService;
+  final SwornDeclarationsApiService swornDeclarationsApiService;
   final QrDetailsDataSource qrDetailsDataSource;
   final QrDetailsRepository qrDetailsRepository;
   final GetQrDetailsByScan getQrDetailsByScan;

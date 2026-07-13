@@ -1073,6 +1073,129 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/declaraciones-juradas") {
+      assertAuthenticatedRequester(authenticatedUser);
+      const query = normalizeOptionalText(url.searchParams.get("q"));
+      const onlyMine =
+        !isAdminUser(authenticatedUser) ||
+        url.searchParams.get("propias")?.trim().toLowerCase() === "true";
+      const records = await listSwornDeclarations({
+        userId: authenticatedUser.id,
+        onlyMine,
+        query,
+      });
+
+      sendJson(response, 200, {
+        data: records.map(serializeSwornDeclaration),
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/declaraciones-juradas") {
+      const user = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+        include: userWithOfficeInclude,
+      });
+
+      if (!user || user.activo !== true) {
+        throw new HttpError(401, "Sesion invalida o expirada.");
+      }
+
+      if (user.rol !== rol_usuario.OPERADOR) {
+        throw new HttpError(
+          403,
+          "Solo un funcionario puede registrar declaraciones juradas.",
+        );
+      }
+
+      const input = parseCreateSwornDeclarationInput(await readJsonBody(request));
+      const result = await pool.query(
+        `
+          INSERT INTO "declaraciones_juradas" (
+            "usuario_id",
+            "gestion",
+            "estado",
+            "funcionario_nombre_completo",
+            "funcionario_ci",
+            "funcionario_numero_item",
+            "funcionario_cargo",
+            "funcionario_oficina_id",
+            "funcionario_oficina",
+            "payload"
+          )
+          VALUES ($1, $2, 'PENDIENTE', $3, $4, $5, $6, $7, $8, $9::jsonb)
+          RETURNING *
+        `,
+        [
+          user.id,
+          input.gestion,
+          buildUserDisplayName(user),
+          normalizeOptionalText(user.ci),
+          normalizeOptionalText(user.numero_item),
+          resolveEffectiveJobTitleName(user),
+          resolveLinkedOfficeId(user),
+          resolveLinkedOfficeName(user),
+          JSON.stringify(input.payload),
+        ],
+      );
+
+      sendJson(response, 201, {
+        data: serializeSwornDeclaration(result.rows[0]),
+      });
+      return;
+    }
+
+    const swornDeclarationStatusMatch =
+      /^\/api\/declaraciones-juradas\/(\d+)\/estado$/.exec(url.pathname);
+
+    if (request.method === "PUT" && swornDeclarationStatusMatch != null) {
+      if (!isAdminUser(authenticatedUser)) {
+        throw new HttpError(
+          403,
+          "Solo un administrador puede revisar declaraciones juradas.",
+        );
+      }
+
+      const declarationId = Number.parseInt(
+        swornDeclarationStatusMatch[1] ?? "",
+        10,
+      );
+      const input = parseReviewSwornDeclarationInput(await readJsonBody(request));
+      const reviewer = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+      });
+      const result = await pool.query(
+        `
+          UPDATE "declaraciones_juradas"
+          SET
+            "estado" = $2,
+            "observacion_revision" = $3,
+            "revisado_por_id" = $4,
+            "revisado_por_nombre" = $5,
+            "revisado_en" = CURRENT_TIMESTAMP,
+            "updated_at" = CURRENT_TIMESTAMP
+          WHERE "id" = $1
+          RETURNING *
+        `,
+        [
+          declarationId,
+          input.estado,
+          input.observacion,
+          authenticatedUser.id,
+          reviewer == null ? authenticatedUser.email : buildUserDisplayName(reviewer),
+        ],
+      );
+
+      if (result.rowCount === 0) {
+        throw new HttpError(404, "No se encontro la declaracion jurada.");
+      }
+
+      sendJson(response, 200, {
+        data: serializeSwornDeclaration(result.rows[0]),
+      });
+      return;
+    }
+
     const salidaLlegadaMatch = /^\/api\/salidas\/(\d+)\/llegada$/.exec(
       url.pathname,
     );
@@ -4085,6 +4208,72 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_salidas_usuario_id"
       ON "salidas" ("usuario_id")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "declaraciones_juradas" (
+      "id" SERIAL PRIMARY KEY,
+      "usuario_id" INTEGER NOT NULL,
+      "gestion" INTEGER NOT NULL,
+      "estado" VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
+      "funcionario_nombre_completo" VARCHAR(220) NOT NULL,
+      "funcionario_ci" VARCHAR(30),
+      "funcionario_numero_item" VARCHAR(50),
+      "funcionario_cargo" VARCHAR(150),
+      "funcionario_oficina_id" INTEGER,
+      "funcionario_oficina" VARCHAR(180),
+      "payload" JSONB NOT NULL DEFAULT '{}'::jsonb,
+      "observacion_revision" TEXT,
+      "revisado_por_id" INTEGER,
+      "revisado_por_nombre" VARCHAR(220),
+      "revisado_en" TIMESTAMPTZ(6),
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "declaraciones_juradas_usuario_id_fkey"
+        FOREIGN KEY ("usuario_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE "declaraciones_juradas"
+      ADD COLUMN IF NOT EXISTS "observacion_revision" TEXT,
+      ADD COLUMN IF NOT EXISTS "revisado_por_id" INTEGER,
+      ADD COLUMN IF NOT EXISTS "revisado_por_nombre" VARCHAR(220),
+      ADD COLUMN IF NOT EXISTS "revisado_en" TIMESTAMPTZ(6)
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'declaraciones_juradas_revisado_por_id_fkey'
+      ) THEN
+        ALTER TABLE "declaraciones_juradas"
+          ADD CONSTRAINT "declaraciones_juradas_revisado_por_id_fkey"
+          FOREIGN KEY ("revisado_por_id")
+          REFERENCES "usuarios" ("id")
+          ON UPDATE NO ACTION;
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_declaraciones_juradas_usuario_id"
+      ON "declaraciones_juradas" ("usuario_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_declaraciones_juradas_estado"
+      ON "declaraciones_juradas" ("estado")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_declaraciones_juradas_gestion"
+      ON "declaraciones_juradas" ("gestion")
   `);
 
   await pool.query(`
@@ -11737,6 +11926,256 @@ function serializeExitPermit(salida: any) {
     aprobadoEn: salida.aprobado_en?.toISOString() ?? null,
     createdAt: salida.created_at.toISOString(),
     updatedAt: salida.updated_at.toISOString(),
+  };
+}
+
+type CreateSwornDeclarationInput = {
+  gestion: number;
+  payload: JsonRecord;
+};
+
+type ReviewSwornDeclarationInput = {
+  estado: "APROBADO" | "RECHAZADO";
+  observacion: string | null;
+};
+
+async function listSwornDeclarations(input: {
+  userId: number;
+  onlyMine: boolean;
+  query: string | null;
+}) {
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+
+  if (input.onlyMine) {
+    values.push(input.userId);
+    conditions.push(`"usuario_id" = $${values.length}`);
+  }
+
+  if (!input.onlyMine && input.query != null) {
+    values.push(`%${input.query}%`);
+    const parameter = `$${values.length}`;
+    conditions.push(
+      `(
+        "funcionario_nombre_completo" ILIKE ${parameter}
+        OR COALESCE("funcionario_ci", '') ILIKE ${parameter}
+        OR COALESCE("funcionario_numero_item", '') ILIKE ${parameter}
+        OR COALESCE("funcionario_oficina", '') ILIKE ${parameter}
+      )`,
+    );
+  }
+
+  const whereClause =
+    conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")}`;
+  const result = await pool.query(
+    `
+      SELECT *
+      FROM "declaraciones_juradas"
+      ${whereClause}
+      ORDER BY "created_at" DESC, "id" DESC
+      LIMIT 500
+    `,
+    values,
+  );
+
+  return result.rows;
+}
+
+function parseCreateSwornDeclarationInput(
+  payload: unknown,
+): CreateSwornDeclarationInput {
+  const body = expectRecord(payload);
+  const now = new Date();
+  const gestion = readOptionalIntInRange(body, "gestion", 2000, now.getFullYear() + 1)
+    ?? now.getFullYear();
+  const declarationPayload = readSwornDeclarationPayload(body);
+
+  validateSwornDeclarationPayload(declarationPayload);
+
+  return {
+    gestion,
+    payload: declarationPayload,
+  };
+}
+
+function parseReviewSwornDeclarationInput(
+  payload: unknown,
+): ReviewSwornDeclarationInput {
+  const body = expectRecord(payload);
+  const rawEstado = readRequiredString(body, "estado", 7, 9).toUpperCase();
+
+  if (rawEstado !== "APROBADO" && rawEstado !== "RECHAZADO") {
+    throw new HttpError(400, "El estado de revision no es valido.");
+  }
+
+  return {
+    estado: rawEstado,
+    observacion: readOptionalString(body, "observacion", 1, 1000),
+  };
+}
+
+function readSwornDeclarationPayload(source: JsonRecord): JsonRecord {
+  const value = source["payload"];
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "La declaracion jurada no tiene un formato valido.");
+  }
+
+  return value as JsonRecord;
+}
+
+function validateSwornDeclarationPayload(payload: JsonRecord) {
+  const relatives = readJsonArray(payload, "consanguinidadAfinidad");
+  const doublePerception = readJsonRecord(payload, "doblePercepcion");
+  const sentences = readJsonRecord(payload, "sentenciasProcesos");
+  const incompatibilities = readJsonRecord(payload, "otrasIncompatibilidades");
+  const address = readJsonRecord(payload, "datosDomiciliarios");
+  const cityHallRelatives = readJsonRecord(payload, "familiaresAlcaldia");
+
+  if (relatives.length === 0) {
+    throw new HttpError(
+      400,
+      "Debes registrar al menos un familiar en consanguinidad y afinidad.",
+    );
+  }
+
+  for (const relative of relatives) {
+    const record = expectRecord(relative);
+    readRequiredString(record, "parentesco", 2, 80);
+    readRequiredString(record, "nombres", 2, 150);
+    readRequiredString(record, "documentoIdentidad", 2, 40);
+  }
+
+  const perceivesDoubleIncome = readRequiredBoolean(
+    doublePerception,
+    "percibeDoblePercepcion",
+  );
+
+  if (perceivesDoubleIncome) {
+    readRequiredString(doublePerception, "institucion", 2, 180);
+    readRequiredString(doublePerception, "funcion", 2, 180);
+    readRequiredString(doublePerception, "montoPercibe", 1, 40);
+    readRequiredString(doublePerception, "remuneracionCargoActual", 1, 40);
+    readRequiredString(doublePerception, "montoTotalRemuneracion", 1, 40);
+  }
+
+  validateConditionalDescription(
+    sentences,
+    "tieneSentencias",
+    "detalleSentencias",
+    "Debes describir las sentencias declaradas.",
+  );
+  validateConditionalDescription(
+    sentences,
+    "tieneProcesos",
+    "detalleProcesos",
+    "Debes describir el estado del proceso declarado.",
+  );
+  validateConditionalDescription(
+    sentences,
+    "fueDestituido",
+    "detalleDestitucion",
+    "Debes indicar el motivo y anio de destitucion.",
+  );
+
+  validateConditionalDescription(
+    incompatibilities,
+    "recibeRenta",
+    "detalleRenta",
+    "Debes detallar la suspension temporal del beneficio.",
+  );
+  validateConditionalDescription(
+    incompatibilities,
+    "representaEmpresas",
+    "nombreEmpresa",
+    "Debes indicar el nombre de la empresa.",
+  );
+  readRequiredBoolean(incompatibilities, "compromisoMatrimonio");
+
+  readRequiredString(address, "calleAvenida", 2, 180);
+  readRequiredString(address, "barrioZona", 2, 120);
+  readRequiredString(address, "numeroDomicilio", 1, 40);
+  readRequiredString(address, "tipoVivienda", 2, 80);
+  readRequiredString(address, "telefonoCelular", 5, 40);
+  readRequiredString(address, "telefonoReferencia", 5, 40);
+  readRequiredFloat(address, "latitud", -90, 90);
+  readRequiredFloat(address, "longitud", -180, 180);
+
+  const hasCityHallRelatives = readRequiredBoolean(
+    cityHallRelatives,
+    "tieneFamiliares",
+  );
+  const cityHallRelativeRows = readJsonArray(cityHallRelatives, "familiares");
+
+  if (hasCityHallRelatives && cityHallRelativeRows.length === 0) {
+    throw new HttpError(
+      400,
+      "Debes registrar los datos de familiares que trabajan en la alcaldia.",
+    );
+  }
+
+  for (const relative of cityHallRelativeRows) {
+    const record = expectRecord(relative);
+    readRequiredString(record, "parentesco", 2, 80);
+    readRequiredString(record, "nombreCompleto", 2, 180);
+    readRequiredString(record, "cargo", 2, 150);
+    readRequiredString(record, "unidad", 2, 180);
+  }
+}
+
+function readJsonRecord(source: JsonRecord, key: string): JsonRecord {
+  const value = source[key];
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, `La seccion ${key} es obligatoria.`);
+  }
+
+  return value as JsonRecord;
+}
+
+function readJsonArray(source: JsonRecord, key: string): unknown[] {
+  const value = source[key];
+
+  if (!Array.isArray(value)) {
+    throw new HttpError(400, `La seccion ${key} no tiene un formato valido.`);
+  }
+
+  return value;
+}
+
+function validateConditionalDescription(
+  source: JsonRecord,
+  conditionKey: string,
+  descriptionKey: string,
+  message: string,
+) {
+  const enabled = readRequiredBoolean(source, conditionKey);
+  const description = readRequiredString(source, descriptionKey, 2, 1000);
+
+  if (enabled && description.toUpperCase() === "NO APLICA") {
+    throw new HttpError(400, message);
+  }
+}
+
+function serializeSwornDeclaration(record: any) {
+  return {
+    id: record.id,
+    usuarioId: record.usuario_id,
+    gestion: record.gestion,
+    estado: record.estado,
+    funcionarioNombreCompleto: record.funcionario_nombre_completo,
+    funcionarioCi: record.funcionario_ci ?? "",
+    funcionarioNumeroItem: record.funcionario_numero_item ?? "",
+    funcionarioCargo: record.funcionario_cargo ?? "",
+    funcionarioOficinaId: record.funcionario_oficina_id ?? null,
+    funcionarioOficina: record.funcionario_oficina ?? "",
+    payload: record.payload ?? {},
+    observacionRevision: record.observacion_revision ?? "",
+    revisadoPorId: record.revisado_por_id ?? null,
+    revisadoPorNombre: record.revisado_por_nombre ?? "",
+    revisadoEn: record.revisado_en?.toISOString() ?? null,
+    createdAt: record.created_at.toISOString(),
+    updatedAt: record.updated_at.toISOString(),
   };
 }
 

@@ -14,6 +14,7 @@ enum AppSection {
   cellPhones,
   myExitPermits,
   exitPermitRequests,
+  swornDeclarations,
   lunches,
   lunchScanner,
   qrScanner,
@@ -52,6 +53,8 @@ extension AppSectionX on AppSection {
         return 'Mis solicitudes';
       case AppSection.exitPermitRequests:
         return 'Solicitudes recibidas';
+      case AppSection.swornDeclarations:
+        return 'Declaracion jurada';
       case AppSection.lunches:
         return 'Almuerzos';
       case AppSection.lunchScanner:
@@ -93,6 +96,8 @@ extension AppSectionX on AppSection {
         return 'Mis solicitudes';
       case AppSection.exitPermitRequests:
         return 'Solicitudes recibidas';
+      case AppSection.swornDeclarations:
+        return 'Declaracion jurada';
       case AppSection.lunches:
         return 'Control de almuerzos';
       case AppSection.lunchScanner:
@@ -134,6 +139,8 @@ extension AppSectionX on AppSection {
         return Icons.assignment_outlined;
       case AppSection.exitPermitRequests:
         return Icons.assignment_turned_in_outlined;
+      case AppSection.swornDeclarations:
+        return Icons.fact_check_outlined;
       case AppSection.lunches:
         return Icons.restaurant_menu_rounded;
       case AppSection.lunchScanner:

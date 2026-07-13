@@ -19,6 +19,7 @@ import '../../features/qr_scanner/presentation/screens/qr_scanner_screen.dart';
 import '../../features/reports/presentation/screens/qr_generation_map_screen.dart';
 import '../../features/reports/presentation/screens/reports_screen.dart';
 import '../../features/settings/presentation/screens/settings_screen.dart';
+import '../../features/sworn_declarations/presentation/screens/sworn_declarations_screen.dart';
 import '../../features/users/presentation/screens/users_screen.dart';
 import '../../injection_container.dart';
 import '../infrastructure/device_status_service.dart';
@@ -475,6 +476,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
           requestedPermitId: _exitPermitRequestId,
           requestToken: _exitPermitRequestToken,
         );
+      case AppSection.swornDeclarations:
+        return SwornDeclarationsScreen(currentUser: _currentUser);
       case AppSection.lunches:
         return const LunchesAdminScreen();
       case AppSection.lunchScanner:
@@ -2229,6 +2232,7 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
       AppSection.notifications,
       AppSection.credentials,
       AppSection.permissionExits,
+      AppSection.swornDeclarations,
       AppSection.cellPhones,
       AppSection.lunches,
       AppSection.settings,
@@ -2264,6 +2268,7 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
     if (!_isDirectorJobTitle(user)) AppSection.permissionExits,
     if (!_isDirectorJobTitle(user)) AppSection.myExitPermits,
     if (_isExitPermitApproverUser(user)) AppSection.exitPermitRequests,
+    AppSection.swornDeclarations,
     AppSection.settings,
   ];
 
@@ -2284,6 +2289,7 @@ bool _isAttendanceSection(AppSection section) {
     case AppSection.cellPhones:
     case AppSection.myExitPermits:
     case AppSection.exitPermitRequests:
+    case AppSection.swornDeclarations:
     case AppSection.lunches:
     case AppSection.lunchScanner:
     case AppSection.qrScanner:
@@ -2309,6 +2315,7 @@ bool _isPermissionSection(AppSection section) {
     case AppSection.cellPhones:
     case AppSection.myExitPermits:
     case AppSection.exitPermitRequests:
+    case AppSection.swornDeclarations:
     case AppSection.lunches:
       return true;
     case AppSection.home:
