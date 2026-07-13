@@ -13,6 +13,7 @@ RUN npm ci --include=dev
 
 COPY backend/ ./
 COPY frontend/assets/templates/credencial.pdf ./assets/templates/credencial.pdf
+COPY frontend/assets/templates/declaracion_jurada.pdf ./assets/templates/declaracion_jurada.pdf
 COPY frontend/assets/images/escuBla.png ./assets/images/escuBla.png
 RUN npx prisma generate
 
