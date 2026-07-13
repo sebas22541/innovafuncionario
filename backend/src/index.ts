@@ -18,6 +18,7 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 
 import {
   generateAndStoreUserCredential,
@@ -1142,6 +1143,27 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 201, {
         data: serializeSwornDeclaration(result.rows[0]),
       });
+      return;
+    }
+
+    const swornDeclarationPdfMatch =
+      /^\/api\/declaraciones-juradas\/(\d+)\/pdf$/.exec(url.pathname);
+
+    if (request.method === "POST" && swornDeclarationPdfMatch != null) {
+      assertAuthenticatedRequester(authenticatedUser);
+      const declarationId = Number.parseInt(swornDeclarationPdfMatch[1] ?? "", 10);
+      const record = await loadSwornDeclarationForPdf(
+        declarationId,
+        authenticatedUser,
+      );
+      const pdfBytes = await buildSwornDeclarationPdf(record);
+
+      sendPdf(
+        response,
+        200,
+        Buffer.from(pdfBytes),
+        buildSwornDeclarationPdfFilename(record),
+      );
       return;
     }
 
@@ -12177,6 +12199,484 @@ function serializeSwornDeclaration(record: any) {
     createdAt: record.created_at.toISOString(),
     updatedAt: record.updated_at.toISOString(),
   };
+}
+
+async function loadSwornDeclarationForPdf(
+  declarationId: number,
+  authenticatedUser: AuthenticatedUser,
+) {
+  if (!Number.isInteger(declarationId) || declarationId <= 0) {
+    throw new HttpError(400, "Debes enviar una declaracion valida.");
+  }
+
+  const conditions = [`"id" = $1`];
+  const values: unknown[] = [declarationId];
+
+  if (!isAdminUser(authenticatedUser)) {
+    values.push(authenticatedUser.id);
+    conditions.push(`"usuario_id" = $${values.length}`);
+  }
+
+  const result = await pool.query(
+    `
+      SELECT *
+      FROM "declaraciones_juradas"
+      WHERE ${conditions.join(" AND ")}
+      LIMIT 1
+    `,
+    values,
+  );
+
+  if (result.rowCount === 0) {
+    throw new HttpError(404, "No se encontro la declaracion jurada.");
+  }
+
+  return result.rows[0];
+}
+
+async function buildSwornDeclarationPdf(record: any) {
+  const pdf = await PDFDocument.load(readSwornDeclarationTemplate());
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const pages = pdf.getPages();
+  const totalPages = Math.min(6, pages.length);
+
+  for (let index = 0; index < totalPages; index++) {
+    drawSwornDeclarationHeader(pages[index], record, index + 1, totalPages, font);
+  }
+
+  if (pages[0]) {
+    drawSwornDeclarationPageOne(pages[0], record, font);
+  }
+
+  if (pages[1]) {
+    drawSwornDeclarationPageTwo(pages[1], record, font);
+  }
+
+  if (pages[3]) {
+    drawSwornDeclarationPageFour(pages[3], record, font, boldFont);
+  }
+
+  if (pages[4]) {
+    drawSwornDeclarationPageFive(pages[4], record, font, boldFont);
+  }
+
+  if (pages[5]) {
+    await drawSwornDeclarationPageSix(pdf, pages[5], record, font, boldFont);
+  }
+
+  while (pdf.getPageCount() > totalPages) {
+    pdf.removePage(pdf.getPageCount() - 1);
+  }
+
+  pdf.setTitle(buildSwornDeclarationPdfFilename(record));
+  pdf.setAuthor("Gobierno Autonomo Municipal de Cochabamba");
+
+  return pdf.save();
+}
+
+function readSwornDeclarationTemplate() {
+  const configuredPath = process.env.SWORN_DECLARATION_TEMPLATE_PATH?.trim();
+  const candidatePaths = [
+    ...(configuredPath ? [configuredPath] : []),
+    "../frontend/assets/templates/declaracion_jurada.pdf",
+    "frontend/assets/templates/declaracion_jurada.pdf",
+    "assets/templates/declaracion_jurada.pdf",
+  ];
+  const attemptedPaths: string[] = [];
+
+  for (const candidatePath of candidatePaths) {
+    attemptedPaths.push(candidatePath);
+
+    try {
+      return readFileSync(candidatePath);
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
+  throw new HttpError(
+    500,
+    `No se encontro la plantilla de declaracion jurada. Rutas revisadas: ${attemptedPaths.join(", ")}`,
+  );
+}
+
+function drawSwornDeclarationHeader(
+  page: any,
+  record: any,
+  pageNumber: number,
+  totalPages: number,
+  font: any,
+) {
+  const dateText = formatSwornDeclarationDate(record.created_at);
+  const code = buildSwornDeclarationCode(record);
+
+  drawPdfText(page, 114, 133, dateText, { font, size: 6.4, maxWidth: 126 });
+  drawPdfText(page, 326, 133, code, { font, size: 6.4, maxWidth: 122 });
+  drawPdfText(page, 500, 133, `Pagina ${pageNumber} de ${totalPages}`, {
+    font,
+    size: 6.4,
+    maxWidth: 72,
+  });
+  drawPdfText(page, 130, 795, dateText, { font, size: 5.5, maxWidth: 120 });
+  drawPdfText(page, 457, 795, `Pagina ${pageNumber} de ${totalPages}`, {
+    font,
+    size: 5.5,
+    maxWidth: 72,
+  });
+}
+
+function drawSwornDeclarationPageOne(page: any, record: any, font: any) {
+  const relatives = buildSwornDeclarationRelatives(record);
+
+  drawCellText(page, 91, 229, record.funcionario_nombre_completo, 216, font);
+  drawCellText(page, 316, 229, record.funcionario_ci, 54, font);
+  drawCellText(page, 386, 229, null, 84, font);
+  drawCellText(page, 145, 252, null, 130, font);
+  drawCellText(page, 319, 252, null, 80, font);
+  drawCellText(page, 137, 275, record.funcionario_oficina, 395, font);
+  drawCellText(page, 88, 297, record.funcionario_cargo, 112, font);
+  drawCellText(page, 228, 297, record.funcionario_numero_item, 104, font);
+  drawCellText(page, 386, 297, null, 132, font);
+  drawRelativeRows(page, relatives, ["ESPOSO(A)"], [371], font);
+  drawRelativeRows(page, relatives, ["UNION LIBRE"], [441], font);
+  drawRelativeRows(page, relatives, ["DIVORCIADO(A)"], [510], font);
+  drawRelativeRows(page, relatives, ["SEPARADO(A)"], [579], font);
+  drawRelativeRows(page, relatives, ["PADRE O MADRE DE LOS HIJOS"], [649], font);
+  drawRelativeRows(page, relatives, ["PADRES"], [719, 741], font);
+}
+
+function drawSwornDeclarationPageTwo(page: any, record: any, font: any) {
+  const relatives = buildSwornDeclarationRelatives(record);
+
+  drawRelativeRows(page, relatives, ["HERMANOS"], [194], font);
+  drawRelativeRows(page, relatives, ["HIJOS"], [252], font);
+  drawRelativeRows(page, relatives, ["TIOS"], [323, 344, 365, 386], font);
+  drawRelativeRows(page, relatives, ["PRIMOS"], [470, 491], font);
+  drawRelativeRows(page, relatives, ["SOBRINOS"], [555, 576], font);
+  drawRelativeRows(page, relatives, ["SUEGROS"], [650], font);
+  drawRelativeRows(page, relatives, ["YERNOS - NUERAS", "YERNOS", "NUERAS"], [719], font);
+  drawRelativeRows(page, relatives, ["CUNADOS", "CUÑADOS"], [792], font);
+}
+
+function drawSwornDeclarationPageFour(page: any, record: any, font: any, boldFont: any) {
+  const payload = readSwornDeclarationPayloadRecord(record);
+  const doublePerception = readPayloadRecord(payload.doblePercepcion);
+  const sentences = readPayloadRecord(payload.sentenciasProcesos);
+  const perceives = doublePerception.percibeDoblePercepcion === true;
+  const hasSentences = sentences.tieneSentencias === true;
+  const hasProcesses = sentences.tieneProcesos === true;
+  const wasDismissed = sentences.fueDestituido === true;
+
+  drawCenteredPdfText(
+    page,
+    296,
+    250,
+    perceives ? "SI PERCIBO DOBLE PERCEPCION" : "NO PERCIBO DOBLE PERCEPCION",
+    { font: boldFont, size: 7.2, width: 240 },
+  );
+  drawCellText(page, 303, 337, doublePerception.institucion, 130, font);
+  drawCellText(page, 303, 360, doublePerception.funcion ?? "NINGUNA", 130, font);
+  drawCellText(page, 303, 383, doublePerception.montoPercibe, 130, font);
+  drawCenteredPdfText(page, 296, 480, hasSentences ? "SI" : "NO", {
+    font: boldFont,
+    size: 7.2,
+    width: 160,
+  });
+  if (hasSentences) {
+    drawCellText(page, 55, 493, sentences.detalleSentencias, 485, font, 5.8);
+  }
+  drawCenteredPdfText(page, 296, 528, hasProcesses ? "SI" : "NINGUNO", {
+    font: boldFont,
+    size: 7.2,
+    width: 160,
+  });
+  if (hasProcesses) {
+    drawCellText(page, 55, 541, sentences.detalleProcesos, 485, font, 5.8);
+  }
+  drawCenteredPdfText(page, 296, 574, wasDismissed ? "SI" : "NO", {
+    font: boldFont,
+    size: 7.2,
+    width: 160,
+  });
+  if (wasDismissed) {
+    drawCellText(page, 55, 587, sentences.detalleDestitucion, 485, font, 5.8);
+  }
+}
+
+function drawSwornDeclarationPageFive(page: any, record: any, font: any, boldFont: any) {
+  const payload = readSwornDeclarationPayloadRecord(record);
+  const incompatibilities = readPayloadRecord(payload.otrasIncompatibilidades);
+  const receivesPension = incompatibilities.recibeRenta === true;
+  const marriageCommitment = incompatibilities.compromisoMatrimonio === true;
+  const representsCompanies = incompatibilities.representaEmpresas === true;
+
+  drawCenteredPdfText(page, 296, 224, receivesPension ? "SI" : "NO", {
+    font: boldFont,
+    size: 7.2,
+    width: 160,
+  });
+  if (receivesPension) {
+    drawCellText(page, 55, 237, incompatibilities.detalleRenta, 485, font, 5.8);
+  }
+  drawCenteredPdfText(page, 296, 294, marriageCommitment ? "SI" : "NO", {
+    font: boldFont,
+    size: 7.2,
+    width: 160,
+  });
+  drawCenteredPdfText(page, 296, 364, representsCompanies ? "SI" : "NO", {
+    font: boldFont,
+    size: 7.2,
+    width: 160,
+  });
+  if (representsCompanies) {
+    drawCellText(page, 55, 377, incompatibilities.nombreEmpresa, 485, font, 5.8);
+  }
+}
+
+async function drawSwornDeclarationPageSix(
+  pdf: any,
+  page: any,
+  record: any,
+  font: any,
+  boldFont: any,
+) {
+  const payload = readSwornDeclarationPayloadRecord(record);
+  const address = readPayloadRecord(payload.datosDomiciliarios);
+  const mapImage = await embedSwornDeclarationMapImage(pdf, address.mapaImagenPngBase64);
+
+  drawCellText(page, 170, 236, record.funcionario_nombre_completo, 360, font);
+  drawCellText(page, 170, 259, record.funcionario_ci, 94, font);
+  drawCellText(page, 316, 259, address.barrioZona, 210, font);
+  drawCellText(page, 170, 282, address.calleAvenida, 176, font);
+  drawCellText(page, 371, 282, address.numeroDomicilio, 46, font);
+  drawCellText(page, 485, 282, address.tipoVivienda, 70, font);
+  drawCellText(page, 130, 305, address.telefonoFijo ?? "S/N", 84, font);
+  drawCellText(page, 285, 305, address.telefonoCelular, 122, font);
+  drawCellText(page, 486, 305, address.telefonoReferencia, 82, font);
+
+  if (mapImage != null) {
+    page.drawImage(mapImage, {
+      x: 45,
+      y: topToPdfY(page, 573),
+      width: 482,
+      height: 217,
+    });
+  } else {
+    drawCellText(page, 55, 420, "------------------------", 240, font, 7);
+  }
+
+  drawPdfText(
+    page,
+    55,
+    606,
+    "Tengo conocimiento que de existir falsedad en los datos consignados en el presente formulario, la misma constituye un delito tipificado en el parrafo II del articulo 345 Bis del Codigo Penal Boliviano, declaro que la informacion que detallo es fidedigna, caso contrario sere sujeto a responsabilidad penal y administrativa.",
+    { font: boldFont, size: 5.7, maxWidth: 490 },
+  );
+  drawSignatureLine(page, 45, 732, "FIRMA", boldFont);
+  drawSignatureLine(page, 357, 732, "ACLARACION DE FIRMA", boldFont);
+}
+
+function buildSwornDeclarationRelatives(record: any) {
+  const payload = readSwornDeclarationPayloadRecord(record);
+  const rows = Array.isArray(payload.consanguinidadAfinidad)
+    ? payload.consanguinidadAfinidad
+    : [];
+
+  return rows.map((item: any) => {
+    const row = readPayloadRecord(item);
+
+    return {
+      relationship: normalizeOptionalText(row.parentesco)?.toUpperCase() ?? "",
+      fullName: [
+        normalizeOptionalText(row.apellidoPaterno),
+        normalizeOptionalText(row.apellidoMaterno),
+        normalizeOptionalText(row.nombres),
+      ].filter(Boolean).join(" "),
+      occupation: normalizeOptionalText(row.ocupacion),
+      workplace: normalizeOptionalText(row.lugarTrabajo),
+      document: normalizeOptionalText(row.documentoIdentidad),
+      deceased: row.fallecido === true ? "SI" : null,
+    };
+  });
+}
+
+function drawRelativeRows(
+  page: any,
+  rows: any[],
+  relationships: string[],
+  topYs: number[],
+  font: any,
+) {
+  const allowed = new Set(relationships.map((value) => value.toUpperCase()));
+  const matches = rows
+    .filter((row) => allowed.has(row.relationship))
+    .slice(0, topYs.length);
+
+  for (let index = 0; index < topYs.length; index++) {
+    const row = matches[index] ?? {};
+    const topY = topYs[index];
+
+    drawCellText(page, 52, topY, row.fullName, 142, font, 5.5);
+    drawCellText(page, 201, topY, row.occupation, 140, font, 5.5);
+    drawCellText(page, 352, topY, row.workplace, 95, font, 5.5);
+    drawCellText(page, 456, topY, row.document, 35, font, 5.5);
+    drawCellText(page, 502, topY, row.deceased, 35, font, 5.5);
+  }
+}
+
+function drawCellText(
+  page: any,
+  x: number,
+  topY: number,
+  value: unknown,
+  width: number,
+  font: any,
+  size = 5.8,
+) {
+  const text = fitPdfCellText(value, width, size);
+
+  drawPdfText(page, x, topY, text, { font, size, maxWidth: width });
+}
+
+function drawPdfText(
+  page: any,
+  x: number,
+  topY: number,
+  text: string,
+  options: { font: any; size: number; maxWidth: number },
+) {
+  page.drawText(text, {
+    x,
+    y: topToPdfY(page, topY + options.size),
+    size: options.size,
+    font: options.font,
+    maxWidth: options.maxWidth,
+    lineHeight: options.size + 1,
+  });
+}
+
+function drawCenteredPdfText(
+  page: any,
+  centerX: number,
+  topY: number,
+  text: string,
+  options: { font: any; size: number; width: number },
+) {
+  const fitted = fitPdfCellText(text, options.width, options.size);
+  const textWidth = options.font.widthOfTextAtSize(fitted, options.size);
+
+  page.drawText(fitted, {
+    x: centerX - textWidth / 2,
+    y: topToPdfY(page, topY + options.size),
+    size: options.size,
+    font: options.font,
+  });
+}
+
+function drawSignatureLine(page: any, x: number, topY: number, label: string, font: any) {
+  const y = topToPdfY(page, topY);
+
+  page.drawLine({
+    start: { x, y },
+    end: { x: x + 160, y },
+    thickness: 0.6,
+  });
+  drawCenteredPdfText(page, x + 80, topY + 10, label, {
+    font,
+    size: 7,
+    width: 160,
+  });
+}
+
+function fitPdfCellText(value: unknown, width: number, size: number) {
+  const raw = normalizePdfValue(value);
+  const maxChars = Math.max(4, Math.floor(width / (size * 0.52)));
+  const text = raw.length === 0 ? "-".repeat(maxChars) : raw;
+
+  if (text.length <= maxChars) {
+    return text;
+  }
+
+  return text.slice(0, Math.max(1, maxChars - 1)).trimEnd();
+}
+
+function normalizePdfValue(value: unknown) {
+  const text = normalizeOptionalText(value);
+
+  if (text == null || text.toUpperCase() === "NO APLICA") {
+    return "";
+  }
+
+  return text;
+}
+
+function topToPdfY(page: any, topY: number) {
+  return page.getSize().height - topY;
+}
+
+function readSwornDeclarationPayloadRecord(record: any) {
+  return readPayloadRecord(record.payload);
+}
+
+function readPayloadRecord(value: unknown): Record<string, any> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, any>;
+}
+
+async function embedSwornDeclarationMapImage(pdf: any, value: unknown) {
+  const imageBase64 = normalizeOptionalText(value);
+
+  if (imageBase64 == null) {
+    return null;
+  }
+
+  try {
+    return await pdf.embedPng(Buffer.from(imageBase64, "base64"));
+  } catch (_) {
+    return null;
+  }
+}
+
+function buildSwornDeclarationCode(record: any) {
+  return `DJ-${record.id}-${record.funcionario_ci ?? ""}`.replace(/\s+/g, "");
+}
+
+function buildSwornDeclarationPdfFilename(record: any) {
+  const safeCi =
+    normalizeOptionalText(record.funcionario_ci)
+      ?.replace(/[^A-Za-z0-9_-]+/g, "_") ?? String(record.id);
+
+  return `DJ-${record.id}-${safeCi}.pdf`;
+}
+
+function formatSwornDeclarationDate(value: unknown) {
+  const date = value instanceof Date ? value : new Date(String(value));
+  const months = [
+    "ENERO",
+    "FEBRERO",
+    "MARZO",
+    "ABRIL",
+    "MAYO",
+    "JUNIO",
+    "JULIO",
+    "AGOSTO",
+    "SEPTIEMBRE",
+    "OCTUBRE",
+    "NOVIEMBRE",
+    "DICIEMBRE",
+  ];
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return `${String(date.getDate()).padStart(2, "0")} ${months[date.getMonth()]} DE ${date.getFullYear()}`;
 }
 
 function serializeLunchRecord(record: any) {

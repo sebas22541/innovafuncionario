@@ -2123,7 +2123,8 @@ Future<void> _downloadSwornDeclarationPdf(
   SwornDeclarationRecord record,
 ) async {
   try {
-    final pdfBytes = await _buildSwornDeclarationPdf(record);
+    final pdfBytes = await dependencies.swornDeclarationsApiService
+        .downloadDeclarationPdf(id: record.id);
 
     await downloadFile(
       fileName: _buildSwornDeclarationFilename(record),
@@ -2137,6 +2138,7 @@ Future<void> _downloadSwornDeclarationPdf(
   }
 }
 
+// ignore: unused_element
 Future<Uint8List> _buildSwornDeclarationPdf(
   SwornDeclarationRecord record,
 ) async {

@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../../../../shared/infrastructure/backend_api_client.dart';
 
 enum SwornDeclarationStatus {
@@ -77,6 +79,10 @@ class SwornDeclarationsApiService {
     return SwornDeclarationRecord.fromJson(
       _readMap(response['data'], 'declaracion'),
     );
+  }
+
+  Future<Uint8List> downloadDeclarationPdf({required int id}) {
+    return _apiClient.postBytes('/api/declaraciones-juradas/$id/pdf', {});
   }
 }
 
