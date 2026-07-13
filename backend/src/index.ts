@@ -18,7 +18,7 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
-import { PDFDocument, StandardFonts } from "pdf-lib";
+import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 
 import {
   generateAndStoreUserCredential,
@@ -12313,17 +12313,22 @@ function drawSwornDeclarationHeader(
   const dateText = formatSwornDeclarationDate(record.created_at);
   const code = buildSwornDeclarationCode(record);
 
-  drawPdfText(page, 114, 133, dateText, { font, size: 6.4, maxWidth: 126 });
-  drawPdfText(page, 326, 133, code, { font, size: 6.4, maxWidth: 122 });
-  drawPdfText(page, 500, 133, `Pagina ${pageNumber} de ${totalPages}`, {
+  erasePdfArea(page, 108, 126, 132, 14);
+  erasePdfArea(page, 316, 126, 132, 14);
+  erasePdfArea(page, 496, 126, 88, 14);
+  erasePdfArea(page, 124, 788, 132, 12);
+  erasePdfArea(page, 452, 788, 88, 12);
+  drawPdfText(page, 122, 126, dateText, { font, size: 7.4, maxWidth: 126 });
+  drawPdfText(page, 334, 126, code, { font, size: 7.4, maxWidth: 122 });
+  drawPdfText(page, 508, 126, `Pagina ${pageNumber} de ${totalPages}`, {
     font,
-    size: 6.4,
+    size: 7.4,
     maxWidth: 72,
   });
-  drawPdfText(page, 130, 795, dateText, { font, size: 5.5, maxWidth: 120 });
-  drawPdfText(page, 457, 795, `Pagina ${pageNumber} de ${totalPages}`, {
+  drawPdfText(page, 138, 789, dateText, { font, size: 6.4, maxWidth: 120 });
+  drawPdfText(page, 465, 789, `Pagina ${pageNumber} de ${totalPages}`, {
     font,
-    size: 5.5,
+    size: 6.4,
     maxWidth: 72,
   });
 }
@@ -12534,11 +12539,16 @@ function drawCellText(
   value: unknown,
   width: number,
   font: any,
-  size = 5.8,
+  size = 6.8,
 ) {
-  const text = fitPdfCellText(value, width, size);
+  const effectiveSize = Math.max(size, 6.4);
+  const text = fitPdfCellText(value, width - 4, effectiveSize);
 
-  drawPdfText(page, x, topY, text, { font, size, maxWidth: width });
+  drawPdfText(page, x + 8, topY - 8, text, {
+    font,
+    size: effectiveSize,
+    maxWidth: width - 4,
+  });
 }
 
 function drawPdfText(
@@ -12569,10 +12579,21 @@ function drawCenteredPdfText(
   const textWidth = options.font.widthOfTextAtSize(fitted, options.size);
 
   page.drawText(fitted, {
-    x: centerX - textWidth / 2,
-    y: topToPdfY(page, topY + options.size),
+    x: centerX - textWidth / 2 + 4,
+    y: topToPdfY(page, topY + options.size - 7),
     size: options.size,
     font: options.font,
+  });
+}
+
+function erasePdfArea(page: any, x: number, topY: number, width: number, height: number) {
+  page.drawRectangle({
+    x,
+    y: topToPdfY(page, topY + height),
+    width,
+    height,
+    color: rgb(1, 1, 1),
+    borderWidth: 0,
   });
 }
 
