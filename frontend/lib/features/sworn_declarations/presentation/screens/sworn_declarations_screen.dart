@@ -1,10 +1,19 @@
+import 'dart:convert';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:printing/printing.dart';
 
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
+import '../../../../shared/infrastructure/file_downloader.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../infrastructure/services/sworn_declarations_api_service.dart';
@@ -131,6 +140,10 @@ class _SwornDeclarationEmployeeViewState
       return;
     }
 
+    if (_step == 4) {
+      await _captureAddressMapImage();
+    }
+
     if (_step == _stepTitles.length - 1) {
       await _save();
       return;
@@ -144,6 +157,32 @@ class _SwornDeclarationEmployeeViewState
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOutCubic,
     );
+  }
+
+  Future<void> _captureAddressMapImage() async {
+    final context = _address.mapKey.currentContext;
+
+    if (context == null) {
+      return;
+    }
+
+    final boundary = context.findRenderObject();
+
+    if (boundary is! RenderRepaintBoundary) {
+      return;
+    }
+
+    try {
+      final image = await boundary.toImage(pixelRatio: 2);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final bytes = byteData?.buffer.asUint8List();
+
+      if (bytes != null) {
+        _address.mapImageBase64 = base64Encode(bytes);
+      }
+    } catch (_) {
+      // La captura del mapa no debe impedir guardar la declaracion.
+    }
   }
 
   Future<void> _previous() async {
@@ -791,36 +830,40 @@ class _AddressStepState extends State<_AddressStep> {
           borderRadius: BorderRadius.circular(12),
           child: SizedBox(
             height: 260,
-            child: FlutterMap(
-              options: MapOptions(
-                initialCenter: selected ?? _cochabambaCenter,
-                initialZoom: 13,
-                onTap: (_, point) => setState(() {
-                  widget.draft.location = point;
-                }),
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate:
-                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.innova.funcionario.cochabamba.bo',
+            child: RepaintBoundary(
+              key: widget.draft.mapKey,
+              child: FlutterMap(
+                options: MapOptions(
+                  initialCenter: selected ?? _cochabambaCenter,
+                  initialZoom: 13,
+                  onTap: (_, point) => setState(() {
+                    widget.draft.location = point;
+                    widget.draft.mapImageBase64 = null;
+                  }),
                 ),
-                if (selected != null)
-                  MarkerLayer(
-                    markers: [
-                      Marker(
-                        point: selected,
-                        width: 44,
-                        height: 44,
-                        child: const Icon(
-                          Icons.location_on_rounded,
-                          color: Colors.red,
-                          size: 42,
-                        ),
-                      ),
-                    ],
+                children: [
+                  TileLayer(
+                    urlTemplate:
+                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.innova.funcionario.cochabamba.bo',
                   ),
-              ],
+                  if (selected != null)
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: selected,
+                          width: 44,
+                          height: 44,
+                          child: const Icon(
+                            Icons.location_on_rounded,
+                            color: Colors.red,
+                            size: 42,
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -1151,10 +1194,15 @@ class _DeclarationTableRow extends StatelessWidget {
 }
 
 class _DeclarationListTile extends StatelessWidget {
-  const _DeclarationListTile({required this.record, required this.onTap});
+  const _DeclarationListTile({
+    required this.record,
+    required this.onTap,
+    this.onPdf,
+  });
 
   final SwornDeclarationRecord record;
   final VoidCallback onTap;
+  final VoidCallback? onPdf;
 
   @override
   Widget build(BuildContext context) {
@@ -1181,6 +1229,14 @@ class _DeclarationListTile extends StatelessWidget {
                     ),
                   ),
                   _DeclarationStatusBadge(record.status),
+                  if (onPdf != null) ...[
+                    const SizedBox(width: 8),
+                    IconButton(
+                      onPressed: onPdf,
+                      icon: const Icon(Icons.picture_as_pdf_outlined),
+                      tooltip: 'Descargar PDF',
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 6),
@@ -1245,6 +1301,10 @@ class _EmployeeHistoryCard extends StatelessWidget {
                   for (final record in records) ...[
                     _DeclarationListTile(
                       record: record,
+                      onPdf: () => _downloadSwornDeclarationPdf(
+                        context,
+                        record,
+                      ),
                       onTap: () => showDialog<void>(
                         context: context,
                         builder: (context) => _SwornDeclarationDetailDialog(
@@ -1349,6 +1409,11 @@ class _SwornDeclarationDetailDialog extends StatelessWidget {
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cerrar'),
+        ),
+        OutlinedButton.icon(
+          onPressed: () => _downloadSwornDeclarationPdf(context, record),
+          icon: const Icon(Icons.picture_as_pdf_outlined),
+          label: const Text('PDF'),
         ),
         if (onReject != null)
           OutlinedButton.icon(
@@ -1972,6 +2037,8 @@ class _IncompatibilitiesDraft {
 class _AddressDraft {
   String houseType = 'OTRO';
   LatLng? location;
+  String? mapImageBase64;
+  final mapKey = GlobalKey();
   final street = TextEditingController();
   final zone = TextEditingController();
   final houseNumber = TextEditingController();
@@ -1985,6 +2052,7 @@ class _AddressDraft {
   void reset() {
     houseType = 'OTRO';
     location = null;
+    mapImageBase64 = null;
     street.clear();
     zone.clear();
     houseNumber.clear();
@@ -2010,6 +2078,7 @@ class _AddressDraft {
       'telefonoReferencia': referencePhone.text.trim(),
       'latitud': location?.latitude,
       'longitud': location?.longitude,
+      'mapaImagenPngBase64': mapImageBase64 ?? '',
     };
   }
 
@@ -2047,6 +2116,299 @@ class _CityHallRelativeDraft {
     jobTitle.dispose();
     unit.dispose();
   }
+}
+
+Future<void> _downloadSwornDeclarationPdf(
+  BuildContext context,
+  SwornDeclarationRecord record,
+) async {
+  try {
+    final pdfBytes = await _buildSwornDeclarationPdf(record);
+
+    await downloadFile(
+      fileName: _buildSwornDeclarationFilename(record),
+      bytes: pdfBytes,
+      mimeType: 'application/pdf',
+    );
+  } catch (_) {
+    if (context.mounted) {
+      AppAlert.showError(context, 'No fue posible generar el PDF.');
+    }
+  }
+}
+
+Future<Uint8List> _buildSwornDeclarationPdf(
+  SwornDeclarationRecord record,
+) async {
+  final document = pw.Document();
+  final templateBytes = (await rootBundle.load(
+    'assets/templates/declaracion_jurada.pdf',
+  )).buffer.asUint8List();
+  final templatePages = <_TemplatePageImage>[];
+
+  await for (final page in Printing.raster(templateBytes, dpi: 144)) {
+    templatePages.add(
+      _TemplatePageImage(
+        image: pw.MemoryImage(await page.toPng()),
+        format: PdfPageFormat(
+          page.width * PdfPageFormat.inch / 144,
+          page.height * PdfPageFormat.inch / 144,
+        ),
+      ),
+    );
+  }
+
+  final pages = templatePages.isEmpty
+      ? [
+          _TemplatePageImage(
+            image: null,
+            format: PdfPageFormat.a4,
+          ),
+        ]
+      : templatePages;
+  final dataWidgets = _buildSwornDeclarationPdfBlocks(record);
+  final chunks = <List<pw.Widget>>[];
+
+  for (var index = 0; index < dataWidgets.length; index += 8) {
+    chunks.add(
+      dataWidgets.sublist(
+        index,
+        (index + 8).clamp(0, dataWidgets.length),
+      ),
+    );
+  }
+
+  final pageCount = pages.length > chunks.length ? pages.length : chunks.length;
+
+  for (var index = 0; index < pageCount; index++) {
+    final template = pages[index < pages.length ? index : pages.length - 1];
+    final chunk = index < chunks.length ? chunks[index] : <pw.Widget>[];
+
+    document.addPage(
+      pw.Page(
+        pageFormat: template.format,
+        margin: pw.EdgeInsets.zero,
+        build: (context) => pw.Stack(
+          children: [
+            if (template.image != null)
+              pw.Positioned.fill(
+                child: pw.Image(template.image!, fit: pw.BoxFit.fill),
+              ),
+            pw.Positioned(
+              left: 36,
+              top: 36,
+              right: 36,
+              bottom: 36,
+              child: pw.Container(
+                padding: const pw.EdgeInsets.all(14),
+                decoration: pw.BoxDecoration(
+                  color: PdfColors.white,
+                  border: pw.Border.all(color: PdfColors.grey500, width: 0.5),
+                ),
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    if (index == 0) ...[
+                      pw.Text(
+                        'Declaracion Jurada - Datos registrados',
+                        style: pw.TextStyle(
+                          fontSize: 15,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                      ),
+                      pw.SizedBox(height: 8),
+                      _pdfKeyValue('Funcionario', record.employeeFullName),
+                      _pdfKeyValue('CI', record.employeeCi),
+                      _pdfKeyValue('Item', record.employeeItemNumber),
+                      _pdfKeyValue('Cargo', record.employeeJobTitle),
+                      _pdfKeyValue('Oficina', record.employeeOffice),
+                      _pdfKeyValue('Gestion', '${record.managementYear}'),
+                      _pdfKeyValue('Estado', record.status.label),
+                      pw.Divider(height: 14),
+                    ],
+                    ...chunk,
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  return document.save();
+}
+
+List<pw.Widget> _buildSwornDeclarationPdfBlocks(
+  SwornDeclarationRecord record,
+) {
+  final payload = record.payload;
+  final address = _payloadMap(payload['datosDomiciliarios']);
+  final mapImage = _readBase64Png(address['mapaImagenPngBase64']);
+
+  return [
+    _pdfSection(
+      'Consanguinidad y afinidad',
+      _formatPayloadForPdf(payload['consanguinidadAfinidad']),
+    ),
+    _pdfSection(
+      'Doble percepcion',
+      _formatPayloadForPdf(payload['doblePercepcion']),
+    ),
+    _pdfSection(
+      'Sentencias y procesos',
+      _formatPayloadForPdf(payload['sentenciasProcesos']),
+    ),
+    _pdfSection(
+      'Otras incompatibilidades',
+      _formatPayloadForPdf(payload['otrasIncompatibilidades']),
+    ),
+    _pdfSection(
+      'Datos domiciliarios',
+      _formatPayloadForPdf({
+        ...address,
+        'mapaImagenPngBase64': mapImage == null
+            ? 'No se capturo imagen del mapa'
+            : 'Imagen adjunta abajo',
+      }),
+    ),
+    if (mapImage != null)
+      pw.Container(
+        width: double.infinity,
+        margin: const pw.EdgeInsets.only(bottom: 10),
+        padding: const pw.EdgeInsets.all(8),
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(color: PdfColors.grey400, width: 0.5),
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(
+              'Mapa del domicilio',
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+            ),
+            pw.SizedBox(height: 6),
+            pw.Image(pw.MemoryImage(mapImage), height: 150, fit: pw.BoxFit.cover),
+          ],
+        ),
+      ),
+    _pdfSection(
+      'Familiares trabajando en la alcaldia',
+      _formatPayloadForPdf(payload['familiaresAlcaldia']),
+    ),
+  ];
+}
+
+pw.Widget _pdfSection(String title, String body) {
+  return pw.Container(
+    width: double.infinity,
+    margin: const pw.EdgeInsets.only(bottom: 10),
+    padding: const pw.EdgeInsets.all(8),
+    decoration: pw.BoxDecoration(
+      border: pw.Border.all(color: PdfColors.grey400, width: 0.5),
+    ),
+    child: pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(
+          title,
+          style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+        ),
+        pw.SizedBox(height: 4),
+        pw.Text(body, style: const pw.TextStyle(fontSize: 8), maxLines: 18),
+      ],
+    ),
+  );
+}
+
+pw.Widget _pdfKeyValue(String label, String value) {
+  return pw.Padding(
+    padding: const pw.EdgeInsets.only(bottom: 2),
+    child: pw.Row(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.SizedBox(
+          width: 74,
+          child: pw.Text(
+            label,
+            style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
+          ),
+        ),
+        pw.Expanded(
+          child: pw.Text(
+            value.trim().isEmpty ? 'Sin dato' : value.trim(),
+            style: const pw.TextStyle(fontSize: 8),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+String _formatPayloadForPdf(Object? value, [int indent = 0]) {
+  final prefix = '  ' * indent;
+
+  if (value is Map) {
+    return value.entries
+        .map(
+          (entry) =>
+              '$prefix${_humanizeKey(entry.key.toString())}: ${_formatPayloadForPdf(entry.value, indent + 1).trim()}',
+        )
+        .join('\n');
+  }
+
+  if (value is List) {
+    if (value.isEmpty) {
+      return 'Sin registros';
+    }
+
+    return [
+      for (var index = 0; index < value.length; index++)
+        '$prefix${index + 1}. ${_formatPayloadForPdf(value[index], indent + 1).trim()}',
+    ].join('\n');
+  }
+
+  return _formatPayloadLeaf(value);
+}
+
+Map<String, dynamic> _payloadMap(Object? value) {
+  if (value is Map<String, dynamic>) {
+    return value;
+  }
+
+  if (value is Map) {
+    return value.map((key, value) => MapEntry(key.toString(), value));
+  }
+
+  return const {};
+}
+
+Uint8List? _readBase64Png(Object? value) {
+  if (value is! String || value.trim().isEmpty) {
+    return null;
+  }
+
+  try {
+    return base64Decode(value);
+  } catch (_) {
+    return null;
+  }
+}
+
+String _buildSwornDeclarationFilename(SwornDeclarationRecord record) {
+  final safeCi = record.employeeCi.trim().isEmpty
+      ? record.id.toString()
+      : record.employeeCi.trim().replaceAll(RegExp(r'[^A-Za-z0-9_-]+'), '_');
+
+  return 'DJ-${record.id}-$safeCi.pdf';
+}
+
+class _TemplatePageImage {
+  const _TemplatePageImage({required this.image, required this.format});
+
+  final pw.ImageProvider? image;
+  final PdfPageFormat format;
 }
 
 String _formatDateTime(DateTime date) {
