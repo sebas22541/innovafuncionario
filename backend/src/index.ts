@@ -1146,6 +1146,68 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    const swornDeclarationUpdateMatch =
+      /^\/api\/declaraciones-juradas\/(\d+)$/.exec(url.pathname);
+
+    if (request.method === "PUT" && swornDeclarationUpdateMatch != null) {
+      const user = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+      });
+
+      if (!user || user.activo !== true) {
+        throw new HttpError(401, "Sesion invalida o expirada.");
+      }
+
+      if (user.rol !== rol_usuario.OPERADOR) {
+        throw new HttpError(
+          403,
+          "Solo un funcionario puede corregir declaraciones juradas.",
+        );
+      }
+
+      const declarationId = Number.parseInt(
+        swornDeclarationUpdateMatch[1] ?? "",
+        10,
+      );
+      const input = parseCreateSwornDeclarationInput(await readJsonBody(request));
+      const result = await pool.query(
+        `
+          UPDATE "declaraciones_juradas"
+          SET
+            "gestion" = $3,
+            "estado" = 'PENDIENTE',
+            "payload" = $4::jsonb,
+            "observacion_revision" = NULL,
+            "revisado_por_id" = NULL,
+            "revisado_por_nombre" = NULL,
+            "revisado_en" = NULL,
+            "updated_at" = CURRENT_TIMESTAMP
+          WHERE "id" = $1
+            AND "usuario_id" = $2
+            AND "estado" = 'RECHAZADO'
+          RETURNING *
+        `,
+        [
+          declarationId,
+          authenticatedUser.id,
+          input.gestion,
+          JSON.stringify(input.payload),
+        ],
+      );
+
+      if (result.rowCount === 0) {
+        throw new HttpError(
+          409,
+          "Solo puedes corregir declaraciones rechazadas propias.",
+        );
+      }
+
+      sendJson(response, 200, {
+        data: serializeSwornDeclaration(result.rows[0]),
+      });
+      return;
+    }
+
     const swornDeclarationPdfMatch =
       /^\/api\/declaraciones-juradas\/(\d+)\/pdf$/.exec(url.pathname);
 

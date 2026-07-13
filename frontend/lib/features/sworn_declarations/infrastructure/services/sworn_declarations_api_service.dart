@@ -63,6 +63,21 @@ class SwornDeclarationsApiService {
     );
   }
 
+  Future<SwornDeclarationRecord> updateDeclaration({
+    required int id,
+    required int managementYear,
+    required Map<String, dynamic> payload,
+  }) async {
+    final response = await _apiClient.putJson('/api/declaraciones-juradas/$id', {
+      'gestion': managementYear,
+      'payload': payload,
+    });
+
+    return SwornDeclarationRecord.fromJson(
+      _readMap(response['data'], 'declaracion'),
+    );
+  }
+
   Future<SwornDeclarationRecord> reviewDeclaration({
     required int id,
     required SwornDeclarationStatus status,

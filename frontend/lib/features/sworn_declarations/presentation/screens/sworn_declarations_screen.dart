@@ -69,6 +69,7 @@ class _SwornDeclarationEmployeeViewState
   bool _hasCityHallRelatives = false;
   bool _isLoadingRecords = true;
   bool _isSaving = false;
+  int? _editingRecordId;
   int _step = 0;
 
   static const _stepTitles = [
@@ -218,10 +219,21 @@ class _SwornDeclarationEmployeeViewState
     });
 
     try {
-      await dependencies.swornDeclarationsApiService.createDeclaration(
-        managementYear: DateTime.now().year,
-        payload: _buildPayload(),
-      );
+      final payload = _buildPayload();
+      final editingRecordId = _editingRecordId;
+
+      if (editingRecordId == null) {
+        await dependencies.swornDeclarationsApiService.createDeclaration(
+          managementYear: DateTime.now().year,
+          payload: payload,
+        );
+      } else {
+        await dependencies.swornDeclarationsApiService.updateDeclaration(
+          id: editingRecordId,
+          managementYear: DateTime.now().year,
+          payload: payload,
+        );
+      }
 
       if (!mounted) {
         return;
@@ -229,8 +241,12 @@ class _SwornDeclarationEmployeeViewState
 
       AppAlert.showSuccess(
         context,
-        'La declaracion jurada fue enviada para revision.',
-        title: 'Declaracion enviada',
+        editingRecordId == null
+            ? 'La declaracion jurada fue enviada para revision.'
+            : 'La declaracion jurada fue corregida y enviada nuevamente.',
+        title: editingRecordId == null
+            ? 'Declaracion enviada'
+            : 'Declaracion reenviada',
       );
       _resetDraft();
       await _loadRecords();
@@ -285,9 +301,65 @@ class _SwornDeclarationEmployeeViewState
       _incompatibilities.reset();
       _address.reset();
       _hasCityHallRelatives = false;
+      _editingRecordId = null;
       _step = 0;
     });
     _pageController.jumpToPage(0);
+  }
+
+  void _editRejectedRecord(SwornDeclarationRecord record) {
+    if (record.status != SwornDeclarationStatus.rejected) {
+      return;
+    }
+
+    final payload = record.payload;
+    final relatives = _readPayloadList(payload['consanguinidadAfinidad']);
+    final cityHall = _readPayloadMap(payload['familiaresAlcaldia']);
+    final cityHallRelatives = _readPayloadList(cityHall['familiares']);
+
+    setState(() {
+      for (final relative in _relatives) {
+        relative.dispose();
+      }
+      for (final relative in _cityHallRelatives) {
+        relative.dispose();
+      }
+      _relatives
+        ..clear()
+        ..addAll(
+          relatives.isEmpty
+              ? [_RelativeDraft()]
+              : relatives.map((item) => _RelativeDraft.fromJson(item)),
+        );
+      _doublePerception.loadFromJson(
+        _readPayloadMap(payload['doblePercepcion']),
+      );
+      _sentences.loadFromJson(_readPayloadMap(payload['sentenciasProcesos']));
+      _incompatibilities.loadFromJson(
+        _readPayloadMap(payload['otrasIncompatibilidades']),
+      );
+      _address.loadFromJson(_readPayloadMap(payload['datosDomiciliarios']));
+      _hasCityHallRelatives = cityHall['tieneFamiliares'] == true;
+      _cityHallRelatives
+        ..clear()
+        ..addAll(
+          _hasCityHallRelatives
+              ? (cityHallRelatives.isEmpty
+                    ? [_CityHallRelativeDraft()]
+                    : cityHallRelatives.map(
+                        (item) => _CityHallRelativeDraft.fromJson(item),
+                      ))
+              : <_CityHallRelativeDraft>[],
+        );
+      _editingRecordId = record.id;
+      _step = 0;
+    });
+    _pageController.jumpToPage(0);
+    AppAlert.showWarning(
+      context,
+      'Edita la declaracion rechazada y vuelve a finalizar para enviarla.',
+      title: 'Edicion habilitada',
+    );
   }
 
   void _showMessage(String message, {bool isError = false}) {
@@ -379,7 +451,9 @@ class _SwornDeclarationEmployeeViewState
                                 ),
                           label: Text(
                             _step == _stepTitles.length - 1
-                                ? 'Finalizar'
+                                ? (_editingRecordId == null
+                                      ? 'Finalizar'
+                                      : 'Reenviar')
                                 : 'Siguiente',
                           ),
                         ),
@@ -394,6 +468,7 @@ class _SwornDeclarationEmployeeViewState
               records: _records,
               isLoading: _isLoadingRecords,
               onRefresh: _loadRecords,
+              onEditRejected: _editRejectedRecord,
             ),
           ],
         ),
@@ -1198,11 +1273,13 @@ class _DeclarationListTile extends StatelessWidget {
     required this.record,
     required this.onTap,
     this.onPdf,
+    this.onEdit,
   });
 
   final SwornDeclarationRecord record;
   final VoidCallback onTap;
   final VoidCallback? onPdf;
+  final VoidCallback? onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -1237,6 +1314,14 @@ class _DeclarationListTile extends StatelessWidget {
                       tooltip: 'Descargar PDF',
                     ),
                   ],
+                  if (onEdit != null) ...[
+                    const SizedBox(width: 4),
+                    IconButton(
+                      onPressed: onEdit,
+                      icon: const Icon(Icons.edit_outlined),
+                      tooltip: 'Editar y reenviar',
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 6),
@@ -1255,11 +1340,13 @@ class _EmployeeHistoryCard extends StatelessWidget {
     required this.records,
     required this.isLoading,
     required this.onRefresh,
+    required this.onEditRejected,
   });
 
   final List<SwornDeclarationRecord> records;
   final bool isLoading;
   final VoidCallback onRefresh;
+  final ValueChanged<SwornDeclarationRecord> onEditRejected;
 
   @override
   Widget build(BuildContext context) {
@@ -1305,6 +1392,9 @@ class _EmployeeHistoryCard extends StatelessWidget {
                         context,
                         record,
                       ),
+                      onEdit: record.status == SwornDeclarationStatus.rejected
+                          ? () => onEditRejected(record)
+                          : null,
                       onTap: () => showDialog<void>(
                         context: context,
                         builder: (context) => _SwornDeclarationDetailDialog(
@@ -1675,6 +1765,7 @@ class _DropdownTextInput extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: DropdownButtonFormField<String>(
+        key: ValueKey('$label-$value'),
         initialValue: values.contains(value) ? value : values.first,
         decoration: InputDecoration(labelText: label),
         items: [
@@ -1864,6 +1955,8 @@ class _SummaryRow extends StatelessWidget {
 }
 
 class _RelativeDraft {
+  _RelativeDraft();
+
   String relationship = 'ESPOSO(A)';
   bool deceased = false;
   final names = TextEditingController();
@@ -1872,6 +1965,22 @@ class _RelativeDraft {
   final identityDocument = TextEditingController();
   final occupation = TextEditingController();
   final workplace = TextEditingController();
+
+  factory _RelativeDraft.fromJson(Map<String, dynamic> source) {
+    final draft = _RelativeDraft()
+      ..relationship = _readPayloadString(source['parentesco'], 'OTRO')
+      ..deceased = source['fallecido'] == true;
+    draft.names.text = _readPayloadString(source['nombres']);
+    draft.firstLastName.text = _readPayloadString(source['apellidoPaterno']);
+    draft.secondLastName.text = _readPayloadString(source['apellidoMaterno']);
+    draft.identityDocument.text = _readPayloadString(
+      source['documentoIdentidad'],
+    );
+    draft.occupation.text = _readPayloadString(source['ocupacion']);
+    draft.workplace.text = _readPayloadString(source['lugarTrabajo']);
+
+    return draft;
+  }
 
   Map<String, dynamic> toJson() {
     return {
@@ -1915,6 +2024,18 @@ class _DoublePerceptionDraft {
   void reset() {
     perceives = false;
     clearOptionalValues();
+  }
+
+  void loadFromJson(Map<String, dynamic> source) {
+    perceives = source['percibeDoblePercepcion'] == true;
+    institution.text = _readPayloadString(source['institucion']);
+    function.text = _readPayloadString(source['funcion'], 'NINGUNA');
+    amount.text = _readPayloadString(source['montoPercibe']);
+    currentSalary.text = _readPayloadString(
+      source['remuneracionCargoActual'],
+      '0',
+    );
+    totalSalary.text = _readPayloadString(source['montoTotalRemuneracion'], '0');
   }
 
   Map<String, dynamic> toJson() {
@@ -1972,6 +2093,24 @@ class _SentencesDraft {
     applyDefaults();
   }
 
+  void loadFromJson(Map<String, dynamic> source) {
+    hasSentences = source['tieneSentencias'] == true;
+    hasProcesses = source['tieneProcesos'] == true;
+    wasDismissed = source['fueDestituido'] == true;
+    sentencesDetail.text = _readPayloadString(
+      source['detalleSentencias'],
+      'NO APLICA',
+    );
+    processesDetail.text = _readPayloadString(
+      source['detalleProcesos'],
+      'NO APLICA',
+    );
+    dismissalDetail.text = _readPayloadString(
+      source['detalleDestitucion'],
+      'NO APLICA',
+    );
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'tieneSentencias': hasSentences,
@@ -2016,6 +2155,14 @@ class _IncompatibilitiesDraft {
     marriageCommitment = true;
     representsCompanies = false;
     applyDefaults();
+  }
+
+  void loadFromJson(Map<String, dynamic> source) {
+    receivesPension = source['recibeRenta'] == true;
+    marriageCommitment = source['compromisoMatrimonio'] != false;
+    representsCompanies = source['representaEmpresas'] == true;
+    pensionDetail.text = _readPayloadString(source['detalleRenta'], 'NO APLICA');
+    companyName.text = _readPayloadString(source['nombreEmpresa'], 'NO APLICA');
   }
 
   Map<String, dynamic> toJson() {
@@ -2064,6 +2211,25 @@ class _AddressDraft {
     referencePhone.clear();
   }
 
+  void loadFromJson(Map<String, dynamic> source) {
+    houseType = _readPayloadString(source['tipoVivienda'], 'OTRO');
+    final latitude = _readPayloadDouble(source['latitud']);
+    final longitude = _readPayloadDouble(source['longitud']);
+    location = latitude == null || longitude == null
+        ? null
+        : LatLng(latitude, longitude);
+    mapImageBase64 = _readPayloadString(source['mapaImagenPngBase64']);
+    street.text = _readPayloadString(source['calleAvenida']);
+    zone.text = _readPayloadString(source['barrioZona']);
+    houseNumber.text = _readPayloadString(source['numeroDomicilio']);
+    building.text = _readPayloadString(source['edificio']);
+    floor.text = _readPayloadString(source['piso']);
+    department.text = _readPayloadString(source['departamento']);
+    references.text = _readPayloadString(source['referencias']);
+    cellPhone.text = _readPayloadString(source['telefonoCelular']);
+    referencePhone.text = _readPayloadString(source['telefonoReferencia']);
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'calleAvenida': street.text.trim(),
@@ -2096,10 +2262,22 @@ class _AddressDraft {
 }
 
 class _CityHallRelativeDraft {
+  _CityHallRelativeDraft();
+
   final relationship = TextEditingController();
   final fullName = TextEditingController();
   final jobTitle = TextEditingController();
   final unit = TextEditingController();
+
+  factory _CityHallRelativeDraft.fromJson(Map<String, dynamic> source) {
+    final draft = _CityHallRelativeDraft();
+    draft.relationship.text = _readPayloadString(source['parentesco']);
+    draft.fullName.text = _readPayloadString(source['nombreCompleto']);
+    draft.jobTitle.text = _readPayloadString(source['cargo']);
+    draft.unit.text = _readPayloadString(source['unidad']);
+
+    return draft;
+  }
 
   Map<String, dynamic> toJson() {
     return {
@@ -2136,6 +2314,47 @@ Future<void> _downloadSwornDeclarationPdf(
       AppAlert.showError(context, 'No fue posible generar el PDF.');
     }
   }
+}
+
+Map<String, dynamic> _readPayloadMap(Object? value) {
+  if (value is Map<String, dynamic>) {
+    return value;
+  }
+
+  if (value is Map) {
+    return value.map((key, value) => MapEntry(key.toString(), value));
+  }
+
+  return const {};
+}
+
+List<Map<String, dynamic>> _readPayloadList(Object? value) {
+  if (value is! List) {
+    return const [];
+  }
+
+  return value.map(_readPayloadMap).toList(growable: false);
+}
+
+String _readPayloadString(Object? value, [String fallback = '']) {
+  if (value == null) {
+    return fallback;
+  }
+
+  final text = value.toString().trim();
+  return text.isEmpty ? fallback : text;
+}
+
+double? _readPayloadDouble(Object? value) {
+  if (value is num) {
+    return value.toDouble();
+  }
+
+  if (value is String) {
+    return double.tryParse(value);
+  }
+
+  return null;
 }
 
 // ignore: unused_element
