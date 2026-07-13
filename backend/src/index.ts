@@ -12313,9 +12313,8 @@ function drawSwornDeclarationHeader(
   const dateText = formatSwornDeclarationDate(record.created_at);
   const code = buildSwornDeclarationCode(record);
 
-  drawPdfText(page, 122, 126, dateText, { font, size: 8, maxWidth: 126 });
+  drawPdfText(page, 148, 126, dateText, { font, size: 8, maxWidth: 126 });
   drawPdfText(page, 334, 126, code, { font, size: 8, maxWidth: 122 });
-  drawPdfText(page, 138, 789, dateText, { font, size: 7, maxWidth: 120 });
 }
 
 function drawSwornDeclarationPageOne(page: any, record: any, font: any) {
@@ -12526,10 +12525,10 @@ function drawCellText(
   font: any,
   size = 8,
 ) {
-  const effectiveSize = Math.max(size, 7.2);
+  const effectiveSize = Math.max(size, 7.8);
   const text = fitPdfCellText(value, width - 10, effectiveSize);
 
-  drawPdfText(page, x + 10, topY - 12, text, {
+  drawPdfText(page, x + 7, topY - 5, text, {
     font,
     size: effectiveSize,
     maxWidth: width - 10,
@@ -12564,8 +12563,8 @@ function drawCenteredPdfText(
   const textWidth = options.font.widthOfTextAtSize(fitted, options.size);
 
   page.drawText(fitted, {
-    x: centerX - textWidth / 2 + 4,
-    y: topToPdfY(page, topY + options.size - 10),
+    x: centerX - textWidth / 2,
+    y: topToPdfY(page, topY + options.size - 6),
     size: options.size,
     font: options.font,
   });
