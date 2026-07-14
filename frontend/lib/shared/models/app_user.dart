@@ -315,7 +315,7 @@ class AppUser {
 
   bool get canManageUsers => isAdmin || isScopedUserAdmin;
 
-  bool get canEditUsers => role == AppUserRole.admin;
+  bool get canEditUsers => canManageUsers;
 
   bool get canViewUsers => canManageUsers || role == AppUserRole.userReader;
 
