@@ -745,7 +745,7 @@ class _SelectionSheetState<T, V> extends State<_SelectionSheet<T, V>> {
   }
 }
 
-const _tipoOptions = ['ITEM', 'EVENTUAL', 'CONSULTOR'];
+const _tipoOptions = ['ITEM', 'EVENTUAL', 'CONSULTOR', 'SERVICIOS'];
 
 String _tipoLabel(String value) {
   switch (value) {
@@ -755,6 +755,8 @@ String _tipoLabel(String value) {
       return 'Eventual';
     case 'CONSULTOR':
       return 'Consultor';
+    case 'SERVICIOS':
+      return 'Servicios';
     default:
       return value;
   }

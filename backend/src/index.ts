@@ -157,7 +157,10 @@ const prisma = new PrismaClient({ adapter });
 const requestIdHeader = "X-Request-Id";
 const HEALTH_OFFICE_LEVEL = 11;
 const CONSULTANT_LINK_TYPE = "CONSULTOR";
+const SERVICES_LINK_TYPE = "SERVICIOS";
 const TEMPORARY_LINK_TYPE = "EVENTUAL";
+const CONTRACT_LINK_TYPES = new Set([CONSULTANT_LINK_TYPE, SERVICES_LINK_TYPE]);
+const USER_LINK_TYPES = ["ITEM", TEMPORARY_LINK_TYPE, CONSULTANT_LINK_TYPE, SERVICES_LINK_TYPE] as const;
 const DEVICE_ONLINE_THRESHOLD_MS = clampInt(
   process.env.DEVICE_ONLINE_THRESHOLD_MS ?? null,
   30_000,
@@ -1705,6 +1708,9 @@ const server = http.createServer(async (request, response) => {
           ci: input.ci,
           celular: input.celular,
           tipo_vinculo: input.tipoVinculo,
+          contrato_numero: input.contratoNumero,
+          contrato_inicio: input.contratoInicio,
+          contrato_fin: input.contratoFin,
           unidad: resolvedUnit,
           oficina_id: resolvedOfficeId,
           oficina_comision_id: resolvedCommissionOfficeId,
@@ -5771,9 +5777,7 @@ function parseSendNotificationInput(payload: unknown): SendNotificationInput {
   const oficinaIds = readOptionalIntList(body, "oficinaIds");
   const cis = readOptionalStringList(body, "cis", "CI").map(normalizeCiLookupValue);
   const tiposVinculo = readOptionalUppercaseChoiceList(body, "tiposVinculo", [
-    "ITEM",
-    "EVENTUAL",
-    "CONSULTOR",
+    ...USER_LINK_TYPES,
   ]);
   const hasFilters =
     cargoCodigos.length > 0 ||
@@ -5862,7 +5866,7 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
   const tipoVinculo = readRequiredUppercaseChoice(
     body,
     "tipoVinculo",
-    ["ITEM", "EVENTUAL", "CONSULTOR"],
+    [...USER_LINK_TYPES],
   );
   const oficinaId = readOptionalInt(body, "oficinaId");
   const oficinaComisionId = readOptionalInt(body, "oficinaComisionId");
@@ -5941,7 +5945,7 @@ function parseManagedUserInput(payload: unknown): ManagedUserInput {
 }
 
 function parseConsultantContractInput(body: JsonRecord, tipoVinculo: string) {
-  if (tipoVinculo !== CONSULTANT_LINK_TYPE) {
+  if (!CONTRACT_LINK_TYPES.has(tipoVinculo)) {
     return {
       contratoNumero: null,
       contratoInicio: null,
@@ -5976,7 +5980,7 @@ function resolveActiveForContract(input: {
     return false;
   }
 
-  if (input.tipoVinculo !== CONSULTANT_LINK_TYPE || input.contratoFin == null) {
+  if (!CONTRACT_LINK_TYPES.has(input.tipoVinculo) || input.contratoFin == null) {
     return input.activo;
   }
 
@@ -5991,7 +5995,7 @@ function resolveActiveForExistingContract(
     return false;
   }
 
-  if (user.tipo_vinculo !== CONSULTANT_LINK_TYPE || user.contrato_fin == null) {
+  if (!CONTRACT_LINK_TYPES.has(user.tipo_vinculo ?? "") || user.contrato_fin == null) {
     return requestedActive;
   }
 
@@ -6016,7 +6020,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
   const tipoVinculo = readRequiredUppercaseChoice(
     body,
     "tipoVinculo",
-    ["ITEM", "EVENTUAL", "CONSULTOR"],
+    [...USER_LINK_TYPES],
   );
   const oficinaId = readOptionalInt(body, "oficinaId");
   const oficinaComisionId = readOptionalInt(body, "oficinaComisionId");
@@ -6737,15 +6741,15 @@ function isUserReaderRole(role: (typeof rol_usuario)[keyof typeof rol_usuario]) 
   return role === rol_usuario.LECTOR_USUARIOS;
 }
 
-function scopedUserAdminTipoVinculoForRole(
+function scopedUserAdminTipoVinculosForRole(
   role: (typeof rol_usuario)[keyof typeof rol_usuario],
 ) {
   if (role === rol_usuario.ADMIN_CONSULTORES) {
-    return CONSULTANT_LINK_TYPE;
+    return [CONSULTANT_LINK_TYPE, SERVICES_LINK_TYPE];
   }
 
   if (role === rol_usuario.ADMIN_EVENTUALES) {
-    return TEMPORARY_LINK_TYPE;
+    return [TEMPORARY_LINK_TYPE];
   }
 
   return null;
@@ -6777,12 +6781,12 @@ function healthUserWhereForRequester(requester: any) {
 }
 
 function userDirectoryWhereForRequester(requester: any) {
-  const scopedTipoVinculo = scopedUserAdminTipoVinculoForRole(requester?.rol);
+  const scopedTipoVinculos = scopedUserAdminTipoVinculosForRole(requester?.rol);
 
-  if (scopedTipoVinculo != null) {
+  if (scopedTipoVinculos != null) {
     return {
       rol: rol_usuario.OPERADOR,
-      tipo_vinculo: scopedTipoVinculo,
+      tipo_vinculo: { in: scopedTipoVinculos },
     };
   }
 
@@ -6931,33 +6935,43 @@ function assertScopedUserAdminCanManageUserInput(
   requester: any,
   input: Pick<ManagedUserInput | UpdateManagedUserInput, "rol" | "tipoVinculo">,
 ) {
-  const scopedTipoVinculo = scopedUserAdminTipoVinculoForRole(requester?.rol);
+  const scopedTipoVinculos = scopedUserAdminTipoVinculosForRole(requester?.rol);
 
-  if (scopedTipoVinculo == null) {
+  if (scopedTipoVinculos == null) {
     return;
   }
 
-  if (input.rol !== rol_usuario.OPERADOR || input.tipoVinculo !== scopedTipoVinculo) {
+  if (
+    input.rol !== rol_usuario.OPERADOR ||
+    !scopedTipoVinculos.includes(input.tipoVinculo)
+  ) {
     throw new HttpError(
       403,
-      `Este administrador solo puede gestionar funcionarios de tipo ${scopedTipoVinculo.toLowerCase()}.`,
+      `Este administrador solo puede gestionar funcionarios de tipo ${formatScopedTipoVinculos(scopedTipoVinculos)}.`,
     );
   }
 }
 
 function assertScopedUserAdminCanManageUser(requester: any, user: any) {
-  const scopedTipoVinculo = scopedUserAdminTipoVinculoForRole(requester?.rol);
+  const scopedTipoVinculos = scopedUserAdminTipoVinculosForRole(requester?.rol);
 
-  if (scopedTipoVinculo == null) {
+  if (scopedTipoVinculos == null) {
     return;
   }
 
-  if (user?.rol !== rol_usuario.OPERADOR || user?.tipo_vinculo !== scopedTipoVinculo) {
+  if (
+    user?.rol !== rol_usuario.OPERADOR ||
+    !scopedTipoVinculos.includes(user?.tipo_vinculo)
+  ) {
     throw new HttpError(
       403,
-      `Este administrador solo puede gestionar funcionarios de tipo ${scopedTipoVinculo.toLowerCase()}.`,
+      `Este administrador solo puede gestionar funcionarios de tipo ${formatScopedTipoVinculos(scopedTipoVinculos)}.`,
     );
   }
+}
+
+function formatScopedTipoVinculos(tiposVinculo: string[]) {
+  return tiposVinculo.map((value) => value.toLowerCase()).join(" o ");
 }
 
 function assertManagedUserRoleOffice(
@@ -11901,12 +11915,12 @@ async function deactivateExpiredConsultantContracts() {
       SET "activo" = FALSE,
           "updated_at" = CURRENT_TIMESTAMP
       WHERE "activo" = TRUE
-        AND "tipo_vinculo" = $1
+        AND "tipo_vinculo" = ANY($1::text[])
         AND "contrato_fin" IS NOT NULL
         AND "contrato_fin" <= $2::date
       RETURNING "id"
     `,
-    [CONSULTANT_LINK_TYPE, today],
+    [Array.from(CONTRACT_LINK_TYPES), today],
   );
 
   if ((result.rowCount ?? 0) > 0) {

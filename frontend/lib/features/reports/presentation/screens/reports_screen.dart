@@ -27,7 +27,7 @@ const Map<int, pw.TableColumnWidth> _personnelPdfColumnWidths = {
   7: pw.FixedColumnWidth(50),
 };
 const int _healthOfficeLevel = 11;
-const _personnelTipoOptions = ['ITEM', 'EVENTUAL', 'CONSULTOR'];
+const _personnelTipoOptions = ['ITEM', 'EVENTUAL', 'CONSULTOR', 'SERVICIOS'];
 
 enum _PersonnelExcelExportMode { normal, byItem }
 
@@ -3567,8 +3567,10 @@ int _eventRosterTypeOrder(String? tipoVinculo) {
       return 1;
     case 'CONSULTOR':
       return 2;
-    default:
+    case 'SERVICIOS':
       return 3;
+    default:
+      return 4;
   }
 }
 
@@ -3646,6 +3648,8 @@ String _tipoVinculoLabel(String value) {
       return 'Eventual';
     case 'CONSULTOR':
       return 'Consultor';
+    case 'SERVICIOS':
+      return 'Servicios';
     default:
       return value;
   }

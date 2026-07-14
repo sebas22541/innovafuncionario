@@ -1921,13 +1921,11 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   bool _changePassword = false;
   bool get _isEditing => widget.initialUser != null;
   bool get _isReadOnly => widget.readOnly;
-  bool get _isConsultant => _selectedTipoVinculo == 'CONSULTOR';
+  bool get _requiresContract =>
+      _selectedTipoVinculo == 'CONSULTOR' ||
+      _selectedTipoVinculo == 'SERVICIOS';
   bool get _isScopedUserAdmin => widget.currentUser.isScopedUserAdmin;
   String? get _fixedTipoVinculo {
-    if (widget.currentUser.isAdminConsultants) {
-      return 'CONSULTOR';
-    }
-
     if (widget.currentUser.isAdminTemporary) {
       return 'EVENTUAL';
     }
@@ -1951,6 +1949,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _selectedTipoVinculo = switch (tipoVinculo) {
       'EVENTUAL' => 'EVENTUAL',
       'CONSULTOR' => 'CONSULTOR',
+      'SERVICIOS' => 'SERVICIOS',
       _ => 'ITEM',
     };
     _selectedActivo = user.activo;
@@ -1995,12 +1994,18 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   void _applyScopedUserAdminDefaults() {
     final fixedTipoVinculo = _fixedTipoVinculo;
 
-    if (!_isScopedUserAdmin || fixedTipoVinculo == null) {
+    if (!_isScopedUserAdmin) {
       return;
     }
 
     _selectedRole = AppUserRole.external;
-    _selectedTipoVinculo = fixedTipoVinculo;
+    if (fixedTipoVinculo != null) {
+      _selectedTipoVinculo = fixedTipoVinculo;
+    } else if (widget.currentUser.isAdminConsultants &&
+        _selectedTipoVinculo != 'CONSULTOR' &&
+        _selectedTipoVinculo != 'SERVICIOS') {
+      _selectedTipoVinculo = 'CONSULTOR';
+    }
     _numeroItemController.clear();
   }
 
@@ -2277,15 +2282,12 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
       return;
     }
 
-    if (_isConsultant) {
+    if (_requiresContract) {
       final inicio = DateTime.tryParse(_contratoInicioController.text.trim());
       final fin = DateTime.tryParse(_contratoFinController.text.trim());
 
       if (inicio == null || fin == null || inicio.isAfter(fin)) {
-        AppAlert.showError(
-          context,
-          'Revisa las fechas del contrato del consultor.',
-        );
+        AppAlert.showError(context, 'Revisa las fechas del contrato.');
         return;
       }
     }
@@ -2295,13 +2297,15 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
         role: _selectedRole,
         tipoVinculo: _selectedTipoVinculo,
         activo: _selectedActivo,
-        contratoNumero: _isConsultant
+        contratoNumero: _requiresContract
             ? _contratoNumeroController.text.trim()
             : null,
-        contratoInicio: _isConsultant
+        contratoInicio: _requiresContract
             ? _contratoInicioController.text.trim()
             : null,
-        contratoFin: _isConsultant ? _contratoFinController.text.trim() : null,
+        contratoFin: _requiresContract
+            ? _contratoFinController.text.trim()
+            : null,
         ci: _ciController.text.trim(),
         celular: _celularController.text.trim(),
         nombreCompleto: _nombreCompletoController.text.trim(),
@@ -2430,7 +2434,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                                         _numeroItemController.clear();
                                       }
 
-                                      if (value != 'CONSULTOR') {
+                                      if (value != 'CONSULTOR' &&
+                                          value != 'SERVICIOS') {
                                         _contratoNumeroController.clear();
                                         _contratoInicioController.clear();
                                         _contratoFinController.clear();
@@ -2438,7 +2443,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                                     });
                                   },
                           ),
-                          if (_isConsultant) ...[
+                          if (_requiresContract) ...[
                             const SizedBox(height: 14),
                             _FormField(
                               controller: _contratoNumeroController,
@@ -3637,6 +3642,7 @@ List<DropdownMenuItem<String>> _tipoVinculoDropdownItemsForUser(AppUser user) {
   if (user.isAdminConsultants) {
     return const [
       DropdownMenuItem(value: 'CONSULTOR', child: Text('Consultor')),
+      DropdownMenuItem(value: 'SERVICIOS', child: Text('Servicios')),
     ];
   }
 
@@ -3648,6 +3654,7 @@ List<DropdownMenuItem<String>> _tipoVinculoDropdownItemsForUser(AppUser user) {
     DropdownMenuItem(value: 'ITEM', child: Text('Item')),
     DropdownMenuItem(value: 'EVENTUAL', child: Text('Eventual')),
     DropdownMenuItem(value: 'CONSULTOR', child: Text('Consultor')),
+    DropdownMenuItem(value: 'SERVICIOS', child: Text('Servicios')),
   ];
 }
 
@@ -3862,6 +3869,8 @@ String _tipoVinculoLabel(String value) {
       return 'Eventual';
     case 'CONSULTOR':
       return 'Consultor';
+    case 'SERVICIOS':
+      return 'Servicios';
     default:
       return value.trim().isEmpty ? '-' : value;
   }
