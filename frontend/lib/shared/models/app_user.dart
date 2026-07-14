@@ -73,6 +73,7 @@ class AppUser {
     this.contratoNumero = '',
     this.contratoInicio,
     this.contratoFin,
+    this.contratoAdenda,
     required this.unidad,
     required this.cargo,
     required this.lugar,
@@ -112,6 +113,7 @@ class AppUser {
   final String contratoNumero;
   final String? contratoInicio;
   final String? contratoFin;
+  final String? contratoAdenda;
   final String unidad;
   final String cargo;
   final String lugar;
@@ -152,6 +154,7 @@ class AppUser {
       contratoNumero: contratoNumero,
       contratoInicio: contratoInicio,
       contratoFin: contratoFin,
+      contratoAdenda: contratoAdenda,
       unidad: unidad,
       cargo: cargo,
       lugar: lugar,
@@ -197,6 +200,7 @@ class AppUser {
       contratoNumero: source['contratoNumero'] as String? ?? '',
       contratoInicio: source['contratoInicio'] as String?,
       contratoFin: source['contratoFin'] as String?,
+      contratoAdenda: source['contratoAdenda'] as String?,
       unidad: _readString(source['unidad'], 'unidad'),
       cargo: _readString(source['cargo'], 'cargo'),
       lugar: source['lugar'] as String? ?? '',
@@ -239,6 +243,7 @@ class AppUser {
       'contratoNumero': contratoNumero,
       'contratoInicio': contratoInicio,
       'contratoFin': contratoFin,
+      'contratoAdenda': contratoAdenda,
       'unidad': unidad,
       'cargo': cargo,
       'lugar': lugar,

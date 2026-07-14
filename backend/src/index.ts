@@ -541,6 +541,7 @@ const server = http.createServer(async (request, response) => {
           contrato_numero: input.contratoNumero,
           contrato_inicio: input.contratoInicio,
           contrato_fin: input.contratoFin,
+          contrato_adenda: input.contratoAdenda,
           unidad: resolvedUnit,
           oficina_id: resolvedOfficeId,
           oficina_comision_id: resolvedCommissionOfficeId,
@@ -1711,6 +1712,7 @@ const server = http.createServer(async (request, response) => {
           contrato_numero: input.contratoNumero,
           contrato_inicio: input.contratoInicio,
           contrato_fin: input.contratoFin,
+          contrato_adenda: input.contratoAdenda,
           unidad: resolvedUnit,
           oficina_id: resolvedOfficeId,
           oficina_comision_id: resolvedCommissionOfficeId,
@@ -1871,6 +1873,7 @@ const server = http.createServer(async (request, response) => {
               contrato_numero: managedInput.contratoNumero,
               contrato_inicio: managedInput.contratoInicio,
               contrato_fin: managedInput.contratoFin,
+              contrato_adenda: managedInput.contratoAdenda,
               unidad: resolvedUnit,
               oficina_id: resolvedOfficeId,
               oficina_comision_id: resolvedCommissionOfficeId,
@@ -3082,6 +3085,7 @@ type RegisterUserInput = {
   contratoNumero: string | null;
   contratoInicio: Date | null;
   contratoFin: Date | null;
+  contratoAdenda: Date | null;
   unidad: string | null;
   oficinaId: number | null;
   oficinaComisionId: number | null;
@@ -3823,7 +3827,8 @@ async function ensureRuntimeSchema() {
     ALTER TABLE "usuarios"
       ADD COLUMN IF NOT EXISTS "contrato_numero" VARCHAR(80),
       ADD COLUMN IF NOT EXISTS "contrato_inicio" DATE,
-      ADD COLUMN IF NOT EXISTS "contrato_fin" DATE
+      ADD COLUMN IF NOT EXISTS "contrato_fin" DATE,
+      ADD COLUMN IF NOT EXISTS "contrato_adenda" DATE
   `);
 
   await pool.query(`
@@ -5950,12 +5955,14 @@ function parseConsultantContractInput(body: JsonRecord, tipoVinculo: string) {
       contratoNumero: null,
       contratoInicio: null,
       contratoFin: null,
+      contratoAdenda: null,
     };
   }
 
   const contratoNumero = readRequiredString(body, "contratoNumero", 1, 80);
   const contratoInicio = readRequiredDateOnly(body, "contratoInicio");
   const contratoFin = readRequiredDateOnly(body, "contratoFin");
+  const contratoAdenda = readOptionalDateOnly(body, "contratoAdenda");
 
   if (contratoInicio.getTime() > contratoFin.getTime()) {
     throw new HttpError(
@@ -5964,42 +5971,59 @@ function parseConsultantContractInput(body: JsonRecord, tipoVinculo: string) {
     );
   }
 
+  if (contratoAdenda != null && contratoFin.getTime() > contratoAdenda.getTime()) {
+    throw new HttpError(
+      400,
+      "La fecha de adenda no puede ser menor a la fecha fin de contrato.",
+    );
+  }
+
   return {
     contratoNumero,
     contratoInicio,
     contratoFin,
+    contratoAdenda,
   };
 }
 
 function resolveActiveForContract(input: {
   tipoVinculo: string;
   contratoFin: Date | null;
+  contratoAdenda: Date | null;
   activo: boolean;
 }) {
   if (!input.activo) {
     return false;
   }
 
-  if (!CONTRACT_LINK_TYPES.has(input.tipoVinculo) || input.contratoFin == null) {
+  const contractEnd = input.contratoAdenda ?? input.contratoFin;
+
+  if (!CONTRACT_LINK_TYPES.has(input.tipoVinculo) || contractEnd == null) {
     return input.activo;
   }
 
-  return !isContractEndExpired(input.contratoFin);
+  return !isContractEndExpired(contractEnd);
 }
 
 function resolveActiveForExistingContract(
-  user: { tipo_vinculo?: string | null; contrato_fin?: Date | null },
+  user: {
+    tipo_vinculo?: string | null;
+    contrato_fin?: Date | null;
+    contrato_adenda?: Date | null;
+  },
   requestedActive: boolean,
 ) {
   if (!requestedActive) {
     return false;
   }
 
-  if (!CONTRACT_LINK_TYPES.has(user.tipo_vinculo ?? "") || user.contrato_fin == null) {
+  const contractEnd = user.contrato_adenda ?? user.contrato_fin;
+
+  if (!CONTRACT_LINK_TYPES.has(user.tipo_vinculo ?? "") || contractEnd == null) {
     return requestedActive;
   }
 
-  return !isContractEndExpired(user.contrato_fin);
+  return !isContractEndExpired(contractEnd);
 }
 
 function isContractEndExpired(contractEnd: Date) {
@@ -6481,6 +6505,20 @@ function readRequiredDateOnly(source: JsonRecord, key: string) {
 
   if (typeof value !== "string") {
     throw new HttpError(400, `El campo ${key} es obligatorio.`);
+  }
+
+  return readDateOnlyString(value, key);
+}
+
+function readOptionalDateOnly(source: JsonRecord, key: string) {
+  const value = source[key];
+
+  if (value == null || (typeof value === "string" && value.trim() === "")) {
+    return null;
+  }
+
+  if (typeof value !== "string") {
+    throw new HttpError(400, `El campo ${key} no tiene una fecha valida.`);
   }
 
   return readDateOnlyString(value, key);
@@ -11917,7 +11955,7 @@ async function deactivateExpiredConsultantContracts() {
       WHERE "activo" = TRUE
         AND "tipo_vinculo" = ANY($1::text[])
         AND "contrato_fin" IS NOT NULL
-        AND "contrato_fin" <= $2::date
+        AND COALESCE("contrato_adenda", "contrato_fin") <= $2::date
       RETURNING "id"
     `,
     [Array.from(CONTRACT_LINK_TYPES), today],
@@ -11964,6 +12002,9 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
       ? null
       : toDateOnlyText(user.contrato_inicio),
     contratoFin: user.contrato_fin == null ? null : toDateOnlyText(user.contrato_fin),
+    contratoAdenda: user.contrato_adenda == null
+      ? null
+      : toDateOnlyText(user.contrato_adenda),
     unidad: officeName ?? user.unidad ?? "",
     oficinaId: resolveLinkedOfficeId(user),
     oficinaNombre: officeName,

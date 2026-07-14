@@ -297,6 +297,7 @@ class _UsersScreenState extends State<UsersScreen> {
         contratoNumero: draft.contratoNumero,
         contratoInicio: draft.contratoInicio,
         contratoFin: draft.contratoFin,
+        contratoAdenda: draft.contratoAdenda,
         oficinaId: draft.office.id,
         oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
@@ -460,6 +461,7 @@ class _UsersScreenState extends State<UsersScreen> {
         contratoNumero: draft.contratoNumero,
         contratoInicio: draft.contratoInicio,
         contratoFin: draft.contratoFin,
+        contratoAdenda: draft.contratoAdenda,
         oficinaId: draft.office.id,
         oficinaComisionId: draft.commissionOffice?.id,
         cargoCodigo: draft.cargo.code,
@@ -1902,6 +1904,8 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
   final TextEditingController _contratoInicioController =
       TextEditingController();
   final TextEditingController _contratoFinController = TextEditingController();
+  final TextEditingController _contratoAdendaController =
+      TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController =
       TextEditingController();
@@ -1956,6 +1960,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _contratoNumeroController.text = user.contratoNumero;
     _contratoInicioController.text = user.contratoInicio ?? '';
     _contratoFinController.text = user.contratoFin ?? '';
+    _contratoAdendaController.text = user.contratoAdenda ?? '';
     _ciController.text = user.ci;
     _celularController.text = user.celular;
     _nombreCompletoController.text = user.nombreCompleto;
@@ -2026,6 +2031,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     _contratoNumeroController.dispose();
     _contratoInicioController.dispose();
     _contratoFinController.dispose();
+    _contratoAdendaController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
@@ -2285,9 +2291,19 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
     if (_requiresContract) {
       final inicio = DateTime.tryParse(_contratoInicioController.text.trim());
       final fin = DateTime.tryParse(_contratoFinController.text.trim());
+      final adendaText = _contratoAdendaController.text.trim();
+      final adenda = adendaText.isEmpty ? null : DateTime.tryParse(adendaText);
 
       if (inicio == null || fin == null || inicio.isAfter(fin)) {
         AppAlert.showError(context, 'Revisa las fechas del contrato.');
+        return;
+      }
+
+      if (adendaText.isNotEmpty && (adenda == null || fin.isAfter(adenda))) {
+        AppAlert.showError(
+          context,
+          'La fecha de adenda no puede ser menor al fin de contrato.',
+        );
         return;
       }
     }
@@ -2305,6 +2321,11 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
             : null,
         contratoFin: _requiresContract
             ? _contratoFinController.text.trim()
+            : null,
+        contratoAdenda:
+            _requiresContract &&
+                _contratoAdendaController.text.trim().isNotEmpty
+            ? _contratoAdendaController.text.trim()
             : null,
         ci: _ciController.text.trim(),
         celular: _celularController.text.trim(),
@@ -2439,6 +2460,7 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                                         _contratoNumeroController.clear();
                                         _contratoInicioController.clear();
                                         _contratoFinController.clear();
+                                        _contratoAdendaController.clear();
                                       }
                                     });
                                   },
@@ -2483,6 +2505,19 @@ class _ManagedUserDialogState extends State<_ManagedUserDialog> {
                               validator: _requiredValidator(
                                 'Selecciona la fecha de fin.',
                               ),
+                              enabled: !_isReadOnly,
+                            ),
+                            const SizedBox(height: 14),
+                            _PickerField(
+                              controller: _contratoAdendaController,
+                              label: 'Adenda / extension',
+                              hint: 'Selecciona fecha de extension (opcional)',
+                              icon: Icons.event_repeat_rounded,
+                              isRequired: false,
+                              onTap: () => _pickContractDate(
+                                controller: _contratoAdendaController,
+                              ),
+                              validator: (_) => null,
                               enabled: !_isReadOnly,
                             ),
                           ],
@@ -2890,6 +2925,7 @@ class _ManagedUserDraft {
     required this.contratoNumero,
     required this.contratoInicio,
     required this.contratoFin,
+    required this.contratoAdenda,
     required this.ci,
     required this.celular,
     required this.nombreCompleto,
@@ -2913,6 +2949,7 @@ class _ManagedUserDraft {
   final String? contratoNumero;
   final String? contratoInicio;
   final String? contratoFin;
+  final String? contratoAdenda;
   final String ci;
   final String celular;
   final String nombreCompleto;

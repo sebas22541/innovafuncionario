@@ -209,6 +209,7 @@ model usuarios {
   contrato_numero      String?                @db.VarChar(80)
   contrato_inicio      DateTime?              @db.Date
   contrato_fin         DateTime?              @db.Date
+  contrato_adenda      DateTime?              @db.Date
   unidad               String?                @db.VarChar(120)
   oficina_id           Int?
   oficina_comision_id  Int?
