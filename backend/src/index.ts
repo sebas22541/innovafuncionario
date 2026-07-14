@@ -7041,7 +7041,7 @@ async function assertUserManagerRequester(
     where: { email: email.toLowerCase() },
   });
 
-  if (!user || user.rol !== rol_usuario.ADMIN || user.activo !== true) {
+  if (!user || !isUserManagerRole(user.rol) || user.activo !== true) {
     throw new HttpError(403, message);
   }
 
