@@ -3056,7 +3056,7 @@ List<List<String>> _buildEventAbsenteePdfRows(
   return entries
       .map(
         (entry) => [
-          '',
+          entry.numeroItem?.trim() ?? '',
           entry.ci?.trim().isNotEmpty == true ? entry.ci!.trim() : 'Sin CI',
           entry.fullName,
           _eventRosterTipoLabel(entry.tipoVinculo),
@@ -3104,7 +3104,7 @@ List<List<Object?>> _buildEventAbsenteeExcelRows(
       .map(
         (entry) => [
           _formatDateOnly(event.date),
-          '',
+          entry.numeroItem?.trim() ?? '',
           entry.ci?.trim().isNotEmpty == true ? entry.ci!.trim() : '',
           entry.fullName,
           _eventRosterTipoLabel(entry.tipoVinculo),

@@ -141,6 +141,7 @@ class EventAbsenteeEntry {
     required this.personId,
     required this.fullName,
     this.ci,
+    this.numeroItem,
     this.tipoVinculo,
     this.officeName,
     this.jobTitle,
@@ -150,6 +151,7 @@ class EventAbsenteeEntry {
   final int personId;
   final String fullName;
   final String? ci;
+  final String? numeroItem;
   final String? tipoVinculo;
   final String? officeName;
   final String? jobTitle;

@@ -441,6 +441,7 @@ class EventsApiService {
     return EventAbsenteeEntry(
       personId: _readInt(source['personaId'], 'faltante.personaId'),
       ci: _readNullableString(source['ci']),
+      numeroItem: _readNullableString(source['numeroItem']),
       fullName: _readString(
         source['nombreCompleto'],
         'faltante.nombreCompleto',

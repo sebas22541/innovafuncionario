@@ -156,6 +156,8 @@ const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 const requestIdHeader = "X-Request-Id";
 const HEALTH_OFFICE_LEVEL = 11;
+const HIDDEN_EVENT_ABSENTEE_CI = "2352217";
+const HIDDEN_EVENT_ABSENTEE_ITEM = "1";
 const CONSULTANT_LINK_TYPE = "CONSULTOR";
 const SERVICES_LINK_TYPE = "SERVICIOS";
 const TEMPORARY_LINK_TYPE = "EVENTUAL";
@@ -10997,6 +10999,10 @@ async function loadEventAbsentees(event: any) {
   const absentees = [];
 
   for (const person of candidates) {
+    if (isHiddenEventAbsenteePerson(person)) {
+      continue;
+    }
+
     const requirementReason = await buildEventReportRequirementReason(person, event);
 
     if (requirementReason != null) {
@@ -11005,6 +11011,17 @@ async function loadEventAbsentees(event: any) {
   }
 
   return absentees;
+}
+
+function isHiddenEventAbsenteePerson(person: any) {
+  const linkedUser = person.usuario ?? null;
+  const ci = normalizeCiLookupValue(linkedUser?.ci ?? person.ci ?? "");
+  const numeroItem = normalizeOptionalText(linkedUser?.numero_item)?.trim();
+
+  return (
+    ci === HIDDEN_EVENT_ABSENTEE_CI &&
+    numeroItem === HIDDEN_EVENT_ABSENTEE_ITEM
+  );
 }
 
 function serializeEventAbsenteeRecord(person: any, requirementReason: string) {
@@ -11018,6 +11035,7 @@ function serializeEventAbsenteeRecord(person: any, requirementReason: string) {
     oficinaId: resolveLinkedOfficeId(linkedUser),
     oficinaCodigo: resolveLinkedOfficeCode(linkedUser),
     ci: linkedUser?.ci ?? person.ci ?? null,
+    numeroItem: linkedUser?.numero_item ?? null,
     tipoVinculo: linkedUser?.tipo_vinculo ?? null,
     unidad: officeName,
     cargo: resolveEffectiveJobTitleName(linkedUser),
