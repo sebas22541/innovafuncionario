@@ -414,13 +414,16 @@ const server = http.createServer(async (request, response) => {
       assertFuncionarioCiServiceToken(request);
       const input = parseFuncionarioRatingsLookupInput(await readJsonBody(request));
 
-      if (input.single) {
+      if (input.type === "ci") {
         sendPlainJson(response, 200, await loadFuncionarioRatingsByCi(input.cis[0]));
         return;
       }
 
       sendPlainJson(response, 200, {
-        data: await loadFuncionarioRatingsByCis(input.cis),
+        data:
+          input.type === "oficina"
+            ? await loadFuncionarioRatingsByOffice(input.oficinaId)
+            : await loadFuncionarioRatingsByCis(input.cis),
       });
       return;
     }
@@ -5606,15 +5609,24 @@ function parseFuncionarioRatingsLookupInput(payload: unknown) {
 
   if (ci != null) {
     return {
+      type: "ci" as const,
       cis: [ci],
-      single: true,
+    };
+  }
+
+  const oficinaId = readOptionalInt(body, "oficinaId");
+
+  if (oficinaId != null) {
+    return {
+      type: "oficina" as const,
+      oficinaId,
     };
   }
 
   const cis = readOptionalStringList(body, "cis", "CI");
 
   if (cis.length === 0) {
-    throw new HttpError(400, "Debes enviar el campo ci o cis.");
+    throw new HttpError(400, "Debes enviar el campo ci, cis u oficinaId.");
   }
 
   if (cis.length > 500) {
@@ -5622,8 +5634,8 @@ function parseFuncionarioRatingsLookupInput(payload: unknown) {
   }
 
   return {
+    type: "cis" as const,
     cis,
-    single: false,
   };
 }
 
@@ -5709,6 +5721,48 @@ async function loadFuncionarioRatingsByCi(ci: string) {
     regular: row.regular,
     malas: row.malas,
   };
+}
+
+async function loadFuncionarioRatingsByOffice(oficinaId: number) {
+  const office = await prisma.oficinas.findUnique({
+    where: { id: oficinaId },
+    select: { id: true },
+  });
+
+  if (!office) {
+    throw new HttpError(404, "No se encontro la oficina solicitada.");
+  }
+
+  const result = await pool.query<{
+    ci: string;
+    buenas: number;
+    regular: number;
+    malas: number;
+  }>(
+    `
+      SELECT
+        COALESCE(u."ci", '') AS "ci",
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'feliz')::int AS "buenas",
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'neutral')::int AS "regular",
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'enojada')::int AS "malas"
+      FROM "usuarios" u
+      LEFT JOIN "calificaciones_funcionario" c
+        ON c."funcionario_id" = u."id"
+      WHERE u."activo" = TRUE
+        AND COALESCE(u."oficina_comision_id", u."oficina_id") = $1
+        AND NULLIF(TRIM(COALESCE(u."ci", '')), '') IS NOT NULL
+      GROUP BY u."id", u."ci", u."nombre_completo"
+      ORDER BY u."nombre_completo" ASC
+    `,
+    [oficinaId],
+  );
+
+  return result.rows.map((row) => ({
+    ci: row.ci,
+    buenas: row.buenas,
+    regular: row.regular,
+    malas: row.malas,
+  }));
 }
 
 function isFuncionarioExternalServicePath(pathname: string | null) {
