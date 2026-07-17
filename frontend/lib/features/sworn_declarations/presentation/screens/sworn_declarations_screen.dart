@@ -1625,17 +1625,70 @@ class _PayloadValue extends StatelessWidget {
 
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final entry in map)
-            _SummaryRow(
-              label: _humanizeKey(entry.key.toString()),
-              value: _formatPayloadLeaf(entry.value),
-            ),
-        ],
+        children: [for (final entry in map) _PayloadMapEntry(entry: entry)],
       );
     }
 
     return Text(_formatPayloadLeaf(value));
+  }
+}
+
+class _PayloadMapEntry extends StatelessWidget {
+  const _PayloadMapEntry({required this.entry});
+
+  final MapEntry<Object?, Object?> entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final key = entry.key.toString();
+
+    if (key == 'mapaImagenPngBase64') {
+      final mapBytes = _readBase64Png(entry.value);
+
+      if (mapBytes == null) {
+        return const _SummaryRow(label: 'Mapa', value: 'Sin imagen registrada');
+      }
+
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Mapa',
+              style: TextStyle(
+                color: AppPalette.muted,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 560),
+                decoration: BoxDecoration(
+                  border: Border.all(color: AppPalette.line),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Image.memory(
+                  mapBytes,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) => const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text('No fue posible mostrar el mapa.'),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return _SummaryRow(
+      label: _humanizeKey(key),
+      value: _formatPayloadLeaf(entry.value),
+    );
   }
 }
 
