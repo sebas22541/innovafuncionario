@@ -136,6 +136,8 @@ const FUNCIONARIO_CI_SERVICE_TOKEN_SHA256 = normalizeOptionalEnvValue(
   process.env.FUNCIONARIO_CI_SERVICE_TOKEN_SHA256,
 );
 const FUNCIONARIO_CI_SERVICE_PATH = "/api/integraciones/funcionarios/verificar-ci";
+const FUNCIONARIO_CALIFICACIONES_SERVICE_PATH =
+  "/api/integraciones/funcionarios/calificaciones";
 // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
 
 if (!DATABASE_URL) {
@@ -402,6 +404,18 @@ const server = http.createServer(async (request, response) => {
           esFuncionario: funcionario != null,
         },
       });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === FUNCIONARIO_CALIFICACIONES_SERVICE_PATH
+    ) {
+      assertFuncionarioCiServiceToken(request);
+      const input = parseFuncionarioCiLookupInput(await readJsonBody(request));
+      const calificaciones = await loadFuncionarioRatingsByCi(input.ci);
+
+      sendPlainJson(response, 200, calificaciones);
       return;
     }
     // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
@@ -2857,7 +2871,7 @@ const server = http.createServer(async (request, response) => {
         userId: authenticatedUserForLog?.id,
         userEmail: authenticatedUserForLog?.email,
       }));
-      if (requestPath === FUNCIONARIO_CI_SERVICE_PATH) {
+      if (isFuncionarioExternalServicePath(requestPath)) {
         sendPlainJson(response, error.statusCode, {
           status: error.statusCode,
           message: error.message,
@@ -3600,7 +3614,7 @@ function isPublicRoute(request: IncomingMessage, url: URL) {
   // INICIO SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
   if (
     request.method === "POST" &&
-    url.pathname === FUNCIONARIO_CI_SERVICE_PATH
+    isFuncionarioExternalServicePath(url.pathname)
   ) {
     return true;
   }
@@ -5578,6 +5592,48 @@ function parseFuncionarioCiLookupInput(payload: unknown) {
   return {
     ci: readRequiredString(body, "ci", 1, 30),
   };
+}
+
+async function loadFuncionarioRatingsByCi(ci: string) {
+  const funcionario = await prisma.usuarios.findFirst({
+    where: { ci },
+    select: { id: true, ci: true },
+  });
+
+  if (!funcionario) {
+    throw new HttpError(404, "No se encontro un funcionario con ese CI.");
+  }
+
+  const result = await pool.query<{
+    buenas: number;
+    regular: number;
+    malas: number;
+  }>(
+    `
+      SELECT
+        COUNT(*) FILTER (WHERE "calificacion" = 'feliz')::int AS "buenas",
+        COUNT(*) FILTER (WHERE "calificacion" = 'neutral')::int AS "regular",
+        COUNT(*) FILTER (WHERE "calificacion" = 'enojada')::int AS "malas"
+      FROM "calificaciones_funcionario"
+      WHERE "funcionario_id" = $1
+    `,
+    [funcionario.id],
+  );
+  const row = result.rows[0];
+
+  return {
+    ci: funcionario.ci ?? ci,
+    buenas: row?.buenas ?? 0,
+    regular: row?.regular ?? 0,
+    malas: row?.malas ?? 0,
+  };
+}
+
+function isFuncionarioExternalServicePath(pathname: string | null) {
+  return (
+    pathname === FUNCIONARIO_CI_SERVICE_PATH ||
+    pathname === FUNCIONARIO_CALIFICACIONES_SERVICE_PATH
+  );
 }
 // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
 
