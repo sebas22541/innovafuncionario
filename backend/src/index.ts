@@ -2884,7 +2884,7 @@ const server = http.createServer(async (request, response) => {
         userId: authenticatedUserForLog?.id,
         userEmail: authenticatedUserForLog?.email,
       }));
-      if (isFuncionarioExternalServicePath(url.pathname)) {
+      if (isFuncionarioExternalServicePath(requestPath)) {
         sendPlainJson(response, error.statusCode, {
           status: error.statusCode,
           message: error.message,
@@ -3364,7 +3364,6 @@ function sendPlainJson(
   statusCode: number,
   payload: unknown,
 ) {
-  response.setHeader("Content-Type", "application/json; charset=utf-8");
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("Pragma", "no-cache");
   response.writeHead(statusCode);
@@ -3693,10 +3692,7 @@ function assertFuncionarioCiServiceToken(request: IncomingMessage) {
 }
 
 function readFuncionarioCiServiceHeaderToken(request: IncomingMessage) {
-  const token =
-    readSingleHeader(request.headers["x-service"]) ??
-    readSingleHeader(request.headers["x-service-token"]) ??
-    readOptionalBearerToken(request);
+  const token = readSingleHeader(request.headers["x-service"]);
 
   return normalizeOptionalText(token);
 }
