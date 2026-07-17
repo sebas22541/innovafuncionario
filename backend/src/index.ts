@@ -12665,24 +12665,32 @@ async function buildSwornDeclarationPdf(record: any) {
   const mapImage = await embedSwornDeclarationMapImage(pdf, address.mapaImagenPngBase64);
   if (mapImage != null) {
     y = drawSwornSectionTitle(context, page, "Ubicacion declarada", y - 8);
-    const mapWidth = 500;
-    const mapHeight = 190;
+    const mapBoxWidth = 500;
+    const mapBoxHeight = 210;
+    const { width: mapWidth, height: mapHeight } = fitImageInsideBox(
+      mapImage.width,
+      mapImage.height,
+      mapBoxWidth - 2,
+      mapBoxHeight - 2,
+    );
+    const mapX = 48 + (mapBoxWidth - 2 - mapWidth) / 2;
+    const mapY = y - mapBoxHeight - 7 + (mapBoxHeight - 2 - mapHeight) / 2;
 
     page.drawRectangle({
       x: 47,
-      y: y - mapHeight - 8,
-      width: mapWidth,
-      height: mapHeight,
+      y: y - mapBoxHeight - 8,
+      width: mapBoxWidth,
+      height: mapBoxHeight,
       borderColor: swornPdfColors.line,
       borderWidth: 1,
     });
     page.drawImage(mapImage, {
-      x: 48,
-      y: y - mapHeight - 7,
-      width: mapWidth - 2,
-      height: mapHeight - 2,
+      x: mapX,
+      y: mapY,
+      width: mapWidth,
+      height: mapHeight,
     });
-    y -= mapHeight + 28;
+    y -= mapBoxHeight + 28;
   }
 
   if (cityHall.tieneFamiliares === true) {
@@ -12726,12 +12734,15 @@ type SwornDeclarationPdfContext = {
 const swornPdfSize = { width: 595.28, height: 841.89 };
 const swornPdfMargin = 44;
 const swornPdfColors = {
-  night: rgb(0.24, 0.17, 0.39),
-  purple: rgb(0.43, 0.34, 0.63),
-  muted: rgb(0.42, 0.38, 0.51),
-  line: rgb(0.82, 0.81, 0.86),
-  soft: rgb(0.97, 0.96, 0.99),
-  chip: rgb(0.91, 0.88, 0.96),
+  black: rgb(0.08, 0.08, 0.1),
+  ink: rgb(0.14, 0.15, 0.18),
+  muted: rgb(0.36, 0.34, 0.42),
+  line: rgb(0.72, 0.7, 0.68),
+  soft: rgb(0.95, 0.95, 0.95),
+  olive: rgb(0.55, 0.6, 0.46),
+  taupe: rgb(0.7, 0.61, 0.52),
+  taupeDark: rgb(0.46, 0.36, 0.27),
+  paleLine: rgb(0.86, 0.84, 0.81),
   white: rgb(1, 1, 1),
 };
 
@@ -12741,7 +12752,7 @@ function addSwornDeclarationPage(context: SwornDeclarationPdfContext) {
 
   drawSwornPageFrame(context, page);
 
-  return { page, y: swornPdfSize.height - 142 };
+  return { page, y: swornPdfSize.height - 220 };
 }
 
 function drawSwornPageFrame(context: SwornDeclarationPdfContext, page: any) {
@@ -12750,33 +12761,61 @@ function drawSwornPageFrame(context: SwornDeclarationPdfContext, page: any) {
 
   page.drawRectangle({
     x: 0,
-    y: swornPdfSize.height - 96,
-    width: swornPdfSize.width,
-    height: 96,
-    color: swornPdfColors.purple,
+    y: swornPdfSize.height - 118,
+    width: 370,
+    height: 74,
+    color: swornPdfColors.olive,
+  });
+  page.drawRectangle({
+    x: swornPdfSize.width - 174,
+    y: swornPdfSize.height - 118,
+    width: 174,
+    height: 118,
+    color: swornPdfColors.taupe,
+  });
+  page.drawSvgPath(
+    `M ${swornPdfSize.width - 206} ${swornPdfSize.height} L ${swornPdfSize.width - 174} ${swornPdfSize.height} L ${swornPdfSize.width - 64} ${swornPdfSize.height - 118} L ${swornPdfSize.width - 96} ${swornPdfSize.height - 118} Z`,
+    { color: swornPdfColors.white },
+  );
+  page.drawSvgPath(
+    `M ${swornPdfSize.width - 82} ${swornPdfSize.height - 118} L ${swornPdfSize.width} ${swornPdfSize.height - 118} L ${swornPdfSize.width} ${swornPdfSize.height - 36} Z`,
+    { color: swornPdfColors.taupeDark },
+  );
+  page.drawLine({
+    start: { x: swornPdfMargin, y: swornPdfSize.height - 85 },
+    end: { x: 305, y: swornPdfSize.height - 85 },
+    thickness: 1,
+    color: swornPdfColors.white,
   });
   page.drawText("GOBIERNO AUTONOMO MUNICIPAL DE COCHABAMBA", {
     x: swornPdfMargin,
-    y: swornPdfSize.height - 38,
+    y: swornPdfSize.height - 75,
     size: 9,
     font: boldFont,
     color: swornPdfColors.white,
   });
-  page.drawText("DECLARACION JURADA", {
-    x: swornPdfMargin,
-    y: swornPdfSize.height - 68,
-    size: 24,
+  page.drawText("Innova Funcionario", {
+    x: swornPdfSize.width - 154,
+    y: swornPdfSize.height - 94,
+    size: 14,
     font: boldFont,
     color: swornPdfColors.white,
   });
-  page.drawText("Sistema Innova Funcionario", {
+  page.drawText("DECLARACION", {
     x: swornPdfMargin,
-    y: swornPdfSize.height - 84,
-    size: 8.5,
-    font,
-    color: swornPdfColors.white,
+    y: swornPdfSize.height - 178,
+    size: 28,
+    font: boldFont,
+    color: swornPdfColors.black,
   });
-  drawSwornBadge(page, code, swornPdfSize.width - 190, swornPdfSize.height - 56, 146, boldFont);
+  page.drawText("JURADA", {
+    x: swornPdfMargin,
+    y: swornPdfSize.height - 208,
+    size: 28,
+    font: boldFont,
+    color: swornPdfColors.black,
+  });
+  drawSwornBadge(page, code, swornPdfSize.width - 206, swornPdfSize.height - 196, 162, boldFont);
 
   page.drawLine({
     start: { x: swornPdfMargin, y: 54 },
@@ -12784,16 +12823,31 @@ function drawSwornPageFrame(context: SwornDeclarationPdfContext, page: any) {
     thickness: 0.5,
     color: swornPdfColors.line,
   });
+  page.drawRectangle({
+    x: 82,
+    y: 0,
+    width: swornPdfSize.width - 82,
+    height: 34,
+    color: swornPdfColors.olive,
+  });
+  page.drawSvgPath(
+    `M 0 0 L 56 0 L 28 34 L 0 34 Z`,
+    { color: swornPdfColors.taupe },
+  );
+  page.drawSvgPath(
+    `M 58 0 L 76 0 L 48 34 L 30 34 Z`,
+    { color: swornPdfColors.white },
+  );
   page.drawText(`Pagina ${pageNumber}`, {
     x: swornPdfSize.width - swornPdfMargin - 52,
-    y: 34,
+    y: 42,
     size: 8,
     font,
     color: swornPdfColors.muted,
   });
   page.drawText("Documento generado digitalmente", {
     x: swornPdfMargin,
-    y: 34,
+    y: 42,
     size: 8,
     font,
     color: swornPdfColors.muted,
@@ -12813,17 +12867,16 @@ function drawSwornBadge(
     y,
     width,
     height: 28,
-    color: rgb(1, 1, 1),
-    opacity: 0.16,
-    borderColor: rgb(1, 1, 1),
-    borderWidth: 0.5,
+    color: swornPdfColors.white,
+    borderColor: swornPdfColors.line,
+    borderWidth: 0.8,
   });
   page.drawText(fitPdfCellText(text, width - 18, 8.5), {
     x: x + 9,
     y: y + 10,
     size: 8.5,
     font,
-    color: swornPdfColors.white,
+    color: swornPdfColors.black,
   });
 }
 
@@ -12833,19 +12886,29 @@ function drawSwornSectionTitle(
   title: string,
   y: number,
 ) {
+  const titleWidth = Math.min(
+    300,
+    Math.max(150, context.boldFont.widthOfTextAtSize(title.toUpperCase(), 11) + 24),
+  );
   page.drawRectangle({
     x: swornPdfMargin,
     y: y - 28,
-    width: swornPdfSize.width - swornPdfMargin * 2,
+    width: titleWidth,
     height: 28,
-    color: swornPdfColors.chip,
+    color: swornPdfColors.taupe,
+  });
+  page.drawLine({
+    start: { x: swornPdfMargin + titleWidth + 6, y: y - 14 },
+    end: { x: swornPdfSize.width - swornPdfMargin, y: y - 14 },
+    thickness: 0.7,
+    color: swornPdfColors.line,
   });
   page.drawText(title.toUpperCase(), {
     x: swornPdfMargin + 12,
     y: y - 19,
     size: 11,
     font: context.boldFont,
-    color: swornPdfColors.night,
+    color: swornPdfColors.white,
   });
 
   return y - 42;
@@ -12910,7 +12973,7 @@ function drawSwornInfoCell(
     width - 20,
     9,
     context.font,
-    swornPdfColors.night,
+    swornPdfColors.ink,
     2,
   );
 }
@@ -12928,14 +12991,14 @@ function drawSwornChecklist(
       x: swornPdfMargin + 8,
       y: cursorY - 8,
       size: 4,
-      color: swornPdfColors.purple,
+      color: swornPdfColors.black,
     });
     page.drawText(label, {
       x: swornPdfMargin + 20,
       y: cursorY - 12,
       size: 9,
       font: context.boldFont,
-      color: swornPdfColors.night,
+      color: swornPdfColors.black,
     });
     drawSwornWrappedText(
       page,
@@ -12969,7 +13032,7 @@ function drawSwornParagraph(
     swornPdfSize.width - swornPdfMargin * 2,
     size,
     context.font,
-    swornPdfColors.night,
+    swornPdfColors.ink,
   ) - 12;
 }
 
@@ -13060,7 +13123,7 @@ function drawSwornTable(
       y: y - 24,
       width: tableWidth,
       height: 24,
-      color: swornPdfColors.purple,
+      color: swornPdfColors.taupe,
     });
     columns.forEach(([label, width]) => {
       page.drawText(label.toUpperCase(), {
@@ -13090,7 +13153,7 @@ function drawSwornTable(
       y: y - rowHeight,
       width: tableWidth,
       height: rowHeight,
-      color: rowIndex % 2 === 0 ? rgb(1, 1, 1) : swornPdfColors.soft,
+      color: swornPdfColors.white,
       borderColor: swornPdfColors.line,
       borderWidth: 0.4,
     });
@@ -13103,7 +13166,7 @@ function drawSwornTable(
         width - 10,
         7,
         context.font,
-        swornPdfColors.night,
+        swornPdfColors.ink,
         2,
       );
       x += width;
@@ -13119,18 +13182,20 @@ function drawSwornSignatureBlock(
   page: any,
   y: number,
 ) {
-  const lineWidth = 190;
-  const leftX = swornPdfMargin + 36;
-  const rightX = swornPdfSize.width - swornPdfMargin - lineWidth - 36;
+  const lineWidth = 220;
+  const gap = 70;
+  const totalWidth = lineWidth * 2 + gap;
+  const leftX = (swornPdfSize.width - totalWidth) / 2;
+  const rightX = leftX + lineWidth + gap;
 
-  drawSwornSignature(page, leftX, y, lineWidth, "Firma del declarante", context.boldFont);
-  drawSwornSignature(page, rightX, y, lineWidth, "Aclaracion de firma", context.boldFont);
+  drawSwornSignature(page, leftX, y, lineWidth, "FIRMA DEL DECLARANTE", context.boldFont);
+  drawSwornSignature(page, rightX, y, lineWidth, "ACLARACION DE FIRMA", context.boldFont);
   page.drawText(`CI: ${normalizePdfValue(context.record.funcionario_ci) || "________________"}`, {
     x: leftX,
-    y: y - 40,
+    y: y - 42,
     size: 9,
     font: context.font,
-    color: swornPdfColors.night,
+    color: swornPdfColors.black,
   });
 }
 
@@ -13146,14 +13211,15 @@ function drawSwornSignature(
     start: { x, y },
     end: { x: x + width, y },
     thickness: 0.8,
-    color: swornPdfColors.night,
+    color: swornPdfColors.black,
   });
+  const labelWidth = font.widthOfTextAtSize(label, 8);
   page.drawText(label.toUpperCase(), {
-    x: x + 20,
+    x: x + (width - labelWidth) / 2,
     y: y - 18,
     size: 8,
     font,
-    color: swornPdfColors.muted,
+    color: swornPdfColors.black,
   });
 }
 
@@ -13225,6 +13291,20 @@ function wrapSwornPdfText(
   }
 
   return lines;
+}
+
+function fitImageInsideBox(
+  imageWidth: number,
+  imageHeight: number,
+  boxWidth: number,
+  boxHeight: number,
+) {
+  const scale = Math.min(boxWidth / imageWidth, boxHeight / imageHeight);
+
+  return {
+    width: imageWidth * scale,
+    height: imageHeight * scale,
+  };
 }
 
 function drawSwornDeclarationHeader(

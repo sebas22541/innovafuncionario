@@ -941,7 +941,7 @@ class _AddressStepState extends State<_AddressStep> {
               child: FlutterMap(
                 options: MapOptions(
                   initialCenter: selected ?? _cochabambaCenter,
-                  initialZoom: 13,
+                  initialZoom: selected == null ? 13 : 17,
                   onTap: (_, point) => setState(() {
                     widget.draft.location = point;
                     widget.draft.mapImageBase64 = null;
