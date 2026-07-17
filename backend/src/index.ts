@@ -412,10 +412,16 @@ const server = http.createServer(async (request, response) => {
       url.pathname === FUNCIONARIO_CALIFICACIONES_SERVICE_PATH
     ) {
       assertFuncionarioCiServiceToken(request);
-      const input = parseFuncionarioCiLookupInput(await readJsonBody(request));
-      const calificaciones = await loadFuncionarioRatingsByCi(input.ci);
+      const input = parseFuncionarioRatingsLookupInput(await readJsonBody(request));
 
-      sendPlainJson(response, 200, calificaciones);
+      if (input.single) {
+        sendPlainJson(response, 200, await loadFuncionarioRatingsByCi(input.cis[0]));
+        return;
+      }
+
+      sendPlainJson(response, 200, {
+        data: await loadFuncionarioRatingsByCis(input.cis),
+      });
       return;
     }
     // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
@@ -5594,38 +5600,114 @@ function parseFuncionarioCiLookupInput(payload: unknown) {
   };
 }
 
-async function loadFuncionarioRatingsByCi(ci: string) {
-  const funcionario = await prisma.usuarios.findFirst({
-    where: { ci },
-    select: { id: true, ci: true },
-  });
+function parseFuncionarioRatingsLookupInput(payload: unknown) {
+  const body = expectRecord(payload);
+  const ci = readOptionalString(body, "ci", 1, 30);
 
-  if (!funcionario) {
-    throw new HttpError(404, "No se encontro un funcionario con ese CI.");
+  if (ci != null) {
+    return {
+      cis: [ci],
+      single: true,
+    };
   }
 
+  const cis = readOptionalStringList(body, "cis", "CI");
+
+  if (cis.length === 0) {
+    throw new HttpError(400, "Debes enviar el campo ci o cis.");
+  }
+
+  if (cis.length > 500) {
+    throw new HttpError(400, "Solo puedes consultar hasta 500 CI por solicitud.");
+  }
+
+  return {
+    cis,
+    single: false,
+  };
+}
+
+async function loadFuncionarioRatingsByCis(cis: string[]) {
   const result = await pool.query<{
+    ci: string;
     buenas: number;
     regular: number;
     malas: number;
   }>(
     `
       SELECT
+        u."ci" AS "ci",
         COUNT(*) FILTER (WHERE "calificacion" = 'feliz')::int AS "buenas",
         COUNT(*) FILTER (WHERE "calificacion" = 'neutral')::int AS "regular",
         COUNT(*) FILTER (WHERE "calificacion" = 'enojada')::int AS "malas"
-      FROM "calificaciones_funcionario"
-      WHERE "funcionario_id" = $1
+      FROM "usuarios" u
+      LEFT JOIN "calificaciones_funcionario" c
+        ON c."funcionario_id" = u."id"
+      WHERE u."ci" = ANY($1::text[])
+      GROUP BY u."id", u."ci"
     `,
-    [funcionario.id],
+    [cis],
+  );
+  const ratingsByCi = new Map(
+    result.rows.map((row) => [
+      row.ci,
+      {
+        ci: row.ci,
+        buenas: row.buenas,
+        regular: row.regular,
+        malas: row.malas,
+      },
+    ]),
+  );
+
+  return cis.map((ci) => {
+    const ratings = ratingsByCi.get(ci);
+
+    if (ratings != null) {
+      return ratings;
+    }
+
+    return {
+      ci,
+      buenas: 0,
+      regular: 0,
+      malas: 0,
+    };
+  });
+}
+
+async function loadFuncionarioRatingsByCi(ci: string) {
+  const result = await pool.query<{
+    ci: string;
+    buenas: number;
+    regular: number;
+    malas: number;
+  }>(
+    `
+      SELECT
+        u."ci" AS "ci",
+        COUNT(*) FILTER (WHERE c."calificacion" = 'feliz')::int AS "buenas",
+        COUNT(*) FILTER (WHERE c."calificacion" = 'neutral')::int AS "regular",
+        COUNT(*) FILTER (WHERE c."calificacion" = 'enojada')::int AS "malas"
+      FROM "usuarios" u
+      LEFT JOIN "calificaciones_funcionario" c
+        ON c."funcionario_id" = u."id"
+      WHERE u."ci" = $1
+      GROUP BY u."id", u."ci"
+    `,
+    [ci],
   );
   const row = result.rows[0];
 
+  if (!row) {
+    throw new HttpError(404, "No se encontro un funcionario con ese CI.");
+  }
+
   return {
-    ci: funcionario.ci ?? ci,
-    buenas: row?.buenas ?? 0,
-    regular: row?.regular ?? 0,
-    malas: row?.malas ?? 0,
+    ci: row.ci,
+    buenas: row.buenas,
+    regular: row.regular,
+    malas: row.malas,
   };
 }
 
