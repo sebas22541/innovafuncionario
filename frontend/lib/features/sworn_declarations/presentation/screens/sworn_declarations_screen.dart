@@ -69,6 +69,7 @@ class _SwornDeclarationEmployeeViewState
   bool _hasCityHallRelatives = false;
   bool _isLoadingRecords = true;
   bool _isSaving = false;
+  bool _hasPreloadedLatestRecord = false;
   int? _editingRecordId;
   int _step = 0;
 
@@ -119,6 +120,7 @@ class _SwornDeclarationEmployeeViewState
       setState(() {
         _records = records;
       });
+      _preloadLatestRecord(records);
     } catch (_) {
       if (mounted) {
         setState(() {
@@ -269,8 +271,9 @@ class _SwornDeclarationEmployeeViewState
 
   Map<String, dynamic> _buildPayload() {
     return {
-      'consanguinidadAfinidad':
-          _relatives.map((relative) => relative.toJson()).toList(),
+      'consanguinidadAfinidad': _relatives
+          .map((relative) => relative.toJson())
+          .toList(),
       'doblePercepcion': _doublePerception.toJson(),
       'sentenciasProcesos': _sentences.toJson(),
       'otrasIncompatibilidades': _incompatibilities.toJson(),
@@ -302,6 +305,7 @@ class _SwornDeclarationEmployeeViewState
       _address.reset();
       _hasCityHallRelatives = false;
       _editingRecordId = null;
+      _hasPreloadedLatestRecord = false;
       _step = 0;
     });
     _pageController.jumpToPage(0);
@@ -312,6 +316,38 @@ class _SwornDeclarationEmployeeViewState
       return;
     }
 
+    _loadRecordIntoDraft(record, editing: true);
+    AppAlert.showWarning(
+      context,
+      'Edita la declaracion rechazada y vuelve a finalizar para enviarla.',
+      title: 'Edicion habilitada',
+    );
+  }
+
+  void _preloadLatestRecord(List<SwornDeclarationRecord> records) {
+    if (_hasPreloadedLatestRecord ||
+        _editingRecordId != null ||
+        records.isEmpty) {
+      return;
+    }
+
+    final latestRecord = records.firstWhere(
+      (record) => record.status != SwornDeclarationStatus.rejected,
+      orElse: () => records.first,
+    );
+
+    _loadRecordIntoDraft(latestRecord, editing: false);
+    AppAlert.showSuccess(
+      context,
+      'Se precargaron los datos de tu ultima declaracion. Puedes modificar o aumentar lo necesario.',
+      title: 'Datos precargados',
+    );
+  }
+
+  void _loadRecordIntoDraft(
+    SwornDeclarationRecord record, {
+    required bool editing,
+  }) {
     final payload = record.payload;
     final relatives = _readPayloadList(payload['consanguinidadAfinidad']);
     final cityHall = _readPayloadMap(payload['familiaresAlcaldia']);
@@ -351,15 +387,11 @@ class _SwornDeclarationEmployeeViewState
                       ))
               : <_CityHallRelativeDraft>[],
         );
-      _editingRecordId = record.id;
+      _editingRecordId = editing ? record.id : null;
+      _hasPreloadedLatestRecord = !editing;
       _step = 0;
     });
     _pageController.jumpToPage(0);
-    AppAlert.showWarning(
-      context,
-      'Edita la declaracion rechazada y vuelve a finalizar para enviarla.',
-      title: 'Edicion habilitada',
-    );
   }
 
   void _showMessage(String message, {bool isError = false}) {
@@ -841,8 +873,7 @@ class _IncompatibilitiesStep extends StatefulWidget {
   final _IncompatibilitiesDraft draft;
 
   @override
-  State<_IncompatibilitiesStep> createState() =>
-      _IncompatibilitiesStepState();
+  State<_IncompatibilitiesStep> createState() => _IncompatibilitiesStepState();
 }
 
 class _IncompatibilitiesStepState extends State<_IncompatibilitiesStep> {
@@ -920,7 +951,8 @@ class _AddressStepState extends State<_AddressStep> {
                   TileLayer(
                     urlTemplate:
                         'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'com.innova.funcionario.cochabamba.bo',
+                    userAgentPackageName:
+                        'com.innova.funcionario.cochabamba.bo',
                   ),
                   if (selected != null)
                     MarkerLayer(
@@ -1085,14 +1117,8 @@ class _RelativeEditor extends StatelessWidget {
           onChanged: (value) => draft.relationship = value ?? 'OTRO',
         ),
         _TextInput(controller: draft.names, label: 'Nombres', required: true),
-        _TextInput(
-          controller: draft.firstLastName,
-          label: 'Apellido paterno',
-        ),
-        _TextInput(
-          controller: draft.secondLastName,
-          label: 'Apellido materno',
-        ),
+        _TextInput(controller: draft.firstLastName, label: 'Apellido paterno'),
+        _TextInput(controller: draft.secondLastName, label: 'Apellido materno'),
         _TextInput(
           controller: draft.identityDocument,
           label: 'Documento de identidad',
@@ -1169,7 +1195,10 @@ class _AdminDeclarationsTable extends StatelessWidget {
           return Column(
             children: [
               for (final record in records) ...[
-                _DeclarationListTile(record: record, onTap: () => onOpen(record)),
+                _DeclarationListTile(
+                  record: record,
+                  onTap: () => onOpen(record),
+                ),
                 const SizedBox(height: 10),
               ],
             ],
@@ -1258,7 +1287,10 @@ class _DeclarationTableRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              SizedBox(width: 110, child: _DeclarationStatusBadge(record.status)),
+              SizedBox(
+                width: 110,
+                child: _DeclarationStatusBadge(record.status),
+              ),
               const SizedBox(width: 52, child: Icon(Icons.visibility_outlined)),
             ],
           ),
@@ -1325,7 +1357,9 @@ class _DeclarationListTile extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 6),
-              Text('CI ${record.employeeCi} - Gestion ${record.managementYear}'),
+              Text(
+                'CI ${record.employeeCi} - Gestion ${record.managementYear}',
+              ),
               Text(record.employeeOffice),
             ],
           ),
@@ -1388,10 +1422,8 @@ class _EmployeeHistoryCard extends StatelessWidget {
                   for (final record in records) ...[
                     _DeclarationListTile(
                       record: record,
-                      onPdf: () => _downloadSwornDeclarationPdf(
-                        context,
-                        record,
-                      ),
+                      onPdf: () =>
+                          _downloadSwornDeclarationPdf(context, record),
                       onEdit: record.status == SwornDeclarationStatus.rejected
                           ? () => onEditRejected(record)
                           : null,
@@ -1451,10 +1483,16 @@ class _SwornDeclarationDetailDialog extends StatelessWidget {
               _SummaryRow(label: 'Cargo', value: record.employeeJobTitle),
               _SummaryRow(label: 'Oficina', value: record.employeeOffice),
               _SummaryRow(label: 'Gestion', value: '${record.managementYear}'),
-              _SummaryRow(label: 'Fecha', value: _formatDateTime(record.createdAt)),
+              _SummaryRow(
+                label: 'Fecha',
+                value: _formatDateTime(record.createdAt),
+              ),
               if (record.reviewedByName.isNotEmpty) ...[
                 const Divider(height: 22),
-                _SummaryRow(label: 'Revisado por', value: record.reviewedByName),
+                _SummaryRow(
+                  label: 'Revisado por',
+                  value: record.reviewedByName,
+                ),
                 _SummaryRow(
                   label: 'Revision',
                   value: record.reviewedAt == null
@@ -2035,7 +2073,10 @@ class _DoublePerceptionDraft {
       source['remuneracionCargoActual'],
       '0',
     );
-    totalSalary.text = _readPayloadString(source['montoTotalRemuneracion'], '0');
+    totalSalary.text = _readPayloadString(
+      source['montoTotalRemuneracion'],
+      '0',
+    );
   }
 
   Map<String, dynamic> toJson() {
@@ -2161,7 +2202,10 @@ class _IncompatibilitiesDraft {
     receivesPension = source['recibeRenta'] == true;
     marriageCommitment = source['compromisoMatrimonio'] != false;
     representsCompanies = source['representaEmpresas'] == true;
-    pensionDetail.text = _readPayloadString(source['detalleRenta'], 'NO APLICA');
+    pensionDetail.text = _readPayloadString(
+      source['detalleRenta'],
+      'NO APLICA',
+    );
     companyName.text = _readPayloadString(source['nombreEmpresa'], 'NO APLICA');
   }
 
@@ -2385,7 +2429,8 @@ Future<Uint8List> _buildSwornDeclarationPdf(
   const outputPageCount = 6;
 
   for (var pageIndex = 0; pageIndex < outputPageCount; pageIndex++) {
-    final template = pages[pageIndex < pages.length ? pageIndex : pages.length - 1];
+    final template =
+        pages[pageIndex < pages.length ? pageIndex : pages.length - 1];
     final overlay = switch (pageIndex) {
       0 => _buildPdfPageOneOverlay(record),
       1 => _buildPdfPageTwoOverlay(record),
@@ -2456,7 +2501,11 @@ List<pw.Widget> _buildPdfPageOneOverlay(SwornDeclarationRecord record) {
     ..._pdfRelativeGroup(relatives, const ['UNION LIBRE'], [441]),
     ..._pdfRelativeGroup(relatives, const ['DIVORCIADO(A)'], [510]),
     ..._pdfRelativeGroup(relatives, const ['SEPARADO(A)'], [579]),
-    ..._pdfRelativeGroup(relatives, const ['PADRE O MADRE DE LOS HIJOS'], [649]),
+    ..._pdfRelativeGroup(
+      relatives,
+      const ['PADRE O MADRE DE LOS HIJOS'],
+      [649],
+    ),
     ..._pdfRelativeGroup(relatives, const ['PADRES'], [719, 741]),
   ];
 }
@@ -2471,7 +2520,11 @@ List<pw.Widget> _buildPdfPageTwoOverlay(SwornDeclarationRecord record) {
     ..._pdfRelativeGroup(relatives, const ['PRIMOS'], [470, 491]),
     ..._pdfRelativeGroup(relatives, const ['SOBRINOS'], [555, 576]),
     ..._pdfRelativeGroup(relatives, const ['SUEGROS'], [650]),
-    ..._pdfRelativeGroup(relatives, const ['YERNOS - NUERAS', 'YERNOS', 'NUERAS'], [719]),
+    ..._pdfRelativeGroup(
+      relatives,
+      const ['YERNOS - NUERAS', 'YERNOS', 'NUERAS'],
+      [719],
+    ),
     ..._pdfRelativeGroup(relatives, const ['CUNADOS', 'CUÑADOS'], [792]),
   ];
 }
@@ -2485,24 +2538,63 @@ List<pw.Widget> _buildPdfPageFourOverlay(SwornDeclarationRecord record) {
   final wasDismissed = sentences['fueDestituido'] == true;
 
   return [
-    _pdfCenteredText(296, 250, perceives ? 'SI PERCIBO DOBLE PERCEPCION' : 'NO PERCIBO DOBLE PERCEPCION'),
-    _pdfText(303, 337, _pdfValue(doublePerception['institucion'], dashIfEmpty: true), size: 7),
-    _pdfText(303, 360, _pdfValue(doublePerception['funcion'], fallback: 'NINGUNA'), size: 7),
-    _pdfText(303, 383, _pdfValue(doublePerception['montoPercibe'], dashIfEmpty: true), size: 7),
+    _pdfCenteredText(
+      296,
+      250,
+      perceives ? 'SI PERCIBO DOBLE PERCEPCION' : 'NO PERCIBO DOBLE PERCEPCION',
+    ),
+    _pdfText(
+      303,
+      337,
+      _pdfValue(doublePerception['institucion'], dashIfEmpty: true),
+      size: 7,
+    ),
+    _pdfText(
+      303,
+      360,
+      _pdfValue(doublePerception['funcion'], fallback: 'NINGUNA'),
+      size: 7,
+    ),
+    _pdfText(
+      303,
+      383,
+      _pdfValue(doublePerception['montoPercibe'], dashIfEmpty: true),
+      size: 7,
+    ),
     _pdfCenteredText(296, 480, hasSentences ? 'SI' : 'NO'),
     if (hasSentences)
-      _pdfText(55, 490, _pdfValue(sentences['detalleSentencias']), size: 6, maxWidth: 485),
+      _pdfText(
+        55,
+        490,
+        _pdfValue(sentences['detalleSentencias']),
+        size: 6,
+        maxWidth: 485,
+      ),
     _pdfCenteredText(296, 528, hasProcesses ? 'SI' : 'NINGUNO'),
     if (hasProcesses)
-      _pdfText(55, 538, _pdfValue(sentences['detalleProcesos']), size: 6, maxWidth: 485),
+      _pdfText(
+        55,
+        538,
+        _pdfValue(sentences['detalleProcesos']),
+        size: 6,
+        maxWidth: 485,
+      ),
     _pdfCenteredText(296, 574, wasDismissed ? 'SI' : 'NO'),
     if (wasDismissed)
-      _pdfText(55, 584, _pdfValue(sentences['detalleDestitucion']), size: 6, maxWidth: 485),
+      _pdfText(
+        55,
+        584,
+        _pdfValue(sentences['detalleDestitucion']),
+        size: 6,
+        maxWidth: 485,
+      ),
   ];
 }
 
 List<pw.Widget> _buildPdfPageFiveOverlay(SwornDeclarationRecord record) {
-  final incompatibilities = _payloadMap(record.payload['otrasIncompatibilidades']);
+  final incompatibilities = _payloadMap(
+    record.payload['otrasIncompatibilidades'],
+  );
   final receivesPension = incompatibilities['recibeRenta'] == true;
   final marriageCommitment = incompatibilities['compromisoMatrimonio'] == true;
   final representsCompanies = incompatibilities['representaEmpresas'] == true;
@@ -2510,11 +2602,23 @@ List<pw.Widget> _buildPdfPageFiveOverlay(SwornDeclarationRecord record) {
   return [
     _pdfCenteredText(296, 224, receivesPension ? 'SI' : 'NO'),
     if (receivesPension)
-      _pdfText(55, 234, _pdfValue(incompatibilities['detalleRenta']), size: 6, maxWidth: 485),
+      _pdfText(
+        55,
+        234,
+        _pdfValue(incompatibilities['detalleRenta']),
+        size: 6,
+        maxWidth: 485,
+      ),
     _pdfCenteredText(296, 294, marriageCommitment ? 'SI' : 'NO'),
     _pdfCenteredText(296, 364, representsCompanies ? 'SI' : 'NO'),
     if (representsCompanies)
-      _pdfText(55, 374, _pdfValue(incompatibilities['nombreEmpresa']), size: 6, maxWidth: 485),
+      _pdfText(
+        55,
+        374,
+        _pdfValue(incompatibilities['nombreEmpresa']),
+        size: 6,
+        maxWidth: 485,
+      ),
   ];
 }
 
@@ -2529,7 +2633,12 @@ List<pw.Widget> _buildPdfPageSixOverlay(SwornDeclarationRecord record) {
     _pdfText(170, 282, _pdfValue(address['calleAvenida']), size: 6.5),
     _pdfText(371, 282, _pdfValue(address['numeroDomicilio']), size: 6.5),
     _pdfText(485, 282, _pdfValue(address['tipoVivienda']), size: 6.5),
-    _pdfText(130, 305, _pdfValue(address['telefonoFijo'], fallback: 'S/N'), size: 6.5),
+    _pdfText(
+      130,
+      305,
+      _pdfValue(address['telefonoFijo'], fallback: 'S/N'),
+      size: 6.5,
+    ),
     _pdfText(285, 305, _pdfValue(address['telefonoCelular']), size: 6.5),
     _pdfText(486, 305, _pdfValue(address['telefonoReferencia']), size: 6.5),
     if (mapImage != null)
@@ -2558,20 +2667,23 @@ List<_PdfRelativeRow> _relativeRows(SwornDeclarationRecord record) {
     return const [];
   }
 
-  return raw.whereType<Map>().map((item) {
-    return _PdfRelativeRow(
-      relationship: _pdfValue(item['parentesco']).toUpperCase(),
-      fullName: [
-        _pdfValue(item['apellidoPaterno']),
-        _pdfValue(item['apellidoMaterno']),
-        _pdfValue(item['nombres']),
-      ].where((part) => part.isNotEmpty && part != 'Sin dato').join(' '),
-      occupation: _pdfValue(item['ocupacion'], dashIfEmpty: true),
-      workplace: _pdfValue(item['lugarTrabajo'], dashIfEmpty: true),
-      document: _pdfValue(item['documentoIdentidad'], dashIfEmpty: true),
-      deceased: item['fallecido'] == true ? 'SI' : '',
-    );
-  }).toList(growable: false);
+  return raw
+      .whereType<Map>()
+      .map((item) {
+        return _PdfRelativeRow(
+          relationship: _pdfValue(item['parentesco']).toUpperCase(),
+          fullName: [
+            _pdfValue(item['apellidoPaterno']),
+            _pdfValue(item['apellidoMaterno']),
+            _pdfValue(item['nombres']),
+          ].where((part) => part.isNotEmpty && part != 'Sin dato').join(' '),
+          occupation: _pdfValue(item['ocupacion'], dashIfEmpty: true),
+          workplace: _pdfValue(item['lugarTrabajo'], dashIfEmpty: true),
+          document: _pdfValue(item['documentoIdentidad'], dashIfEmpty: true),
+          deceased: item['fallecido'] == true ? 'SI' : '',
+        );
+      })
+      .toList(growable: false);
 }
 
 List<pw.Widget> _pdfRelativeGroup(

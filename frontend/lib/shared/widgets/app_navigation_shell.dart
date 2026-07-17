@@ -2268,7 +2268,7 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
     if (!_isDirectorJobTitle(user)) AppSection.permissionExits,
     if (!_isDirectorJobTitle(user)) AppSection.myExitPermits,
     if (_isExitPermitApproverUser(user)) AppSection.exitPermitRequests,
-    // AppSection.swornDeclarations,
+    AppSection.swornDeclarations,
     AppSection.settings,
   ];
 

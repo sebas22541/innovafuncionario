@@ -289,6 +289,8 @@ model calificaciones_funcionario {
   fecha                       DateTime @db.Date
   calificacion                String   @db.VarChar(20)
   comentario                  String?  @db.Text
+  calificador_nombre          String?  @db.VarChar(120)
+  calificador_celular         String?  @db.VarChar(30)
   device_id_hash              String   @db.VarChar(64)
   device_label                String?  @db.VarChar(255)
   user_agent                  String?  @db.Text

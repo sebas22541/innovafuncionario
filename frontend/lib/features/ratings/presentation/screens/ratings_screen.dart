@@ -298,6 +298,7 @@ class _RatingsScreenState extends State<RatingsScreen> {
           ci: qr.ci,
           cargo: qr.cargo,
           oficina: qr.oficina,
+          fotoUrl: '',
         ),
         token: qr.token,
         url: qr.url,
@@ -990,7 +991,15 @@ class _RatingSummaryTile extends StatelessWidget {
             for (final comment in comments.take(3))
               Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: Text('- ${comment.comentario}'),
+                child: Text(
+                  [
+                    '- ${comment.comentario}',
+                    if (comment.calificadorNombre.trim().isNotEmpty)
+                      'Nombre: ${comment.calificadorNombre}',
+                    if (comment.calificadorCelular.trim().isNotEmpty)
+                      'Celular: ${comment.calificadorCelular}',
+                  ].join(' | '),
+                ),
               ),
           ],
         ],

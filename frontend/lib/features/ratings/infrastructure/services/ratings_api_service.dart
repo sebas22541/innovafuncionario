@@ -64,11 +64,15 @@ class RatingsApiService {
     required String deviceId,
     required String deviceLabel,
     String comentario = '',
+    String calificadorNombre = '',
+    String calificadorCelular = '',
   }) async {
     await _apiClient
         .postJson('/api/calificaciones/publica/${Uri.encodeComponent(token)}', {
           'calificacion': calificacion,
           'comentario': comentario,
+          'calificadorNombre': calificadorNombre,
+          'calificadorCelular': calificadorCelular,
           'deviceId': deviceId,
           'deviceLabel': deviceLabel,
         });
@@ -214,17 +218,23 @@ class RatingComment {
   const RatingComment({
     required this.calificacion,
     required this.comentario,
+    required this.calificadorNombre,
+    required this.calificadorCelular,
     required this.createdAt,
   });
 
   final String calificacion;
   final String comentario;
+  final String calificadorNombre;
+  final String calificadorCelular;
   final DateTime createdAt;
 
   factory RatingComment.fromJson(Map<String, dynamic> source) {
     return RatingComment(
       calificacion: _readString(source['calificacion'], 'calificacion'),
       comentario: _readString(source['comentario'], 'comentario'),
+      calificadorNombre: source['calificadorNombre'] as String? ?? '',
+      calificadorCelular: source['calificadorCelular'] as String? ?? '',
       createdAt: DateTime.parse(
         _readString(source['createdAt'], 'createdAt'),
       ).toLocal(),
@@ -239,6 +249,7 @@ class RatingFuncionario {
     required this.ci,
     required this.cargo,
     required this.oficina,
+    required this.fotoUrl,
   });
 
   final int id;
@@ -246,6 +257,7 @@ class RatingFuncionario {
   final String ci;
   final String cargo;
   final String oficina;
+  final String fotoUrl;
 
   factory RatingFuncionario.fromJson(Map<String, dynamic> source) {
     return RatingFuncionario(
@@ -254,6 +266,7 @@ class RatingFuncionario {
       ci: _readString(source['ci'], 'ci'),
       cargo: _readString(source['cargo'], 'cargo'),
       oficina: _readString(source['oficina'], 'oficina'),
+      fotoUrl: source['fotoUrl'] as String? ?? '',
     );
   }
 }

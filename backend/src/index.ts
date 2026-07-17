@@ -4380,6 +4380,8 @@ async function ensureRuntimeSchema() {
       "fecha" DATE NOT NULL,
       "calificacion" VARCHAR(20) NOT NULL,
       "comentario" TEXT,
+      "calificador_nombre" VARCHAR(120),
+      "calificador_celular" VARCHAR(30),
       "device_id_hash" VARCHAR(64) NOT NULL,
       "device_label" VARCHAR(255),
       "user_agent" TEXT,
@@ -4395,6 +4397,12 @@ async function ensureRuntimeSchema() {
         ON DELETE CASCADE
         ON UPDATE NO ACTION
     )
+  `);
+
+  await pool.query(`
+    ALTER TABLE "calificaciones_funcionario"
+      ADD COLUMN IF NOT EXISTS "calificador_nombre" VARCHAR(120),
+      ADD COLUMN IF NOT EXISTS "calificador_celular" VARCHAR(30)
   `);
 
   await pool.query(`
@@ -11190,6 +11198,8 @@ function resolveEffectiveJobTitleName(user: any) {
 type SubmitFuncionarioRatingInput = {
   calificacion: "feliz" | "neutral" | "enojada";
   comentario: string | null;
+  calificadorNombre: string | null;
+  calificadorCelular: string | null;
   deviceId: string;
   deviceLabel: string | null;
 };
@@ -11220,6 +11230,8 @@ function parseSubmitFuncionarioRatingInput(
   return {
     calificacion,
     comentario: readOptionalString(body, "comentario", 0, 500),
+    calificadorNombre: readOptionalString(body, "calificadorNombre", 0, 120),
+    calificadorCelular: readOptionalString(body, "calificadorCelular", 0, 30),
     deviceId: readRequiredString(body, "deviceId", 8, 200),
     deviceLabel: readOptionalString(body, "deviceLabel", 0, 255),
   };
@@ -11361,7 +11373,22 @@ function serializeRatingFuncionario(user: any) {
     cargo: resolveEffectiveJobTitleName(user) ?? "",
     oficinaId: resolveLinkedOfficeId(user),
     oficina: resolveLinkedOfficeName(user) ?? user.unidad ?? "",
+    fotoUrl: user.foto_url ?? "",
   };
+}
+
+function normalizePublicPhotoSource(photoSource: string | null | undefined) {
+  const normalized = normalizeOptionalText(photoSource);
+
+  if (normalized == null) {
+    return null;
+  }
+
+  if (/^https?:\/\//i.test(normalized) || /^data:image\//i.test(normalized)) {
+    return normalized;
+  }
+
+  return `data:image/jpeg;base64,${normalized}`;
 }
 
 function buildPublicRatingPage(token: string, funcionario: any) {
@@ -11370,6 +11397,13 @@ function buildPublicRatingPage(token: string, funcionario: any) {
   const safeName = escapeHtml(funcionarioData.nombreCompleto);
   const safeCargo = escapeHtml(funcionarioData.cargo);
   const safeOffice = escapeHtml(funcionarioData.oficina);
+  const safeInitial = escapeHtml(
+    funcionarioData.nombreCompleto.trim().slice(0, 1).toUpperCase() || "F",
+  );
+  const safePhoto = normalizePublicPhotoSource(funcionarioData.fotoUrl);
+  const photoMarkup = safePhoto == null
+    ? `<div class="person-photo fallback">${safeInitial}</div>`
+    : `<img class="person-photo" src="${escapeHtml(safePhoto)}" alt="${safeName}">`;
   const logoMarkup = PUBLIC_RATING_LOGO_SRC == null
     ? ``
     : `<img class="brand-logo" src="${PUBLIC_RATING_LOGO_SRC}" alt="Innova Funcionario">`;
@@ -11454,6 +11488,24 @@ function buildPublicRatingPage(token: string, funcionario: any) {
       margin-bottom: 26px;
       line-height: 1.4;
     }
+    .person-photo {
+      width: 156px;
+      height: 156px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 18px;
+      border-radius: 34px;
+      object-fit: cover;
+      border: 4px solid #fff;
+      box-shadow: 0 18px 42px rgba(84, 64, 126, .18);
+      background: var(--surface-soft);
+    }
+    .person-photo.fallback {
+      color: var(--night-deep);
+      background: rgba(109, 86, 160, .12);
+      font-size: 52px;
+      font-weight: 800;
+    }
     .person strong {
       display: block;
       color: var(--ink);
@@ -11506,11 +11558,10 @@ function buildPublicRatingPage(token: string, funcionario: any) {
       font-size: 18px;
       font-weight: 700;
     }
+    input,
     textarea {
       width: 100%;
       margin-top: 12px;
-      min-height: 132px;
-      resize: vertical;
       border: 1.5px solid var(--line);
       border-radius: 18px;
       background: var(--surface);
@@ -11520,12 +11571,30 @@ function buildPublicRatingPage(token: string, funcionario: any) {
       outline: none;
       transition: border-color .16s ease, box-shadow .16s ease;
     }
+    input::placeholder,
     textarea::placeholder {
       color: var(--muted);
     }
+    input {
+      min-height: 56px;
+    }
+    textarea {
+      min-height: 132px;
+      resize: vertical;
+    }
+    input:focus,
     textarea:focus {
       border-color: var(--night);
       box-shadow: 0 0 0 4px rgba(109, 86, 160, .10);
+    }
+    .optional-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 20px;
+    }
+    .optional-grid label {
+      margin-top: 0;
     }
     .submit {
       width: 100%;
@@ -11612,6 +11681,14 @@ function buildPublicRatingPage(token: string, funcionario: any) {
       button.rating span {
         font-size: 36px;
       }
+      .person-photo {
+        width: 132px;
+        height: 132px;
+        border-radius: 30px;
+      }
+      .optional-grid {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -11622,6 +11699,7 @@ function buildPublicRatingPage(token: string, funcionario: any) {
       <div class="content">
         <h1>Califica la atenci&oacute;n</h1>
         <div class="person">
+          ${photoMarkup}
           <strong>${safeName}</strong>
           <div class="muted">${safeCargo}</div>
           <div class="muted">${safeOffice}</div>
@@ -11630,6 +11708,14 @@ function buildPublicRatingPage(token: string, funcionario: any) {
           <button class="rating" type="button" data-rating="feliz"><span>&#128578;</span>Feliz</button>
           <button class="rating" type="button" data-rating="neutral"><span>&#128528;</span>Neutral</button>
           <button class="rating" type="button" data-rating="enojada"><span>&#128577;</span>Enojada</button>
+        </div>
+        <div class="optional-grid">
+          <label for="calificadorNombre">Tu nombre opcional
+            <input id="calificadorNombre" maxlength="120" autocomplete="name" placeholder="Nombre">
+          </label>
+          <label for="calificadorCelular">Tu celular opcional
+            <input id="calificadorCelular" maxlength="30" inputmode="tel" autocomplete="tel" placeholder="Celular">
+          </label>
         </div>
         <label for="comentario">Comentario opcional</label>
         <textarea id="comentario" maxlength="500" placeholder="Escribe un comentario si lo deseas"></textarea>
@@ -11674,6 +11760,8 @@ function buildPublicRatingPage(token: string, funcionario: any) {
           body: JSON.stringify({
             calificacion: selectedRating,
             comentario: document.getElementById("comentario").value.trim(),
+            calificadorNombre: document.getElementById("calificadorNombre").value.trim(),
+            calificadorCelular: document.getElementById("calificadorCelular").value.trim(),
             deviceId: readOrCreateDeviceId(),
             deviceLabel: navigator.userAgent || "Navegador"
           })
@@ -11752,6 +11840,8 @@ async function submitFuncionarioRating({
           "fecha",
           "calificacion",
           "comentario",
+          "calificador_nombre",
+          "calificador_celular",
           "device_id_hash",
           "device_label",
           "user_agent",
@@ -11762,7 +11852,7 @@ async function submitFuncionarioRating({
           "funcionario_oficina_id",
           "funcionario_oficina"
         )
-        VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING "id", "fecha", "calificacion", "created_at"
       `,
       [
@@ -11770,6 +11860,8 @@ async function submitFuncionarioRating({
         fecha,
         input.calificacion,
         input.comentario,
+        input.calificadorNombre,
+        input.calificadorCelular,
         deviceHash,
         input.deviceLabel,
         readSingleHeader(request.headers["user-agent"]) ?? null,
@@ -11874,6 +11966,8 @@ async function loadFuncionarioRatingsSummary(
               'id', c."id",
               'calificacion', c."calificacion",
               'comentario', COALESCE(c."comentario", ''),
+              'calificadorNombre', COALESCE(c."calificador_nombre", ''),
+              'calificadorCelular', COALESCE(c."calificador_celular", ''),
               'createdAt', c."created_at"
             )
             ORDER BY c."created_at" DESC
