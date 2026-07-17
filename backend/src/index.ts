@@ -415,15 +415,19 @@ const server = http.createServer(async (request, response) => {
       const input = parseFuncionarioRatingsLookupInput(await readJsonBody(request));
 
       if (input.type === "ci") {
-        sendPlainJson(response, 200, await loadFuncionarioRatingsByCi(input.cis[0]));
+        sendPlainJson(
+          response,
+          200,
+          await loadFuncionarioRatingsByCi(input.cis[0], input.dateRange),
+        );
         return;
       }
 
       sendPlainJson(response, 200, {
         data:
           input.type === "oficina"
-            ? await loadFuncionarioRatingsByOffice(input.oficinaId)
-            : await loadFuncionarioRatingsByCis(input.cis),
+            ? await loadFuncionarioRatingsByOffice(input.oficinaId, input.dateRange)
+            : await loadFuncionarioRatingsByCis(input.cis, input.dateRange),
       });
       return;
     }
@@ -5595,6 +5599,11 @@ function parseLoginInput(payload: unknown): LoginInput {
 }
 
 // INICIO SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
+type FuncionarioRatingDateRange = {
+  fechaInicio: Date | null;
+  fechaFin: Date | null;
+};
+
 function parseFuncionarioCiLookupInput(payload: unknown) {
   const body = expectRecord(payload);
 
@@ -5605,12 +5614,14 @@ function parseFuncionarioCiLookupInput(payload: unknown) {
 
 function parseFuncionarioRatingsLookupInput(payload: unknown) {
   const body = expectRecord(payload);
+  const dateRange = readFuncionarioRatingDateRange(body);
   const ci = readOptionalString(body, "ci", 1, 30);
 
   if (ci != null) {
     return {
       type: "ci" as const,
       cis: [ci],
+      dateRange,
     };
   }
 
@@ -5620,6 +5631,7 @@ function parseFuncionarioRatingsLookupInput(payload: unknown) {
     return {
       type: "oficina" as const,
       oficinaId,
+      dateRange,
     };
   }
 
@@ -5636,10 +5648,55 @@ function parseFuncionarioRatingsLookupInput(payload: unknown) {
   return {
     type: "cis" as const,
     cis,
+    dateRange,
   };
 }
 
-async function loadFuncionarioRatingsByCis(cis: string[]) {
+function readFuncionarioRatingDateRange(
+  body: JsonRecord,
+): FuncionarioRatingDateRange {
+  const fechaInicio = readOptionalDateOnly(body, "fechaInicio");
+  const fechaFin = readOptionalDateOnly(body, "fechaFin");
+
+  if (
+    fechaInicio != null &&
+    fechaFin != null &&
+    fechaInicio.getTime() > fechaFin.getTime()
+  ) {
+    throw new HttpError(400, "fechaInicio no puede ser mayor que fechaFin.");
+  }
+
+  return {
+    fechaInicio,
+    fechaFin,
+  };
+}
+
+function buildFuncionarioRatingDateSql(
+  dateRange: FuncionarioRatingDateRange,
+  params: unknown[],
+) {
+  const filters = [] as string[];
+
+  if (dateRange.fechaInicio != null) {
+    params.push(dateRange.fechaInicio);
+    filters.push(`AND c."fecha" >= $${params.length}::date`);
+  }
+
+  if (dateRange.fechaFin != null) {
+    params.push(dateRange.fechaFin);
+    filters.push(`AND c."fecha" <= $${params.length}::date`);
+  }
+
+  return filters.join("\n");
+}
+
+async function loadFuncionarioRatingsByCis(
+  cis: string[],
+  dateRange: FuncionarioRatingDateRange,
+) {
+  const params = [cis] as unknown[];
+  const dateSql = buildFuncionarioRatingDateSql(dateRange, params);
   const result = await pool.query<{
     ci: string;
     buenas: number;
@@ -5655,10 +5712,11 @@ async function loadFuncionarioRatingsByCis(cis: string[]) {
       FROM "usuarios" u
       LEFT JOIN "calificaciones_funcionario" c
         ON c."funcionario_id" = u."id"
+        ${dateSql}
       WHERE u."ci" = ANY($1::text[])
       GROUP BY u."id", u."ci"
     `,
-    [cis],
+    params,
   );
   const ratingsByCi = new Map(
     result.rows.map((row) => [
@@ -5688,7 +5746,12 @@ async function loadFuncionarioRatingsByCis(cis: string[]) {
   });
 }
 
-async function loadFuncionarioRatingsByCi(ci: string) {
+async function loadFuncionarioRatingsByCi(
+  ci: string,
+  dateRange: FuncionarioRatingDateRange,
+) {
+  const params = [ci] as unknown[];
+  const dateSql = buildFuncionarioRatingDateSql(dateRange, params);
   const result = await pool.query<{
     ci: string;
     buenas: number;
@@ -5704,10 +5767,11 @@ async function loadFuncionarioRatingsByCi(ci: string) {
       FROM "usuarios" u
       LEFT JOIN "calificaciones_funcionario" c
         ON c."funcionario_id" = u."id"
+        ${dateSql}
       WHERE u."ci" = $1
       GROUP BY u."id", u."ci"
     `,
-    [ci],
+    params,
   );
   const row = result.rows[0];
 
@@ -5723,7 +5787,10 @@ async function loadFuncionarioRatingsByCi(ci: string) {
   };
 }
 
-async function loadFuncionarioRatingsByOffice(oficinaId: number) {
+async function loadFuncionarioRatingsByOffice(
+  oficinaId: number,
+  dateRange: FuncionarioRatingDateRange,
+) {
   const office = await prisma.oficinas.findUnique({
     where: { id: oficinaId },
     select: { id: true },
@@ -5733,6 +5800,8 @@ async function loadFuncionarioRatingsByOffice(oficinaId: number) {
     throw new HttpError(404, "No se encontro la oficina solicitada.");
   }
 
+  const params = [oficinaId] as unknown[];
+  const dateSql = buildFuncionarioRatingDateSql(dateRange, params);
   const result = await pool.query<{
     ci: string;
     buenas: number;
@@ -5748,13 +5817,14 @@ async function loadFuncionarioRatingsByOffice(oficinaId: number) {
       FROM "usuarios" u
       LEFT JOIN "calificaciones_funcionario" c
         ON c."funcionario_id" = u."id"
+        ${dateSql}
       WHERE u."activo" = TRUE
         AND COALESCE(u."oficina_comision_id", u."oficina_id") = $1
         AND NULLIF(TRIM(COALESCE(u."ci", '')), '') IS NOT NULL
       GROUP BY u."id", u."ci", u."nombre_completo"
       ORDER BY u."nombre_completo" ASC
     `,
-    [oficinaId],
+    params,
   );
 
   return result.rows.map((row) => ({
