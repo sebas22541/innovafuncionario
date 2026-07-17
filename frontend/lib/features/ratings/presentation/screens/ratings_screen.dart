@@ -35,6 +35,8 @@ class _RatingsScreenState extends State<RatingsScreen> {
   final TextEditingController _endDateController = TextEditingController();
   final TextEditingController _reportSearchController = TextEditingController();
   final TextEditingController _officeSearchController = TextEditingController();
+  final TextEditingController _qrOfficeSearchController =
+      TextEditingController();
   List<AppUser> _users = const [];
   List<CargoOption> _cargos = const [];
   List<OfficeOption> _offices = const [];
@@ -48,6 +50,8 @@ class _RatingsScreenState extends State<RatingsScreen> {
   bool _isGenerating = false;
   bool _isLoadingReport = false;
   bool _hasLoadedReport = false;
+  bool _isGeneratingOfficeQrs = false;
+  bool _isDeletingQr = false;
   bool _isExportingPdf = false;
   bool _isDownloadingQr = false;
   String _query = '';
@@ -56,11 +60,14 @@ class _RatingsScreenState extends State<RatingsScreen> {
   String _endDate = _todayText();
   CargoOption? _selectedCargo;
   OfficeOption? _selectedOffice;
+  OfficeOption? _selectedQrOffice;
   String _officeQuery = '';
+  String _qrOfficeQuery = '';
   _RatingsReportFilter? _activeReportFilter;
   Timer? _searchDebounce;
   Timer? _reportSearchDebounce;
   Timer? _officeSearchDebounce;
+  Timer? _qrOfficeSearchDebounce;
 
   List<AppUser> get _filteredUsers {
     final query = _normalize(_query);
@@ -100,6 +107,23 @@ class _RatingsScreenState extends State<RatingsScreen> {
         .toList(growable: false);
   }
 
+  List<OfficeOption> get _filteredQrOffices {
+    final query = _normalize(_qrOfficeQuery);
+
+    if (query.length < 2) {
+      return const [];
+    }
+
+    return _offices
+        .where(
+          (office) => _normalize(
+            '${office.name} ${office.code} ${office.level}',
+          ).contains(query),
+        )
+        .take(20)
+        .toList(growable: false);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -120,7 +144,9 @@ class _RatingsScreenState extends State<RatingsScreen> {
     _endDateController.dispose();
     _reportSearchController.dispose();
     _officeSearchController.dispose();
+    _qrOfficeSearchController.dispose();
     _officeSearchDebounce?.cancel();
+    _qrOfficeSearchDebounce?.cancel();
     super.dispose();
   }
 
@@ -225,10 +251,8 @@ class _RatingsScreenState extends State<RatingsScreen> {
 
     try {
       final report = await dependencies.ratingsApiService.fetchReport(
-        fechaInicio: filter == _RatingsReportFilter.dateRange
-            ? _startDate
-            : null,
-        fechaFin: filter == _RatingsReportFilter.dateRange ? _endDate : null,
+        fechaInicio: _startDate,
+        fechaFin: _endDate,
         cargoCodigo: filter == _RatingsReportFilter.cargo
             ? _selectedCargo?.code
             : null,
@@ -285,6 +309,116 @@ class _RatingsScreenState extends State<RatingsScreen> {
     } finally {
       if (mounted) {
         setState(() => _isGenerating = false);
+      }
+    }
+  }
+
+  Future<void> _generateOfficeQrs() async {
+    final office = _selectedQrOffice;
+
+    if (office == null || _isGeneratingOfficeQrs) {
+      AppAlert.showWarning(context, 'Selecciona una oficina.');
+      return;
+    }
+
+    setState(() => _isGeneratingOfficeQrs = true);
+
+    try {
+      final qrs = await dependencies.ratingsApiService.generateOfficeQrs(
+        oficinaId: office.id,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _ratingQr = qrs.isEmpty ? null : qrs.first;
+      });
+      await _loadActiveQrs();
+
+      if (mounted) {
+        AppAlert.showSuccess(
+          context,
+          'Se generaron ${qrs.length} QR para ${office.name}.',
+        );
+      }
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        AppAlert.showError(context, error.message);
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible generar los QR.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isGeneratingOfficeQrs = false);
+      }
+    }
+  }
+
+  Future<void> _deleteActiveQr(ActiveRatingQr qr) async {
+    if (_isDeletingQr) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Eliminar QR de calificacion'),
+        content: Text(
+          'Se desactivara el QR de ${qr.nombreCompleto}. Podras generarlo nuevamente cuando lo necesites.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(context).pop(true),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() => _isDeletingQr = true);
+
+    try {
+      await dependencies.ratingsApiService.deleteQr(
+        funcionarioId: qr.funcionarioId,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _activeQrs = _activeQrs
+            .where((item) => item.funcionarioId != qr.funcionarioId)
+            .toList(growable: false);
+        if (_ratingQr?.funcionario.id == qr.funcionarioId) {
+          _ratingQr = null;
+        }
+      });
+      AppAlert.showSuccess(context, 'QR eliminado.');
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        AppAlert.showError(context, error.message);
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible eliminar el QR.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDeletingQr = false);
       }
     }
   }
@@ -456,6 +590,13 @@ class _RatingsScreenState extends State<RatingsScreen> {
                   )
                   .toList(growable: false),
             ),
+            pw.SizedBox(height: 16),
+            pw.Text(
+              'Detalle de calificaciones por dia',
+              style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 8),
+            ...rows.expand(_buildRatingPdfDetails),
           ],
         ),
       );
@@ -577,6 +718,28 @@ class _RatingsScreenState extends State<RatingsScreen> {
     });
   }
 
+  void _onQrOfficeSearchChanged(String value) {
+    _qrOfficeSearchDebounce?.cancel();
+    _qrOfficeSearchDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _qrOfficeQuery = value;
+        _selectedQrOffice = null;
+      });
+    });
+  }
+
+  void _selectQrOffice(OfficeOption office) {
+    setState(() {
+      _selectedQrOffice = office;
+      _qrOfficeQuery = office.name;
+      _qrOfficeSearchController.text = office.name;
+    });
+  }
+
   void _selectReportOffice(OfficeOption office) {
     setState(() {
       _selectedOffice = office;
@@ -639,6 +802,70 @@ class _RatingsScreenState extends State<RatingsScreen> {
                       icon: Icons.manage_search_rounded,
                       text: 'Escribe al menos 2 letras para buscar.',
                     ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Generar QR por oficina',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _qrOfficeSearchController,
+                    onChanged: _onQrOfficeSearchChanged,
+                    decoration: InputDecoration(
+                      labelText: 'Buscar oficina',
+                      prefixIcon: const Icon(Icons.apartment_rounded),
+                      suffixIcon: _qrOfficeSearchController.text.trim().isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'Limpiar oficina',
+                              onPressed: () {
+                                _qrOfficeSearchDebounce?.cancel();
+                                setState(() {
+                                  _qrOfficeSearchController.clear();
+                                  _qrOfficeQuery = '';
+                                  _selectedQrOffice = null;
+                                });
+                              },
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                    ),
+                  ),
+                  if (_isLoadingOffices &&
+                      _qrOfficeQuery.trim().length >= 2) ...[
+                    const SizedBox(height: 10),
+                    const Center(child: CircularProgressIndicator()),
+                  ] else if (_qrOfficeQuery.trim().length >= 2 &&
+                      _selectedQrOffice == null) ...[
+                    const SizedBox(height: 10),
+                    if (_filteredQrOffices.isEmpty)
+                      const _SearchHint(
+                        icon: Icons.search_off_rounded,
+                        text: 'No se encontraron oficinas.',
+                      )
+                    else
+                      _OfficeSelectList(
+                        offices: _filteredQrOffices,
+                        onSelected: _selectQrOffice,
+                      ),
+                  ],
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton.icon(
+                      onPressed:
+                          _isGeneratingOfficeQrs || _selectedQrOffice == null
+                          ? null
+                          : _generateOfficeQrs,
+                      icon: _isGeneratingOfficeQrs
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.qr_code_2_rounded),
+                      label: const Text('Generar QR de toda la oficina'),
+                    ),
+                  ),
                   if (qr != null) ...[
                     const SizedBox(height: 22),
                     Center(
@@ -714,6 +941,9 @@ class _RatingsScreenState extends State<RatingsScreen> {
                             (qr) => _ActiveQrTile(
                               qr: qr,
                               onTap: () => _showActiveQr(qr),
+                              onDelete: _isDeletingQr
+                                  ? null
+                                  : () => _deleteActiveQr(qr),
                             ),
                           )
                           .toList(growable: false),
@@ -940,9 +1170,7 @@ class _RatingSummaryTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final comments = summary.comentarios
-        .where((comment) => comment.comentario.trim().isNotEmpty)
-        .toList(growable: false);
+    final groupedComments = _groupRatingCommentsByDay(summary.comentarios);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -974,33 +1202,35 @@ class _RatingSummaryTile extends StatelessWidget {
             children: [
               _CountPill(
                 icon: Icons.sentiment_satisfied_alt_rounded,
+                label: 'Bueno',
                 value: summary.feliz,
               ),
               _CountPill(
                 icon: Icons.sentiment_neutral_rounded,
+                label: 'Regular',
                 value: summary.neutral,
               ),
               _CountPill(
                 icon: Icons.sentiment_very_dissatisfied_rounded,
+                label: 'Mala',
                 value: summary.enojada,
               ),
             ],
           ),
-          if (comments.isNotEmpty) ...[
+          if (groupedComments.isNotEmpty) ...[
             const SizedBox(height: 12),
-            for (final comment in comments.take(3))
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  [
-                    '- ${comment.comentario}',
-                    if (comment.calificadorNombre.trim().isNotEmpty)
-                      'Nombre: ${comment.calificadorNombre}',
-                    if (comment.calificadorCelular.trim().isNotEmpty)
-                      'Celular: ${comment.calificadorCelular}',
-                  ].join(' | '),
-                ),
-              ),
+            Text(
+              'Detalle por dia',
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            for (final entry in groupedComments.entries)
+              _RatingDayGroup(dayLabel: entry.key, comments: entry.value),
+          ] else ...[
+            const SizedBox(height: 12),
+            const Text('Sin calificaciones registradas en este rango.'),
           ],
         ],
       ),
@@ -1040,6 +1270,138 @@ class _RatingSummaryGrid extends StatelessWidget {
               .toList(growable: false),
         );
       },
+    );
+  }
+}
+
+class _RatingDayGroup extends StatelessWidget {
+  const _RatingDayGroup({required this.dayLabel, required this.comments});
+
+  final String dayLabel;
+  final List<RatingComment> comments;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.calendar_today_rounded, size: 16),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  dayLabel,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              Text(
+                '${comments.length} ${comments.length == 1 ? 'calificacion' : 'calificaciones'}',
+                style: const TextStyle(
+                  color: AppPalette.muted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          for (final comment in comments) _RatingDetailRow(comment: comment),
+        ],
+      ),
+    );
+  }
+}
+
+class _RatingDetailRow extends StatelessWidget {
+  const _RatingDetailRow({required this.comment});
+
+  final RatingComment comment;
+
+  @override
+  Widget build(BuildContext context) {
+    final details = [
+      if (comment.calificadorNombre.trim().isNotEmpty)
+        'Nombre: ${comment.calificadorNombre.trim()}',
+      if (comment.calificadorCelular.trim().isNotEmpty)
+        'Celular: ${comment.calificadorCelular.trim()}',
+      if (comment.comentario.trim().isNotEmpty)
+        'Comentario: ${comment.comentario.trim()}',
+    ];
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppPalette.surfaceSoft,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 10,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _SmallMetaPill(
+                icon: Icons.schedule_rounded,
+                text: _formatRatingTime(comment.createdAt),
+              ),
+              _SmallMetaPill(
+                icon: _ratingIcon(comment.calificacion),
+                text: _ratingLabel(comment.calificacion),
+              ),
+            ],
+          ),
+          if (details.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            for (final detail in details)
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Text(detail),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SmallMetaPill extends StatelessWidget {
+  const _SmallMetaPill({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppPalette.line),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15),
+          const SizedBox(width: 4),
+          Text(text, style: const TextStyle(fontWeight: FontWeight.w700)),
+        ],
+      ),
     );
   }
 }
@@ -1127,10 +1489,15 @@ class _OfficeSelectList extends StatelessWidget {
 }
 
 class _ActiveQrTile extends StatelessWidget {
-  const _ActiveQrTile({required this.qr, required this.onTap});
+  const _ActiveQrTile({
+    required this.qr,
+    required this.onTap,
+    required this.onDelete,
+  });
 
   final ActiveRatingQr qr;
   final VoidCallback onTap;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1154,7 +1521,17 @@ class _ActiveQrTile extends StatelessWidget {
             qr.oficina,
           ].where((value) => value.trim().isNotEmpty).join(' | '),
         ),
-        trailing: const Icon(Icons.chevron_right_rounded),
+        trailing: Wrap(
+          spacing: 4,
+          children: [
+            IconButton(
+              tooltip: 'Eliminar QR',
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline_rounded),
+            ),
+            const Icon(Icons.chevron_right_rounded),
+          ],
+        ),
       ),
     );
   }
@@ -1188,9 +1565,14 @@ class _SearchHint extends StatelessWidget {
 }
 
 class _CountPill extends StatelessWidget {
-  const _CountPill({required this.icon, required this.value});
+  const _CountPill({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
 
   final IconData icon;
+  final String label;
   final int value;
 
   @override
@@ -1206,6 +1588,8 @@ class _CountPill extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, size: 20),
+          const SizedBox(width: 4),
+          Text(label),
           const SizedBox(width: 4),
           Text('$value', style: const TextStyle(fontWeight: FontWeight.w700)),
         ],
@@ -1238,6 +1622,144 @@ String _formatDate(DateTime date) {
   final month = date.month.toString().padLeft(2, '0');
   final day = date.day.toString().padLeft(2, '0');
   return '${date.year}-$month-$day';
+}
+
+Map<String, List<RatingComment>> _groupRatingCommentsByDay(
+  List<RatingComment> comments,
+) {
+  final sorted = [...comments]
+    ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+  final grouped = <String, List<RatingComment>>{};
+
+  for (final comment in sorted) {
+    final key = _formatRatingDay(comment.createdAt);
+    grouped.putIfAbsent(key, () => []).add(comment);
+  }
+
+  return grouped;
+}
+
+String _formatRatingDay(DateTime date) {
+  const months = [
+    'enero',
+    'febrero',
+    'marzo',
+    'abril',
+    'mayo',
+    'junio',
+    'julio',
+    'agosto',
+    'septiembre',
+    'octubre',
+    'noviembre',
+    'diciembre',
+  ];
+  final local = date.toLocal();
+
+  return '${local.day} de ${months[local.month - 1]} de ${local.year}';
+}
+
+String _formatRatingTime(DateTime date) {
+  final local = date.toLocal();
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+
+  return '$hour:$minute';
+}
+
+String _ratingLabel(String value) {
+  return switch (value) {
+    'feliz' => 'Bueno',
+    'neutral' => 'Regular',
+    'enojada' => 'Mala',
+    _ => value,
+  };
+}
+
+IconData _ratingIcon(String value) {
+  return switch (value) {
+    'feliz' => Icons.sentiment_satisfied_alt_rounded,
+    'neutral' => Icons.sentiment_neutral_rounded,
+    'enojada' => Icons.sentiment_very_dissatisfied_rounded,
+    _ => Icons.rate_review_outlined,
+  };
+}
+
+Iterable<pw.Widget> _buildRatingPdfDetails(RatingSummary summary) {
+  final grouped = _groupRatingCommentsByDay(summary.comentarios);
+
+  if (grouped.isEmpty) {
+    return const <pw.Widget>[];
+  }
+
+  return [
+    pw.Container(
+      width: double.infinity,
+      margin: const pw.EdgeInsets.only(top: 8),
+      padding: const pw.EdgeInsets.all(8),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey500, width: 0.5),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            '${summary.nombreCompleto} - CI ${summary.ci}',
+            style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
+          ),
+          pw.SizedBox(height: 4),
+          for (final dayEntry in grouped.entries) ...[
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.symmetric(
+                horizontal: 6,
+                vertical: 4,
+              ),
+              color: PdfColors.grey200,
+              child: pw.Text(
+                '${dayEntry.key} (${dayEntry.value.length})',
+                style: pw.TextStyle(
+                  fontSize: 9,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+            ),
+            pw.TableHelper.fromTextArray(
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              cellStyle: const pw.TextStyle(fontSize: 7),
+              cellAlignment: pw.Alignment.centerLeft,
+              columnWidths: const {
+                0: pw.FixedColumnWidth(42),
+                1: pw.FixedColumnWidth(58),
+                2: pw.FixedColumnWidth(90),
+                3: pw.FixedColumnWidth(70),
+                4: pw.FlexColumnWidth(),
+              },
+              headers: const [
+                'Hora',
+                'Calificacion',
+                'Nombre',
+                'Celular',
+                'Comentario',
+              ],
+              data: dayEntry.value
+                  .map(
+                    (comment) => [
+                      _formatRatingTime(comment.createdAt),
+                      _ratingLabel(comment.calificacion),
+                      comment.calificadorNombre,
+                      comment.calificadorCelular,
+                      comment.comentario,
+                    ],
+                  )
+                  .toList(growable: false),
+            ),
+            pw.SizedBox(height: 6),
+          ],
+        ],
+      ),
+    ),
+  ];
 }
 
 String _safeFileName(String value) {

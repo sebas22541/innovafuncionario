@@ -1605,6 +1605,52 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/calificaciones/qr/oficina") {
+      const requester = await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede generar QR de calificaciones por oficina.",
+      );
+      const input = parseGenerateFuncionarioRatingQrOfficeInput(
+        await readJsonBody(request),
+      );
+      const qrs = await generateFuncionarioRatingQrsForOffice({
+        officeId: input.oficinaId,
+        requester,
+        generatedById: authenticatedUser.id,
+      });
+
+      sendJson(response, 200, {
+        data: {
+          qrs,
+        },
+      });
+      return;
+    }
+
+    const ratingQrDeleteMatch = /^\/api\/calificaciones\/qr\/(\d+)$/.exec(
+      url.pathname,
+    );
+    if (request.method === "DELETE" && ratingQrDeleteMatch != null) {
+      const requester = await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede eliminar QR de calificaciones.",
+      );
+      const funcionarioId = Number.parseInt(ratingQrDeleteMatch[1] ?? "", 10);
+      const funcionario = await loadFuncionarioForRatingAdmin(
+        funcionarioId,
+        requester,
+      );
+      await deactivateFuncionarioRatingQr(funcionario.id);
+
+      sendJson(response, 200, {
+        data: {
+          eliminado: true,
+          funcionarioId: funcionario.id,
+        },
+      });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/usuarios") {
       await deactivateExpiredConsultantContracts();
       const requester = await assertUserManagerRequester(
@@ -11212,6 +11258,14 @@ function parseGenerateFuncionarioRatingQrInput(payload: unknown) {
   };
 }
 
+function parseGenerateFuncionarioRatingQrOfficeInput(payload: unknown) {
+  const body = expectRecord(payload);
+
+  return {
+    oficinaId: readRequiredInt(body, "oficinaId"),
+  };
+}
+
 function parseSubmitFuncionarioRatingInput(
   payload: unknown,
 ): SubmitFuncionarioRatingInput {
@@ -11351,6 +11405,18 @@ async function activateFuncionarioRatingQr({
   );
 }
 
+async function deactivateFuncionarioRatingQr(funcionarioId: number) {
+  await pool.query(
+    `
+      UPDATE "calificacion_funcionario_qrs"
+      SET "activo" = FALSE,
+          "updated_at" = CURRENT_TIMESTAMP
+      WHERE "funcionario_id" = $1
+    `,
+    [funcionarioId],
+  );
+}
+
 async function loadFuncionarioForRatingAdmin(funcionarioId: number, requester: any) {
   const funcionario = await prisma.usuarios.findUnique({
     where: { id: funcionarioId },
@@ -11363,6 +11429,57 @@ async function loadFuncionarioForRatingAdmin(funcionarioId: number, requester: a
 
   assertHealthAdminCanManageUser(requester, funcionario);
   return funcionario;
+}
+
+async function generateFuncionarioRatingQrsForOffice({
+  officeId,
+  requester,
+  generatedById,
+}: {
+  officeId: number;
+  requester: any;
+  generatedById: number;
+}) {
+  const selectedOffice = await prisma.oficinas.findUnique({
+    where: { id: officeId },
+  });
+
+  if (!selectedOffice) {
+    throw new HttpError(404, "No se encontro la oficina seleccionada.");
+  }
+
+  assertHealthAdminCanUseOffice(requester, selectedOffice);
+
+  const funcionarios = await prisma.usuarios.findMany({
+    where: {
+      activo: true,
+      email: { not: SEED_ADMIN_EMAIL },
+      OR: [{ oficina_id: officeId }, { oficina_comision_id: officeId }],
+    },
+    include: userWithOfficeInclude,
+    orderBy: [{ nombre_completo: "asc" }, { id: "asc" }],
+  });
+
+  const qrs = [];
+
+  for (const funcionario of funcionarios) {
+    assertHealthAdminCanManageUser(requester, funcionario);
+    const token = buildFuncionarioRatingToken(funcionario.id);
+
+    await activateFuncionarioRatingQr({
+      funcionarioId: funcionario.id,
+      token,
+      generatedById,
+    });
+
+    qrs.push({
+      funcionario: serializeRatingFuncionario(funcionario),
+      token,
+      url: buildFuncionarioRatingUrl(token),
+    });
+  }
+
+  return qrs;
 }
 
 function serializeRatingFuncionario(user: any) {

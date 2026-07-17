@@ -12,6 +12,27 @@ class RatingsApiService {
     return RatingQr.fromJson(_readMap(payload['data'], 'data'));
   }
 
+  Future<List<RatingQr>> generateOfficeQrs({required int oficinaId}) async {
+    final payload = await _apiClient.postJson(
+      '/api/calificaciones/qr/oficina',
+      {'oficinaId': oficinaId},
+    );
+    final data = _readMap(payload['data'], 'data');
+    final rows = data['qrs'];
+
+    if (rows is! List) {
+      throw StateError('Los QR generados no tienen un formato valido.');
+    }
+
+    return rows
+        .map((item) => RatingQr.fromJson(_readMap(item, 'qr')))
+        .toList(growable: false);
+  }
+
+  Future<void> deleteQr({required int funcionarioId}) async {
+    await _apiClient.deleteJson('/api/calificaciones/qr/$funcionarioId');
+  }
+
   Future<RatingReport> fetchReport({
     String? fechaInicio,
     String? fechaFin,
