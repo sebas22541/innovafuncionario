@@ -18,7 +18,7 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
-import { PDFDocument, StandardFonts } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
 import {
   generateAndStoreUserCredential,
@@ -383,7 +383,7 @@ const server = http.createServer(async (request, response) => {
       const token = decodeURIComponent(publicRatingPageMatch[1] ?? "");
       const funcionario = await resolveRatingTokenFuncionario(token);
 
-      sendHtml(response, 200, buildPublicRatingPage(token, funcionario));
+      sendHtml(response, 200, await buildPublicRatingPage(token, funcionario));
       return;
     }
 
@@ -11377,21 +11377,60 @@ function serializeRatingFuncionario(user: any) {
   };
 }
 
-function normalizePublicPhotoSource(photoSource: string | null | undefined) {
+async function normalizePublicPhotoSource(photoSource: string | null | undefined) {
   const normalized = normalizeOptionalText(photoSource);
 
   if (normalized == null) {
     return null;
   }
 
-  if (/^https?:\/\//i.test(normalized) || /^data:image\//i.test(normalized)) {
+  if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(normalized)) {
+    return normalized;
+  }
+
+  if (/^https?:\/\//i.test(normalized)) {
+    return await inlineRemotePublicPhoto(normalized) ?? normalized;
+  }
+
+  if (normalized.startsWith("/")) {
     return normalized;
   }
 
   return `data:image/jpeg;base64,${normalized}`;
 }
 
-function buildPublicRatingPage(token: string, funcionario: any) {
+async function inlineRemotePublicPhoto(url: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const contentType = response.headers.get("content-type") ?? "image/jpeg";
+
+    if (!contentType.toLowerCase().startsWith("image/")) {
+      return null;
+    }
+
+    const imageBytes = Buffer.from(await response.arrayBuffer());
+
+    if (imageBytes.length === 0) {
+      return null;
+    }
+
+    return `data:${contentType};base64,${imageBytes.toString("base64")}`;
+  } catch (_) {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function buildPublicRatingPage(token: string, funcionario: any) {
   const funcionarioData = serializeRatingFuncionario(funcionario);
   const safeToken = escapeHtml(token);
   const safeName = escapeHtml(funcionarioData.nombreCompleto);
@@ -11400,7 +11439,7 @@ function buildPublicRatingPage(token: string, funcionario: any) {
   const safeInitial = escapeHtml(
     funcionarioData.nombreCompleto.trim().slice(0, 1).toUpperCase() || "F",
   );
-  const safePhoto = normalizePublicPhotoSource(funcionarioData.fotoUrl);
+  const safePhoto = await normalizePublicPhotoSource(funcionarioData.fotoUrl);
   const photoMarkup = safePhoto == null
     ? `<div class="person-photo fallback">${safeInitial}</div>`
     : `<img class="person-photo" src="${escapeHtml(safePhoto)}" alt="${safeName}">`;
@@ -11489,8 +11528,8 @@ function buildPublicRatingPage(token: string, funcionario: any) {
       line-height: 1.4;
     }
     .person-photo {
-      width: 156px;
-      height: 156px;
+      width: 190px;
+      height: 190px;
       display: grid;
       place-items: center;
       margin: 0 auto 18px;
@@ -11682,8 +11721,8 @@ function buildPublicRatingPage(token: string, funcionario: any) {
         font-size: 36px;
       }
       .person-photo {
-        width: 132px;
-        height: 132px;
+        width: 150px;
+        height: 150px;
         border-radius: 30px;
       }
       .optional-grid {
@@ -12464,72 +12503,728 @@ async function loadSwornDeclarationForPdf(
 }
 
 async function buildSwornDeclarationPdf(record: any) {
-  const pdf = await PDFDocument.load(readSwornDeclarationTemplate());
+  const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
-  const pages = pdf.getPages();
-  const totalPages = Math.min(6, pages.length);
+  const context: SwornDeclarationPdfContext = {
+    pdf,
+    font,
+    boldFont,
+    record,
+    pageNumber: 0,
+  };
+  const payload = readSwornDeclarationPayloadRecord(record);
+  const doublePerception = readPayloadRecord(payload.doblePercepcion);
+  const sentences = readPayloadRecord(payload.sentenciasProcesos);
+  const incompatibilities = readPayloadRecord(payload.otrasIncompatibilidades);
+  const address = readPayloadRecord(payload.datosDomiciliarios);
+  const cityHall = readPayloadRecord(payload.familiaresAlcaldia);
+  const relatives = buildSwornDeclarationRelatives(record);
+  const cityHallRelatives = Array.isArray(cityHall.familiares)
+    ? cityHall.familiares.map((item: any) => readPayloadRecord(item))
+    : [];
 
-  for (let index = 0; index < totalPages; index++) {
-    drawSwornDeclarationHeader(pages[index], record, index + 1, totalPages, font);
+  let { page, y } = addSwornDeclarationPage(context);
+
+  y = drawSwornSectionTitle(context, page, "Datos del funcionario", y);
+  y = drawSwornInfoGrid(
+    context,
+    page,
+    [
+      ["Nombre completo", record.funcionario_nombre_completo],
+      ["Cedula de identidad", record.funcionario_ci],
+      ["Numero de item", record.funcionario_numero_item],
+      ["Cargo", record.funcionario_cargo],
+      ["Unidad / Oficina", record.funcionario_oficina],
+      ["Gestion", String(record.gestion ?? "")],
+      ["Fecha de registro", formatSwornDeclarationDate(record.created_at)],
+      ["Codigo", buildSwornDeclarationCode(record)],
+    ],
+    y,
+  );
+
+  y = drawSwornSectionTitle(context, page, "Resumen de declaracion", y - 8);
+  y = drawSwornChecklist(
+    context,
+    page,
+    [
+      [
+        "Doble percepcion",
+        doublePerception.percibeDoblePercepcion === true
+          ? "Declara percibir doble percepcion"
+          : "No declara doble percepcion",
+      ],
+      [
+        "Sentencias ejecutoriadas",
+        sentences.tieneSentencias === true ? "Si registra" : "No registra",
+      ],
+      [
+        "Procesos administrativos o judiciales",
+        sentences.tieneProcesos === true ? "Si registra" : "No registra",
+      ],
+      [
+        "Destitucion previa",
+        sentences.fueDestituido === true ? "Si registra" : "No registra",
+      ],
+      [
+        "Renta o pension",
+        incompatibilities.recibeRenta === true ? "Si registra" : "No registra",
+      ],
+      [
+        "Compromiso de matrimonio",
+        incompatibilities.compromisoMatrimonio === true ? "Declara compromiso" : "No declara",
+      ],
+      [
+        "Representacion de empresas",
+        incompatibilities.representaEmpresas === true ? "Si representa" : "No representa",
+      ],
+      [
+        "Familiares en la Alcaldia",
+        cityHall.tieneFamiliares === true ? "Si registra" : "No registra",
+      ],
+    ],
+    y,
+  );
+
+  ({ page, y } = addSwornDeclarationPage(context));
+  y = drawSwornSectionTitle(context, page, "Consanguinidad y afinidad", y);
+  y = drawSwornParagraph(
+    context,
+    page,
+    "Detalle de familiares declarados por el funcionario. Los campos sin informacion fueron dejados en blanco por el declarante.",
+    y,
+    10,
+  );
+  ({ page, y } = drawSwornRelativesTable(context, page, relatives, y - 6));
+
+  ({ page, y } = addSwornDeclarationPage(context));
+  y = drawSwornSectionTitle(context, page, "Doble percepcion", y);
+  y = drawSwornInfoGrid(
+    context,
+    page,
+    [
+      ["Percibe doble percepcion", doublePerception.percibeDoblePercepcion === true ? "SI" : "NO"],
+      ["Institucion", doublePerception.institucion],
+      ["Funcion", doublePerception.funcion],
+      ["Monto percibido", doublePerception.montoPercibe],
+      ["Remuneracion cargo actual", doublePerception.remuneracionCargoActual],
+      ["Monto total remuneracion", doublePerception.montoTotalRemuneracion],
+    ],
+    y,
+  );
+
+  y = drawSwornSectionTitle(context, page, "Sentencias y procesos", y - 8);
+  y = drawSwornInfoGrid(
+    context,
+    page,
+    [
+      ["Tiene sentencias", sentences.tieneSentencias === true ? "SI" : "NO"],
+      ["Detalle sentencias", sentences.detalleSentencias],
+      ["Tiene procesos", sentences.tieneProcesos === true ? "SI" : "NO"],
+      ["Detalle procesos", sentences.detalleProcesos],
+      ["Fue destituido", sentences.fueDestituido === true ? "SI" : "NO"],
+      ["Detalle destitucion", sentences.detalleDestitucion],
+    ],
+    y,
+  );
+
+  y = drawSwornSectionTitle(context, page, "Otras incompatibilidades", y - 8);
+  y = drawSwornInfoGrid(
+    context,
+    page,
+    [
+      ["Recibe renta o pension", incompatibilities.recibeRenta === true ? "SI" : "NO"],
+      ["Detalle renta", incompatibilities.detalleRenta],
+      ["Compromiso matrimonio", incompatibilities.compromisoMatrimonio === true ? "SI" : "NO"],
+      ["Representa empresas", incompatibilities.representaEmpresas === true ? "SI" : "NO"],
+      ["Nombre de empresa", incompatibilities.nombreEmpresa],
+    ],
+    y,
+  );
+
+  ({ page, y } = addSwornDeclarationPage(context));
+  y = drawSwornSectionTitle(context, page, "Datos domiciliarios", y);
+  y = drawSwornInfoGrid(
+    context,
+    page,
+    [
+      ["Barrio / Zona", address.barrioZona],
+      ["Calle / Avenida", address.calleAvenida],
+      ["Numero de domicilio", address.numeroDomicilio],
+      ["Tipo de vivienda", address.tipoVivienda],
+      ["Edificio", address.edificio],
+      ["Piso", address.piso],
+      ["Departamento", address.departamento],
+      ["Telefono celular", address.telefonoCelular],
+      ["Telefono referencia", address.telefonoReferencia],
+      ["Referencias", address.referencias],
+    ],
+    y,
+  );
+
+  const mapImage = await embedSwornDeclarationMapImage(pdf, address.mapaImagenPngBase64);
+  if (mapImage != null) {
+    y = drawSwornSectionTitle(context, page, "Ubicacion declarada", y - 8);
+    const mapWidth = 500;
+    const mapHeight = 190;
+
+    page.drawRectangle({
+      x: 47,
+      y: y - mapHeight - 8,
+      width: mapWidth,
+      height: mapHeight,
+      borderColor: swornPdfColors.line,
+      borderWidth: 1,
+    });
+    page.drawImage(mapImage, {
+      x: 48,
+      y: y - mapHeight - 7,
+      width: mapWidth - 2,
+      height: mapHeight - 2,
+    });
+    y -= mapHeight + 28;
   }
 
-  if (pages[0]) {
-    drawSwornDeclarationPageOne(pages[0], record, font);
+  if (cityHall.tieneFamiliares === true) {
+    if (y < 260) {
+      ({ page, y } = addSwornDeclarationPage(context));
+    }
+    y = drawSwornSectionTitle(context, page, "Familiares en la Alcaldia", y);
+    ({ page, y } = drawSwornCityHallRelativesTable(context, page, cityHallRelatives, y));
   }
 
-  if (pages[1]) {
-    drawSwornDeclarationPageTwo(pages[1], record, font);
+  if (y < 260) {
+    ({ page, y } = addSwornDeclarationPage(context));
   }
-
-  if (pages[3]) {
-    drawSwornDeclarationPageFour(pages[3], record, font, boldFont);
-  }
-
-  if (pages[4]) {
-    drawSwornDeclarationPageFive(pages[4], record, font, boldFont);
-  }
-
-  if (pages[5]) {
-    await drawSwornDeclarationPageSix(pdf, pages[5], record, font, boldFont);
-  }
-
-  while (pdf.getPageCount() > totalPages) {
-    pdf.removePage(pdf.getPageCount() - 1);
-  }
+  y = drawSwornSectionTitle(context, page, "Declaracion y firma", y - 4);
+  y = drawSwornParagraph(
+    context,
+    page,
+    "Declaro bajo juramento que la informacion consignada en el presente documento es veraz, completa y fidedigna. Tengo conocimiento de que la falsedad u omision de datos puede generar responsabilidad administrativa, civil y penal conforme a normativa vigente.",
+    y,
+    10.5,
+  );
+  drawSwornSignatureBlock(context, page, y - 46);
 
   pdf.setTitle(buildSwornDeclarationPdfFilename(record));
   pdf.setAuthor("Gobierno Autonomo Municipal de Cochabamba");
+  pdf.setSubject("Declaracion jurada de incompatibilidades");
+  pdf.setCreator("Innova Funcionario");
+  pdf.setProducer("Innova Funcionario");
 
   return pdf.save();
 }
 
-function readSwornDeclarationTemplate() {
-  const configuredPath = process.env.SWORN_DECLARATION_TEMPLATE_PATH?.trim();
-  const candidatePaths = [
-    ...(configuredPath ? [configuredPath] : []),
-    "../frontend/assets/templates/declaracion_jurada.pdf",
-    "frontend/assets/templates/declaracion_jurada.pdf",
-    "assets/templates/declaracion_jurada.pdf",
-  ];
-  const attemptedPaths: string[] = [];
+type SwornDeclarationPdfContext = {
+  pdf: any;
+  font: any;
+  boldFont: any;
+  record: any;
+  pageNumber: number;
+};
 
-  for (const candidatePath of candidatePaths) {
-    attemptedPaths.push(candidatePath);
+const swornPdfSize = { width: 595.28, height: 841.89 };
+const swornPdfMargin = 44;
+const swornPdfColors = {
+  night: rgb(0.24, 0.17, 0.39),
+  purple: rgb(0.43, 0.34, 0.63),
+  muted: rgb(0.42, 0.38, 0.51),
+  line: rgb(0.82, 0.81, 0.86),
+  soft: rgb(0.97, 0.96, 0.99),
+  chip: rgb(0.91, 0.88, 0.96),
+  white: rgb(1, 1, 1),
+};
 
-    try {
-      return readFileSync(candidatePath);
-    } catch (error: any) {
-      if (error?.code !== "ENOENT") {
-        throw error;
-      }
+function addSwornDeclarationPage(context: SwornDeclarationPdfContext) {
+  context.pageNumber += 1;
+  const page = context.pdf.addPage([swornPdfSize.width, swornPdfSize.height]);
+
+  drawSwornPageFrame(context, page);
+
+  return { page, y: swornPdfSize.height - 142 };
+}
+
+function drawSwornPageFrame(context: SwornDeclarationPdfContext, page: any) {
+  const { font, boldFont, record, pageNumber } = context;
+  const code = buildSwornDeclarationCode(record);
+
+  page.drawRectangle({
+    x: 0,
+    y: swornPdfSize.height - 96,
+    width: swornPdfSize.width,
+    height: 96,
+    color: swornPdfColors.purple,
+  });
+  page.drawText("GOBIERNO AUTONOMO MUNICIPAL DE COCHABAMBA", {
+    x: swornPdfMargin,
+    y: swornPdfSize.height - 38,
+    size: 9,
+    font: boldFont,
+    color: swornPdfColors.white,
+  });
+  page.drawText("DECLARACION JURADA", {
+    x: swornPdfMargin,
+    y: swornPdfSize.height - 68,
+    size: 24,
+    font: boldFont,
+    color: swornPdfColors.white,
+  });
+  page.drawText("Sistema Innova Funcionario", {
+    x: swornPdfMargin,
+    y: swornPdfSize.height - 84,
+    size: 8.5,
+    font,
+    color: swornPdfColors.white,
+  });
+  drawSwornBadge(page, code, swornPdfSize.width - 190, swornPdfSize.height - 56, 146, boldFont);
+
+  page.drawLine({
+    start: { x: swornPdfMargin, y: 54 },
+    end: { x: swornPdfSize.width - swornPdfMargin, y: 54 },
+    thickness: 0.5,
+    color: swornPdfColors.line,
+  });
+  page.drawText(`Pagina ${pageNumber}`, {
+    x: swornPdfSize.width - swornPdfMargin - 52,
+    y: 34,
+    size: 8,
+    font,
+    color: swornPdfColors.muted,
+  });
+  page.drawText("Documento generado digitalmente", {
+    x: swornPdfMargin,
+    y: 34,
+    size: 8,
+    font,
+    color: swornPdfColors.muted,
+  });
+}
+
+function drawSwornBadge(
+  page: any,
+  text: string,
+  x: number,
+  y: number,
+  width: number,
+  font: any,
+) {
+  page.drawRectangle({
+    x,
+    y,
+    width,
+    height: 28,
+    color: rgb(1, 1, 1),
+    opacity: 0.16,
+    borderColor: rgb(1, 1, 1),
+    borderWidth: 0.5,
+  });
+  page.drawText(fitPdfCellText(text, width - 18, 8.5), {
+    x: x + 9,
+    y: y + 10,
+    size: 8.5,
+    font,
+    color: swornPdfColors.white,
+  });
+}
+
+function drawSwornSectionTitle(
+  context: SwornDeclarationPdfContext,
+  page: any,
+  title: string,
+  y: number,
+) {
+  page.drawRectangle({
+    x: swornPdfMargin,
+    y: y - 28,
+    width: swornPdfSize.width - swornPdfMargin * 2,
+    height: 28,
+    color: swornPdfColors.chip,
+  });
+  page.drawText(title.toUpperCase(), {
+    x: swornPdfMargin + 12,
+    y: y - 19,
+    size: 11,
+    font: context.boldFont,
+    color: swornPdfColors.night,
+  });
+
+  return y - 42;
+}
+
+function drawSwornInfoGrid(
+  context: SwornDeclarationPdfContext,
+  page: any,
+  rows: Array<[string, unknown]>,
+  y: number,
+) {
+  const columnGap = 12;
+  const cellWidth = (swornPdfSize.width - swornPdfMargin * 2 - columnGap) / 2;
+  const cellHeight = 46;
+  let cursorY = y;
+
+  rows.forEach((row, index) => {
+    const column = index % 2;
+    const x = swornPdfMargin + column * (cellWidth + columnGap);
+
+    if (column === 0 && index > 0) {
+      cursorY -= cellHeight + 8;
     }
+
+    drawSwornInfoCell(context, page, x, cursorY, cellWidth, cellHeight, row[0], row[1]);
+  });
+
+  return cursorY - cellHeight - 10;
+}
+
+function drawSwornInfoCell(
+  context: SwornDeclarationPdfContext,
+  page: any,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  label: string,
+  value: unknown,
+) {
+  page.drawRectangle({
+    x,
+    y: y - height,
+    width,
+    height,
+    color: swornPdfColors.soft,
+    borderColor: swornPdfColors.line,
+    borderWidth: 0.7,
+  });
+  page.drawText(label.toUpperCase(), {
+    x: x + 10,
+    y: y - 15,
+    size: 7,
+    font: context.boldFont,
+    color: swornPdfColors.muted,
+  });
+  drawSwornWrappedText(
+    page,
+    normalizePdfValue(value) || "Sin dato",
+    x + 10,
+    y - 30,
+    width - 20,
+    9,
+    context.font,
+    swornPdfColors.night,
+    2,
+  );
+}
+
+function drawSwornChecklist(
+  context: SwornDeclarationPdfContext,
+  page: any,
+  rows: Array<[string, string]>,
+  y: number,
+) {
+  let cursorY = y;
+
+  rows.forEach(([label, value]) => {
+    page.drawCircle({
+      x: swornPdfMargin + 8,
+      y: cursorY - 8,
+      size: 4,
+      color: swornPdfColors.purple,
+    });
+    page.drawText(label, {
+      x: swornPdfMargin + 20,
+      y: cursorY - 12,
+      size: 9,
+      font: context.boldFont,
+      color: swornPdfColors.night,
+    });
+    drawSwornWrappedText(
+      page,
+      value,
+      swornPdfMargin + 190,
+      cursorY - 12,
+      330,
+      9,
+      context.font,
+      swornPdfColors.muted,
+      1,
+    );
+    cursorY -= 24;
+  });
+
+  return cursorY - 4;
+}
+
+function drawSwornParagraph(
+  context: SwornDeclarationPdfContext,
+  page: any,
+  text: string,
+  y: number,
+  size: number,
+) {
+  return drawSwornWrappedText(
+    page,
+    text,
+    swornPdfMargin,
+    y,
+    swornPdfSize.width - swornPdfMargin * 2,
+    size,
+    context.font,
+    swornPdfColors.night,
+  ) - 12;
+}
+
+function drawSwornRelativesTable(
+  context: SwornDeclarationPdfContext,
+  page: any,
+  rows: any[],
+  y: number,
+) {
+  const columns = [
+    ["Parentesco", 70],
+    ["Nombre completo", 145],
+    ["Ocupacion", 85],
+    ["Lugar trabajo", 95],
+    ["CI", 52],
+    ["Fallecido", 60],
+  ] as Array<[string, number]>;
+
+  if (rows.length === 0) {
+    y = drawSwornParagraph(context, page, "No se registraron familiares en esta seccion.", y, 10);
+    return { page, y };
   }
 
-  throw new HttpError(
-    500,
-    `No se encontro la plantilla de declaracion jurada. Rutas revisadas: ${attemptedPaths.join(", ")}`,
+  return drawSwornTable(
+    context,
+    page,
+    columns,
+    rows.map((row) => [
+      row.relationship,
+      row.fullName,
+      row.occupation,
+      row.workplace,
+      row.document,
+      row.deceased ?? "NO",
+    ]),
+    y,
   );
+}
+
+function drawSwornCityHallRelativesTable(
+  context: SwornDeclarationPdfContext,
+  page: any,
+  rows: Array<Record<string, any>>,
+  y: number,
+) {
+  const columns = [
+    ["Parentesco", 90],
+    ["Nombre completo", 180],
+    ["Cargo", 112],
+    ["Unidad", 125],
+  ] as Array<[string, number]>;
+
+  if (rows.length === 0) {
+    y = drawSwornParagraph(context, page, "El funcionario marco que tiene familiares en la Alcaldia, pero no registro filas de detalle.", y, 10);
+    return { page, y };
+  }
+
+  return drawSwornTable(
+    context,
+    page,
+    columns,
+    rows.map((row) => [
+      row.parentesco,
+      row.nombreCompleto,
+      row.cargo,
+      row.unidad,
+    ]),
+    y,
+  );
+}
+
+function drawSwornTable(
+  context: SwornDeclarationPdfContext,
+  currentPage: any,
+  columns: Array<[string, number]>,
+  rows: unknown[][],
+  startY: number,
+) {
+  let page = currentPage;
+  let y = startY;
+  const rowHeight = 34;
+  const tableWidth = columns.reduce((sum, [, width]) => sum + width, 0);
+
+  const drawHeader = () => {
+    let x = swornPdfMargin;
+    page.drawRectangle({
+      x,
+      y: y - 24,
+      width: tableWidth,
+      height: 24,
+      color: swornPdfColors.purple,
+    });
+    columns.forEach(([label, width]) => {
+      page.drawText(label.toUpperCase(), {
+        x: x + 6,
+        y: y - 16,
+        size: 7,
+        font: context.boldFont,
+        color: swornPdfColors.white,
+      });
+      x += width;
+    });
+    y -= 24;
+  };
+
+  drawHeader();
+
+  rows.forEach((row, rowIndex) => {
+    if (y < 96) {
+      ({ page, y } = addSwornDeclarationPage(context));
+      y = drawSwornSectionTitle(context, page, "Continuacion", y);
+      drawHeader();
+    }
+
+    let x = swornPdfMargin;
+    page.drawRectangle({
+      x,
+      y: y - rowHeight,
+      width: tableWidth,
+      height: rowHeight,
+      color: rowIndex % 2 === 0 ? rgb(1, 1, 1) : swornPdfColors.soft,
+      borderColor: swornPdfColors.line,
+      borderWidth: 0.4,
+    });
+    columns.forEach(([, width], columnIndex) => {
+      drawSwornWrappedText(
+        page,
+        normalizePdfValue(row[columnIndex]) || "-",
+        x + 6,
+        y - 11,
+        width - 10,
+        7,
+        context.font,
+        swornPdfColors.night,
+        2,
+      );
+      x += width;
+    });
+    y -= rowHeight;
+  });
+
+  return { page, y: y - 14 };
+}
+
+function drawSwornSignatureBlock(
+  context: SwornDeclarationPdfContext,
+  page: any,
+  y: number,
+) {
+  const lineWidth = 190;
+  const leftX = swornPdfMargin + 36;
+  const rightX = swornPdfSize.width - swornPdfMargin - lineWidth - 36;
+
+  drawSwornSignature(page, leftX, y, lineWidth, "Firma del declarante", context.boldFont);
+  drawSwornSignature(page, rightX, y, lineWidth, "Aclaracion de firma", context.boldFont);
+  page.drawText(`CI: ${normalizePdfValue(context.record.funcionario_ci) || "________________"}`, {
+    x: leftX,
+    y: y - 40,
+    size: 9,
+    font: context.font,
+    color: swornPdfColors.night,
+  });
+}
+
+function drawSwornSignature(
+  page: any,
+  x: number,
+  y: number,
+  width: number,
+  label: string,
+  font: any,
+) {
+  page.drawLine({
+    start: { x, y },
+    end: { x: x + width, y },
+    thickness: 0.8,
+    color: swornPdfColors.night,
+  });
+  page.drawText(label.toUpperCase(), {
+    x: x + 20,
+    y: y - 18,
+    size: 8,
+    font,
+    color: swornPdfColors.muted,
+  });
+}
+
+function drawSwornWrappedText(
+  page: any,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  size: number,
+  font: any,
+  color: any,
+  maxLines = Number.POSITIVE_INFINITY,
+) {
+  const lines = wrapSwornPdfText(text, font, size, maxWidth).slice(0, maxLines);
+  const lineHeight = size + 3;
+  let cursorY = y;
+
+  lines.forEach((line) => {
+    page.drawText(line, {
+      x,
+      y: cursorY,
+      size,
+      font,
+      color,
+    });
+    cursorY -= lineHeight;
+  });
+
+  return cursorY;
+}
+
+function wrapSwornPdfText(
+  text: string,
+  font: any,
+  size: number,
+  maxWidth: number,
+) {
+  const cleanText = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (cleanText.length === 0) {
+    return [""];
+  }
+
+  const words = cleanText.split(" ");
+  const lines: string[] = [];
+  let line = "";
+
+  words.forEach((word) => {
+    const candidate = line.length === 0 ? word : `${line} ${word}`;
+
+    if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
+      line = candidate;
+      return;
+    }
+
+    if (line.length > 0) {
+      lines.push(line);
+    }
+
+    line = word;
+  });
+
+  if (line.length > 0) {
+    lines.push(line);
+  }
+
+  return lines;
 }
 
 function drawSwornDeclarationHeader(
