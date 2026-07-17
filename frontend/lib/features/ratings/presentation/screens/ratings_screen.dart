@@ -20,6 +20,8 @@ import '../../infrastructure/services/ratings_api_service.dart';
 
 enum _RatingsReportFilter { dateRange, cargo, office, search }
 
+const _activeQrPageSize = 10;
+
 class RatingsScreen extends StatefulWidget {
   const RatingsScreen({super.key, required this.currentUser});
 
@@ -36,6 +38,8 @@ class _RatingsScreenState extends State<RatingsScreen> {
   final TextEditingController _reportSearchController = TextEditingController();
   final TextEditingController _officeSearchController = TextEditingController();
   final TextEditingController _qrOfficeSearchController =
+      TextEditingController();
+  final TextEditingController _activeQrSearchController =
       TextEditingController();
   List<AppUser> _users = const [];
   List<CargoOption> _cargos = const [];
@@ -63,11 +67,14 @@ class _RatingsScreenState extends State<RatingsScreen> {
   OfficeOption? _selectedQrOffice;
   String _officeQuery = '';
   String _qrOfficeQuery = '';
+  String _activeQrQuery = '';
+  int _activeQrPage = 0;
   _RatingsReportFilter? _activeReportFilter;
   Timer? _searchDebounce;
   Timer? _reportSearchDebounce;
   Timer? _officeSearchDebounce;
   Timer? _qrOfficeSearchDebounce;
+  Timer? _activeQrSearchDebounce;
 
   List<AppUser> get _filteredUsers {
     final query = _normalize(_query);
@@ -124,6 +131,22 @@ class _RatingsScreenState extends State<RatingsScreen> {
         .toList(growable: false);
   }
 
+  List<ActiveRatingQr> get _filteredActiveQrs {
+    final query = _normalize(_activeQrQuery);
+
+    if (query.isEmpty) {
+      return _activeQrs;
+    }
+
+    return _activeQrs
+        .where(
+          (qr) => _normalize(
+            '${qr.nombreCompleto} ${qr.ci} ${qr.cargo} ${qr.oficina}',
+          ).contains(query),
+        )
+        .toList(growable: false);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -145,8 +168,10 @@ class _RatingsScreenState extends State<RatingsScreen> {
     _reportSearchController.dispose();
     _officeSearchController.dispose();
     _qrOfficeSearchController.dispose();
+    _activeQrSearchController.dispose();
     _officeSearchDebounce?.cancel();
     _qrOfficeSearchDebounce?.cancel();
+    _activeQrSearchDebounce?.cancel();
     super.dispose();
   }
 
@@ -224,7 +249,10 @@ class _RatingsScreenState extends State<RatingsScreen> {
       if (!mounted) {
         return;
       }
-      setState(() => _activeQrs = qrs);
+      setState(() {
+        _activeQrs = qrs;
+        _activeQrPage = 0;
+      });
     } on BackendApiException catch (error) {
       if (mounted) {
         AppAlert.showError(context, error.message);
@@ -403,6 +431,7 @@ class _RatingsScreenState extends State<RatingsScreen> {
         _activeQrs = _activeQrs
             .where((item) => item.funcionarioId != qr.funcionarioId)
             .toList(growable: false);
+        _activeQrPage = _clampPage(_activeQrPage, _filteredActiveQrs.length);
         if (_ratingQr?.funcionario.id == qr.funcionarioId) {
           _ratingQr = null;
         }
@@ -740,6 +769,18 @@ class _RatingsScreenState extends State<RatingsScreen> {
     });
   }
 
+  void _onActiveQrSearchChanged(String value) {
+    _activeQrSearchDebounce?.cancel();
+    _activeQrSearchDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (mounted) {
+        setState(() {
+          _activeQrQuery = value;
+          _activeQrPage = 0;
+        });
+      }
+    });
+  }
+
   void _selectReportOffice(OfficeOption office) {
     setState(() {
       _selectedOffice = office;
@@ -757,6 +798,10 @@ class _RatingsScreenState extends State<RatingsScreen> {
   Widget build(BuildContext context) {
     final qr = _ratingQr;
     final filteredReport = _filteredReport;
+    final filteredActiveQrs = _filteredActiveQrs;
+    final activeQrPage = _clampPage(_activeQrPage, filteredActiveQrs.length);
+    final pagedActiveQrs = _pageItems(filteredActiveQrs, activeQrPage);
+    final activeQrTotalPages = _pageCount(filteredActiveQrs.length);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
@@ -934,20 +979,64 @@ class _RatingsScreenState extends State<RatingsScreen> {
                       icon: Icons.qr_code_2_rounded,
                       text: 'Todavia no hay QR activos de calificacion.',
                     )
-                  else
-                    Column(
-                      children: _activeQrs
-                          .map(
-                            (qr) => _ActiveQrTile(
-                              qr: qr,
-                              onTap: () => _showActiveQr(qr),
-                              onDelete: _isDeletingQr
-                                  ? null
-                                  : () => _deleteActiveQr(qr),
-                            ),
-                          )
-                          .toList(growable: false),
+                  else ...[
+                    TextField(
+                      controller: _activeQrSearchController,
+                      onChanged: _onActiveQrSearchChanged,
+                      decoration: InputDecoration(
+                        labelText: 'Buscar por nombre, CI u oficina',
+                        prefixIcon: const Icon(Icons.search_rounded),
+                        suffixIcon:
+                            _activeQrSearchController.text.trim().isEmpty
+                            ? null
+                            : IconButton(
+                                tooltip: 'Limpiar busqueda',
+                                onPressed: () {
+                                  _activeQrSearchDebounce?.cancel();
+                                  setState(() {
+                                    _activeQrSearchController.clear();
+                                    _activeQrQuery = '';
+                                    _activeQrPage = 0;
+                                  });
+                                },
+                                icon: const Icon(Icons.close_rounded),
+                              ),
+                      ),
                     ),
+                    const SizedBox(height: 10),
+                    if (filteredActiveQrs.isEmpty)
+                      const _SearchHint(
+                        icon: Icons.search_off_rounded,
+                        text: 'No hay QR activos para esa busqueda.',
+                      )
+                    else ...[
+                      _ActiveQrPaginationHeader(
+                        page: activeQrPage,
+                        totalPages: activeQrTotalPages,
+                        totalItems: filteredActiveQrs.length,
+                        onPrevious: activeQrPage == 0
+                            ? null
+                            : () => setState(() => _activeQrPage--),
+                        onNext: activeQrPage >= activeQrTotalPages - 1
+                            ? null
+                            : () => setState(() => _activeQrPage++),
+                      ),
+                      const SizedBox(height: 8),
+                      Column(
+                        children: pagedActiveQrs
+                            .map(
+                              (qr) => _ActiveQrTile(
+                                qr: qr,
+                                onTap: () => _showActiveQr(qr),
+                                onDelete: _isDeletingQr
+                                    ? null
+                                    : () => _deleteActiveQr(qr),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+                    ],
+                  ],
                 ],
               ),
             ),
@@ -1537,6 +1626,55 @@ class _ActiveQrTile extends StatelessWidget {
   }
 }
 
+class _ActiveQrPaginationHeader extends StatelessWidget {
+  const _ActiveQrPaginationHeader({
+    required this.page,
+    required this.totalPages,
+    required this.totalItems,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final int page;
+  final int totalPages;
+  final int totalItems;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final start = totalItems == 0 ? 0 : page * _activeQrPageSize + 1;
+    final end = (start + _activeQrPageSize - 1).clamp(0, totalItems);
+
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            'Mostrando $start-$end de $totalItems',
+            style: const TextStyle(
+              color: AppPalette.muted,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        IconButton.outlined(
+          tooltip: 'Anterior',
+          onPressed: onPrevious,
+          icon: const Icon(Icons.chevron_left_rounded),
+        ),
+        const SizedBox(width: 6),
+        Text('${page + 1}/$totalPages'),
+        const SizedBox(width: 6),
+        IconButton.outlined(
+          tooltip: 'Siguiente',
+          onPressed: onNext,
+          icon: const Icon(Icons.chevron_right_rounded),
+        ),
+      ],
+    );
+  }
+}
+
 class _SearchHint extends StatelessWidget {
   const _SearchHint({required this.icon, required this.text});
 
@@ -1622,6 +1760,31 @@ String _formatDate(DateTime date) {
   final month = date.month.toString().padLeft(2, '0');
   final day = date.day.toString().padLeft(2, '0');
   return '${date.year}-$month-$day';
+}
+
+int _pageCount(int itemCount) {
+  if (itemCount <= 0) {
+    return 1;
+  }
+
+  return ((itemCount - 1) ~/ _activeQrPageSize) + 1;
+}
+
+int _clampPage(int page, int itemCount) {
+  final totalPages = _pageCount(itemCount);
+
+  return page.clamp(0, totalPages - 1);
+}
+
+List<T> _pageItems<T>(List<T> items, int page) {
+  final start = page * _activeQrPageSize;
+
+  if (start >= items.length) {
+    return const [];
+  }
+
+  final end = (start + _activeQrPageSize).clamp(0, items.length);
+  return items.sublist(start, end);
 }
 
 Map<String, List<RatingComment>> _groupRatingCommentsByDay(
