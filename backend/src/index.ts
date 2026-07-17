@@ -11744,9 +11744,9 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
           <div class="muted">${safeOffice}</div>
         </div>
         <div class="ratings" role="group" aria-label="Calificaci&oacute;n">
-          <button class="rating" type="button" data-rating="feliz"><span>&#128578;</span>Feliz</button>
-          <button class="rating" type="button" data-rating="neutral"><span>&#128528;</span>Neutral</button>
-          <button class="rating" type="button" data-rating="enojada"><span>&#128577;</span>Enojada</button>
+          <button class="rating" type="button" data-rating="feliz"><span>&#128578;</span>Bueno</button>
+          <button class="rating" type="button" data-rating="neutral"><span>&#128528;</span>Regular</button>
+          <button class="rating" type="button" data-rating="enojada"><span>&#128577;</span>Mala</button>
         </div>
         <div class="optional-grid">
           <label for="calificadorNombre">Tu nombre opcional

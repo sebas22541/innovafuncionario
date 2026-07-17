@@ -438,9 +438,9 @@ class _RatingsScreenState extends State<RatingsScreen> {
                 'Nombre',
                 'Cargo',
                 'Oficina',
-                'Feliz',
-                'Neutral',
-                'Enojada',
+                'Bueno',
+                'Regular',
+                'Mala',
               ],
               data: rows
                   .map(
