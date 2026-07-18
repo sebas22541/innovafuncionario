@@ -42,6 +42,7 @@ class _QrWebAppState extends State<QrWebApp> {
   @override
   void initState() {
     super.initState();
+    BackendApiClient.onUnauthorizedSession = _handleUnauthorizedSession;
     FirebaseNotificationsService.configureNavigation(
       onOpenNotification: _openPushNotification,
       onNotificationsChanged: _handleNotificationsChanged,
@@ -49,6 +50,14 @@ class _QrWebAppState extends State<QrWebApp> {
       onForegroundNotificationReceived: _showForegroundNotification,
     );
     _restoreSession();
+  }
+
+  @override
+  void dispose() {
+    if (BackendApiClient.onUnauthorizedSession == _handleUnauthorizedSession) {
+      BackendApiClient.onUnauthorizedSession = null;
+    }
+    super.dispose();
   }
 
   Future<void> _restoreSession() async {
@@ -121,6 +130,20 @@ class _QrWebAppState extends State<QrWebApp> {
   }
 
   void _handleRemoteLogout() async {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _currentUser = null;
+      _initialSection = null;
+      _exitPermitRequestId = null;
+    });
+  }
+
+  Future<void> _handleUnauthorizedSession() async {
+    await FirebaseNotificationsService.unregisterCurrentDevice();
+
     if (!mounted) {
       return;
     }

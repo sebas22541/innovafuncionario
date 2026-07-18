@@ -629,9 +629,7 @@ const server = http.createServer(async (request, response) => {
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);
-      if (user.rol === rol_usuario.ALMUERZO) {
-        await revokeUserSessions(user.id);
-      }
+      await revokeUserSessions(user.id);
       const authToken = await createAuthToken(user);
 
       sendJson(response, 200, {
@@ -10881,9 +10879,7 @@ async function loadSerializedAssignedEventSummaries(requester: AuthenticatedUser
           : []),
       ],
     },
-    select: {
-      id: true,
-    },
+    include: personIdentityInclude,
   });
   const whereParts: Prisma.eventosWhereInput[] = [
     {
@@ -10918,11 +10914,24 @@ async function loadSerializedAssignedEventSummaries(requester: AuthenticatedUser
     orderBy: [{ fecha_evento: "asc" }, { id: "asc" }],
     include: eventSummaryInclude,
   });
+  const assignedEvents = [];
+
+  for (const event of events) {
+    if (linkedPerson == null) {
+      continue;
+    }
+
+    const requirement = await resolvePersonEventRequirement(linkedPerson, event);
+
+    if (requirement.obligatorio) {
+      assignedEvents.push(event);
+    }
+  }
   const attendanceCountMap = await loadEventAttendanceCountMap(
-    events.map((event) => event.id),
+    assignedEvents.map((event) => event.id),
   );
 
-  return events.map((event) =>
+  return assignedEvents.map((event) =>
     serializeEventSummary(event, attendanceCountMap.get(event.id)),
   );
 }

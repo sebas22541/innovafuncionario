@@ -25,6 +25,7 @@ class BackendApiClient {
 
   final http.Client _client;
   final String _baseUrl;
+  static Future<void> Function()? onUnauthorizedSession;
   static final AesGcm _payloadCipher = AesGcm.with256bits();
   static final Random _secureRandom = Random.secure();
   static Future<SecretKey>? _payloadSecretKey;
@@ -176,6 +177,15 @@ class BackendApiClient {
         resolvedPayload['error'] as String? ??
         resolvedPayload['details'] as String? ??
         'No fue posible completar la solicitud.';
+
+    if (response.statusCode == 401) {
+      final token = await SessionStore.readAuthToken();
+
+      if (token != null) {
+        await SessionStore.clearSession();
+        await onUnauthorizedSession?.call();
+      }
+    }
 
     throw BackendApiException(
       message: errorMessage,
