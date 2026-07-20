@@ -168,7 +168,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
       return;
     }
 
-    if (section == AppSection.myQr && _currentUser.isExternalUser) {
+    if (section == AppSection.myQr &&
+        (_currentUser.isExternalUser || _currentUser.isScopedUserAdmin)) {
       _openMyQrDialog();
       return;
     }
@@ -2218,7 +2219,12 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
   }
 
   if (user.isScopedUserAdmin) {
-    return const [AppSection.users, AppSection.credentials];
+    return const [
+      AppSection.users,
+      AppSection.credentials,
+      AppSection.myQr,
+      AppSection.settings,
+    ];
   }
 
   if (user.isAdmin) {
@@ -2380,6 +2386,17 @@ String _sectionTitleForUser(AppUser user, AppSection section) {
     return section.title;
   }
 
+  if (user.isScopedUserAdmin) {
+    switch (section) {
+      case AppSection.myQr:
+        return 'Mi QR';
+      case AppSection.settings:
+        return 'Mi perfil';
+      default:
+        return section.title;
+    }
+  }
+
   if (user.isControl) {
     switch (section) {
       case AppSection.home:
@@ -2432,6 +2449,17 @@ String _sectionTitleForUser(AppUser user, AppSection section) {
 }
 
 String _sectionLabelForUser(AppUser user, AppSection section) {
+  if (user.isScopedUserAdmin) {
+    switch (section) {
+      case AppSection.myQr:
+        return 'Mi QR';
+      case AppSection.settings:
+        return 'Perfil';
+      default:
+        return section.label;
+    }
+  }
+
   if (user.isControl) {
     switch (section) {
       case AppSection.home:
@@ -2486,6 +2514,17 @@ String _sectionLabelForUser(AppUser user, AppSection section) {
 }
 
 IconData _sectionIconForUser(AppUser user, AppSection section) {
+  if (user.isScopedUserAdmin) {
+    switch (section) {
+      case AppSection.myQr:
+        return Icons.qr_code_2_rounded;
+      case AppSection.settings:
+        return Icons.person_outline_rounded;
+      default:
+        return section.icon;
+    }
+  }
+
   if (user.isControl) {
     switch (section) {
       case AppSection.home:
