@@ -1044,8 +1044,6 @@ class _CredentialErrorView extends StatelessWidget {
 }
 
 class _MyQrDialogState extends State<MyQrDialog> {
-  static const String _signedStaticQrPrefix = 'DQR1.';
-
   Timer? _countdownTimer;
   DynamicQrSession? _dynamicQrSession;
   Duration _remaining = Duration.zero;
@@ -1162,9 +1160,7 @@ class _MyQrDialogState extends State<MyQrDialog> {
   DynamicQrSession? _readStoredStaticQrSession() {
     final storedPayload = widget.currentUser.qrPayload?.trim();
 
-    if (storedPayload == null ||
-        storedPayload.isEmpty ||
-        !storedPayload.startsWith(_signedStaticQrPrefix)) {
+    if (storedPayload == null || storedPayload.isEmpty) {
       return null;
     }
 

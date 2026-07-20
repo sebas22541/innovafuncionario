@@ -21,6 +21,7 @@ import { Pool } from "pg";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
 import {
+  CLOUDINARY,
   generateAndStoreUserCredential,
   generateUserCredentialPdf,
   storeUserProfilePhoto,
@@ -8159,7 +8160,7 @@ function buildStaticDynamicQrSession(person: any, user: any) {
 
   return {
     qrCode,
-    qrPayload: buildDynamicQrPayload(qrCode, STATIC_DYNAMIC_QR_EXPIRES_AT),
+    qrPayload: buildUserQrPayload(user, qrCode),
     generatedAt: generatedAt.toISOString(),
     expiresAt: STATIC_DYNAMIC_QR_EXPIRES_AT.toISOString(),
     ttlSeconds: 0,
@@ -9289,10 +9290,43 @@ function buildUserQrPayloadObject(user: any, qrCode: string) {
   };
 }
 
-function buildUserQrPayload(_: any, qrCode: string) {
-  // El QR visible del perfil usa un token firmado y estable.
-  // No depende de ubicacion, no rota y queda valido para el escaner del evento.
-  return buildDynamicQrPayload(qrCode, STATIC_DYNAMIC_QR_EXPIRES_AT);
+function buildUserQrPayload(user: any, qrCode: string) {
+  // El QR visible del perfil replica el payload publico de la credencial.
+  // Si Cloudinary no esta configurado, conserva el token firmado estable anterior.
+  return buildCredentialCloudinaryQrPayload(user, qrCode) ??
+    buildDynamicQrPayload(qrCode, STATIC_DYNAMIC_QR_EXPIRES_AT);
+}
+
+function buildCredentialCloudinaryQrPayload(user: any, qrCode: string) {
+  const cloudName = normalizeOptionalText(CLOUDINARY.cloud_name);
+
+  if (cloudName == null) {
+    return null;
+  }
+
+  const token = normalizeCredentialPublicToken(user.ci) ?? `id-${user.id}`;
+  const publicId = `credencial-frente-pdf-${token}`;
+  const pathParts = ["imagenes", "credenciales", publicId]
+    .map(encodeURIComponent)
+    .join("/");
+  const frontImageUrl =
+    `https://res.cloudinary.com/${encodeURIComponent(cloudName)}/image/upload/pg_1,dn_400,w_1200,f_jpg,q_auto:best/${pathParts}.jpg`;
+  const separator = frontImageUrl.includes("?") ? "&" : "?";
+
+  return `${frontImageUrl}${separator}codigoQr=${encodeURIComponent(qrCode)}`;
+}
+
+function normalizeCredentialPublicToken(value: unknown) {
+  const normalizedValue = normalizeOptionalText(value)?.toLowerCase();
+
+  if (!normalizedValue) {
+    return null;
+  }
+
+  return normalizedValue
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
 }
 
 function buildStoredUserQrMetadata(
