@@ -27,9 +27,12 @@ const Map<int, pw.TableColumnWidth> _personnelPdfColumnWidths = {
   7: pw.FixedColumnWidth(50),
 };
 const int _healthOfficeLevel = 11;
+const int _eventReportRowsPerPage = 20;
 const _personnelTipoOptions = ['ITEM', 'EVENTUAL', 'CONSULTOR', 'SERVICIOS'];
 
 enum _PersonnelExcelExportMode { normal, byItem }
+
+enum _EventReportSortOrder { typeName, item, office, time }
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key, required this.currentUser});
@@ -52,6 +55,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   AttendanceReport? _report;
   EventRecord? _eventReport;
   int? _selectedEventId;
+  _EventReportSortOrder _eventReportSortOrder = _EventReportSortOrder.typeName;
   _PersonnelStatusFilter _personnelStatus = _PersonnelStatusFilter.all;
   Set<String> _personnelTipos = {};
   Set<int> _personnelOfficeIds = {};
@@ -656,19 +660,19 @@ class _ReportsScreenState extends State<ReportsScreen> {
       final document = pw.Document();
       final attendedRows = _buildEventPdfRows(
         event,
-        _sortEventRosterEntries(event.attended),
+        _sortEventRosterEntries(event.attended, _eventReportSortOrder),
       );
       final lateRows = _buildLateEventPdfRows(
         event,
-        _sortEventRosterEntries(event.late),
+        _sortEventRosterEntries(event.late, _eventReportSortOrder),
       );
       final observedRows = _buildEventPdfRows(
         event,
-        _sortEventRosterEntries(event.observed),
+        _sortEventRosterEntries(event.observed, _eventReportSortOrder),
       );
       final absenteeRows = _buildEventAbsenteePdfRows(
         event,
-        _sortEventAbsenteeEntries(event.absentees),
+        _sortEventAbsenteeEntries(event.absentees, _eventReportSortOrder),
       );
       final rosterHeaders = _buildEventPdfHeaders(event);
       final absenteeHeaders = _buildEventPdfHeaders(
@@ -886,7 +890,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       final document = pw.Document();
       final rows = _buildEventPdfRows(
         event,
-        _sortEventRosterEntries(event.nonRequired),
+        _sortEventRosterEntries(event.nonRequired, _eventReportSortOrder),
       );
       final rosterHeaders = _buildEventPdfHeaders(event);
       final rosterColumnWidths = _buildEventPdfColumnWidths(
@@ -963,7 +967,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
       return;
     }
 
-    final rows = _buildEventExcelRowsForEntries(event, event.nonRequired);
+    final rows = _buildEventExcelRowsForEntries(
+      event,
+      event.nonRequired,
+      _eventReportSortOrder,
+    );
 
     if (rows.isEmpty) {
       AppAlert.showWarning(
@@ -1008,7 +1016,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       return;
     }
 
-    final rows = _buildEventExcelRows(event);
+    final rows = _buildEventExcelRows(event, _eventReportSortOrder);
 
     if (rows.isEmpty) {
       AppAlert.showWarning(
@@ -1582,6 +1590,41 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           : 'Buscar evento por nombre o fecha',
                       onTap: _isLoadingEvents ? null : _openEventPicker,
                     ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<_EventReportSortOrder>(
+                      initialValue: _eventReportSortOrder,
+                      decoration: const InputDecoration(
+                        labelText: 'Orden del reporte',
+                        prefixIcon: Icon(Icons.sort_rounded),
+                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: _EventReportSortOrder.typeName,
+                          child: Text('Tipo y nombre'),
+                        ),
+                        DropdownMenuItem(
+                          value: _EventReportSortOrder.item,
+                          child: Text('Item'),
+                        ),
+                        DropdownMenuItem(
+                          value: _EventReportSortOrder.office,
+                          child: Text('Oficina'),
+                        ),
+                        DropdownMenuItem(
+                          value: _EventReportSortOrder.time,
+                          child: Text('Hora'),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) {
+                          return;
+                        }
+
+                        setState(() {
+                          _eventReportSortOrder = value;
+                        });
+                      },
+                    ),
                     if (_isLoadingEvents) ...[
                       const SizedBox(height: 12),
                       const LinearProgressIndicator(),
@@ -1619,7 +1662,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         OutlinedButton.icon(
                           onPressed:
                               eventReport == null ||
-                                  eventReport.nonRequired.isEmpty ||
                                   _isExportingEventPdf ||
                                   _isExportingEventExcel ||
                                   _isExportingNonRequiredEventPdf ||
@@ -1645,7 +1687,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         OutlinedButton.icon(
                           onPressed:
                               eventReport == null ||
-                                  eventReport.nonRequired.isEmpty ||
                                   _isExportingEventPdf ||
                                   _isExportingEventExcel ||
                                   _isExportingNonRequiredEventPdf ||
@@ -1715,7 +1756,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 _eventErrorMessage == null)
               const _EventReportsHintState()
             else if (eventReport != null)
-              _EventReportCard(event: eventReport),
+              _EventReportCard(
+                event: eventReport,
+                sortOrder: _eventReportSortOrder,
+              ),
           ],
         ),
       ),
@@ -2029,9 +2073,10 @@ class _EmptyReportState extends StatelessWidget {
 }
 
 class _EventReportCard extends StatelessWidget {
-  const _EventReportCard({required this.event});
+  const _EventReportCard({required this.event, required this.sortOrder});
 
   final EventRecord event;
+  final _EventReportSortOrder sortOrder;
 
   @override
   Widget build(BuildContext context) {
@@ -2086,14 +2131,14 @@ class _EventReportCard extends StatelessWidget {
             const SizedBox(height: 18),
             _EventRosterTableSection(
               title: 'Asistidos',
-              entries: _sortEventRosterEntries(event.attended),
+              entries: _sortEventRosterEntries(event.attended, sortOrder),
               emptyMessage:
                   'Todavia no hay personas registradas como asistidas.',
             ),
             const SizedBox(height: 18),
             _EventRosterTableSection(
               title: 'Retrasados',
-              entries: _sortEventRosterEntries(event.late),
+              entries: _sortEventRosterEntries(event.late, sortOrder),
               emptyMessage: 'No hay personas registradas fuera de horario.',
               accentBackground: const Color(0xFFFFE6CC),
               useLateRegisteredAt: true,
@@ -2101,7 +2146,7 @@ class _EventReportCard extends StatelessWidget {
             const SizedBox(height: 18),
             _EventRosterTableSection(
               title: 'Observados',
-              entries: _sortEventRosterEntries(event.observed),
+              entries: _sortEventRosterEntries(event.observed, sortOrder),
               emptyMessage:
                   'Todavia no hay personas registradas como observadas.',
               accentBackground: AppPalette.surfaceSoft,
@@ -2109,7 +2154,7 @@ class _EventReportCard extends StatelessWidget {
             const SizedBox(height: 18),
             _EventAbsenteeTableSection(
               title: 'Faltantes',
-              entries: _sortEventAbsenteeEntries(event.absentees),
+              entries: _sortEventAbsenteeEntries(event.absentees, sortOrder),
               emptyMessage:
                   'No hay funcionarios elegidos pendientes de asistencia.',
               accentBackground: const Color(0xFFFFF3E0),
@@ -2117,7 +2162,7 @@ class _EventReportCard extends StatelessWidget {
             const SizedBox(height: 18),
             _EventRosterTableSection(
               title: 'No obligados',
-              entries: _sortEventRosterEntries(event.nonRequired),
+              entries: _sortEventRosterEntries(event.nonRequired, sortOrder),
               emptyMessage:
                   'No hay personas registradas fuera de la asignacion del evento.',
               accentBackground: const Color(0xFFDDEBFF),
@@ -2129,7 +2174,7 @@ class _EventReportCard extends StatelessWidget {
   }
 }
 
-class _EventRosterTableSection extends StatelessWidget {
+class _EventRosterTableSection extends StatefulWidget {
   const _EventRosterTableSection({
     required this.title,
     required this.entries,
@@ -2145,13 +2190,43 @@ class _EventRosterTableSection extends StatelessWidget {
   final bool useLateRegisteredAt;
 
   @override
+  State<_EventRosterTableSection> createState() =>
+      _EventRosterTableSectionState();
+}
+
+class _EventRosterTableSectionState extends State<_EventRosterTableSection> {
+  int _page = 0;
+
+  int get _totalPages => widget.entries.isEmpty
+      ? 1
+      : ((widget.entries.length - 1) ~/ _eventReportRowsPerPage) + 1;
+
+  int get _safePage => _page.clamp(0, _totalPages - 1);
+
+  @override
+  void didUpdateWidget(covariant _EventRosterTableSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.entries != widget.entries && _page != _safePage) {
+      _page = _safePage;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final startIndex = _safePage * _eventReportRowsPerPage;
+    final endIndex = (startIndex + _eventReportRowsPerPage).clamp(
+      0,
+      widget.entries.length,
+    );
+    final visibleEntries = widget.entries.sublist(startIndex, endIndex);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: Theme.of(context).textTheme.titleLarge),
+        Text(widget.title, style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 10),
-        if (entries.isEmpty)
+        if (widget.entries.isEmpty)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(16),
@@ -2160,9 +2235,27 @@ class _EventRosterTableSection extends StatelessWidget {
               borderRadius: BorderRadius.circular(18),
               border: Border.all(color: AppPalette.line),
             ),
-            child: Text(emptyMessage),
+            child: Text(widget.emptyMessage),
           )
-        else
+        else ...[
+          _EventSectionPaginationBar(
+            page: _safePage,
+            totalPages: _totalPages,
+            totalRows: widget.entries.length,
+            startIndex: startIndex,
+            endIndex: endIndex,
+            onPrevious: _safePage == 0
+                ? null
+                : () => setState(() {
+                    _page = _safePage - 1;
+                  }),
+            onNext: _safePage >= _totalPages - 1
+                ? null
+                : () => setState(() {
+                    _page = _safePage + 1;
+                  }),
+          ),
+          const SizedBox(height: 10),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Table(
@@ -2177,7 +2270,7 @@ class _EventRosterTableSection extends StatelessWidget {
               border: TableBorder.all(color: AppPalette.line),
               children: [
                 TableRow(
-                  decoration: BoxDecoration(color: accentBackground),
+                  decoration: BoxDecoration(color: widget.accentBackground),
                   children: const [
                     _EventTableHeaderCell(label: 'CI'),
                     _EventTableHeaderCell(label: 'Nombre'),
@@ -2186,7 +2279,7 @@ class _EventRosterTableSection extends StatelessWidget {
                     _EventTableHeaderCell(label: 'Tipo'),
                   ],
                 ),
-                for (final entry in entries)
+                for (final entry in visibleEntries)
                   TableRow(
                     children: [
                       _EventTableValueCell(
@@ -2200,7 +2293,7 @@ class _EventRosterTableSection extends StatelessWidget {
                       ),
                       _EventTableDateTimeCell(
                         dateTime:
-                            useLateRegisteredAt &&
+                            widget.useLateRegisteredAt &&
                                 entry.lateRegisteredAt != null
                             ? entry.lateRegisteredAt!
                             : entry.registeredAt,
@@ -2213,12 +2306,13 @@ class _EventRosterTableSection extends StatelessWidget {
               ],
             ),
           ),
+        ],
       ],
     );
   }
 }
 
-class _EventAbsenteeTableSection extends StatelessWidget {
+class _EventAbsenteeTableSection extends StatefulWidget {
   const _EventAbsenteeTableSection({
     required this.title,
     required this.entries,
@@ -2232,13 +2326,44 @@ class _EventAbsenteeTableSection extends StatelessWidget {
   final Color accentBackground;
 
   @override
+  State<_EventAbsenteeTableSection> createState() =>
+      _EventAbsenteeTableSectionState();
+}
+
+class _EventAbsenteeTableSectionState
+    extends State<_EventAbsenteeTableSection> {
+  int _page = 0;
+
+  int get _totalPages => widget.entries.isEmpty
+      ? 1
+      : ((widget.entries.length - 1) ~/ _eventReportRowsPerPage) + 1;
+
+  int get _safePage => _page.clamp(0, _totalPages - 1);
+
+  @override
+  void didUpdateWidget(covariant _EventAbsenteeTableSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.entries != widget.entries && _page != _safePage) {
+      _page = _safePage;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final startIndex = _safePage * _eventReportRowsPerPage;
+    final endIndex = (startIndex + _eventReportRowsPerPage).clamp(
+      0,
+      widget.entries.length,
+    );
+    final visibleEntries = widget.entries.sublist(startIndex, endIndex);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: Theme.of(context).textTheme.titleLarge),
+        Text(widget.title, style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 10),
-        if (entries.isEmpty)
+        if (widget.entries.isEmpty)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(16),
@@ -2247,9 +2372,27 @@ class _EventAbsenteeTableSection extends StatelessWidget {
               borderRadius: BorderRadius.circular(18),
               border: Border.all(color: AppPalette.line),
             ),
-            child: Text(emptyMessage),
+            child: Text(widget.emptyMessage),
           )
-        else
+        else ...[
+          _EventSectionPaginationBar(
+            page: _safePage,
+            totalPages: _totalPages,
+            totalRows: widget.entries.length,
+            startIndex: startIndex,
+            endIndex: endIndex,
+            onPrevious: _safePage == 0
+                ? null
+                : () => setState(() {
+                    _page = _safePage - 1;
+                  }),
+            onNext: _safePage >= _totalPages - 1
+                ? null
+                : () => setState(() {
+                    _page = _safePage + 1;
+                  }),
+          ),
+          const SizedBox(height: 10),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Table(
@@ -2265,7 +2408,7 @@ class _EventAbsenteeTableSection extends StatelessWidget {
               border: TableBorder.all(color: AppPalette.line),
               children: [
                 TableRow(
-                  decoration: BoxDecoration(color: accentBackground),
+                  decoration: BoxDecoration(color: widget.accentBackground),
                   children: const [
                     _EventTableHeaderCell(label: 'CI'),
                     _EventTableHeaderCell(label: 'Nombre'),
@@ -2275,7 +2418,7 @@ class _EventAbsenteeTableSection extends StatelessWidget {
                     _EventTableHeaderCell(label: 'Tipo'),
                   ],
                 ),
-                for (final entry in entries)
+                for (final entry in visibleEntries)
                   TableRow(
                     children: [
                       _EventTableValueCell(
@@ -2302,6 +2445,56 @@ class _EventAbsenteeTableSection extends StatelessWidget {
               ],
             ),
           ),
+        ],
+      ],
+    );
+  }
+}
+
+class _EventSectionPaginationBar extends StatelessWidget {
+  const _EventSectionPaginationBar({
+    required this.page,
+    required this.totalPages,
+    required this.totalRows,
+    required this.startIndex,
+    required this.endIndex,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final int page;
+  final int totalPages;
+  final int totalRows;
+  final int startIndex;
+  final int endIndex;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = totalRows == 0
+        ? 'Sin registros'
+        : '${startIndex + 1}-$endIndex de $totalRows';
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text(
+          '$label | Pagina ${page + 1} de $totalPages',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        IconButton.outlined(
+          onPressed: onPrevious,
+          icon: const Icon(Icons.chevron_left_rounded),
+          tooltip: 'Pagina anterior',
+        ),
+        IconButton.outlined(
+          onPressed: onNext,
+          icon: const Icon(Icons.chevron_right_rounded),
+          tooltip: 'Pagina siguiente',
+        ),
       ],
     );
   }
@@ -3083,22 +3276,26 @@ List<String> _buildEventExcelHeaders(EventRecord event) {
   ];
 }
 
-List<List<Object?>> _buildEventExcelRows(EventRecord event) {
+List<List<Object?>> _buildEventExcelRows(
+  EventRecord event,
+  _EventReportSortOrder sortOrder,
+) {
   return [
     ..._buildEventExcelRowsForEntries(event, [
       ...event.attended,
       ...event.observed,
-    ]),
-    ..._buildEventAbsenteeExcelRows(event, event.absentees),
+    ], sortOrder),
+    ..._buildEventAbsenteeExcelRows(event, event.absentees, sortOrder),
   ];
 }
 
 List<List<Object?>> _buildEventAbsenteeExcelRows(
   EventRecord event,
   List<EventAbsenteeEntry> entries,
+  _EventReportSortOrder sortOrder,
 ) {
   final controls = _sortedEventControls(event.controls);
-  final sortedEntries = _sortEventAbsenteeEntries(entries);
+  final sortedEntries = _sortEventAbsenteeEntries(entries, sortOrder);
 
   return sortedEntries
       .map(
@@ -3119,10 +3316,11 @@ List<List<Object?>> _buildEventAbsenteeExcelRows(
 List<List<Object?>> _buildEventExcelRowsForEntries(
   EventRecord event,
   List<EventRosterEntry> entries,
+  _EventReportSortOrder sortOrder,
 ) {
   final controls = _sortedEventControls(event.controls);
   final rows = <List<Object?>>[];
-  final sortedEntries = _sortEventRosterEntriesByItem(entries);
+  final sortedEntries = _sortEventRosterEntries(entries, sortOrder);
 
   for (final entry in sortedEntries) {
     rows.add(
@@ -3493,47 +3691,43 @@ String _normalizeSearch(String value) {
       .trim();
 }
 
-List<EventRosterEntry> _sortEventRosterEntries(List<EventRosterEntry> entries) {
-  final sortedEntries = [...entries];
-
-  sortedEntries.sort((left, right) {
-    final typeOrderComparison = _eventRosterTypeOrder(
-      left.tipoVinculo,
-    ).compareTo(_eventRosterTypeOrder(right.tipoVinculo));
-
-    if (typeOrderComparison != 0) {
-      return typeOrderComparison;
-    }
-
-    final nameComparison = left.fullName.toLowerCase().compareTo(
-      right.fullName.toLowerCase(),
-    );
-
-    if (nameComparison != 0) {
-      return nameComparison;
-    }
-
-    return left.registeredAt.compareTo(right.registeredAt);
-  });
-
-  return sortedEntries;
-}
-
-List<EventRosterEntry> _sortEventRosterEntriesByItem(
+List<EventRosterEntry> _sortEventRosterEntries(
   List<EventRosterEntry> entries,
+  _EventReportSortOrder sortOrder,
 ) {
   final sortedEntries = [...entries];
 
   sortedEntries.sort((left, right) {
-    final leftItem = _personnelItemSortValue(left.numeroItem ?? '');
-    final rightItem = _personnelItemSortValue(right.numeroItem ?? '');
-    final itemComparison = leftItem.compareTo(rightItem);
+    final orderComparison = switch (sortOrder) {
+      _EventReportSortOrder.item => _compareEventItems(
+        left.numeroItem,
+        right.numeroItem,
+      ),
+      _EventReportSortOrder.office => _compareNullableText(
+        left.officeName,
+        right.officeName,
+      ),
+      _EventReportSortOrder.time => left.registeredAt.compareTo(
+        right.registeredAt,
+      ),
+      _EventReportSortOrder.typeName => _compareEventRosterTypeName(
+        left.tipoVinculo,
+        left.fullName,
+        right.tipoVinculo,
+        right.fullName,
+      ),
+    };
 
-    if (itemComparison != 0) {
-      return itemComparison;
+    if (orderComparison != 0) {
+      return orderComparison;
     }
 
-    return left.fullName.toLowerCase().compareTo(right.fullName.toLowerCase());
+    return _compareEventRosterTypeName(
+      left.tipoVinculo,
+      left.fullName,
+      right.tipoVinculo,
+      right.fullName,
+    );
   });
 
   return sortedEntries;
@@ -3541,22 +3735,80 @@ List<EventRosterEntry> _sortEventRosterEntriesByItem(
 
 List<EventAbsenteeEntry> _sortEventAbsenteeEntries(
   List<EventAbsenteeEntry> entries,
+  _EventReportSortOrder sortOrder,
 ) {
   final sortedEntries = [...entries];
 
   sortedEntries.sort((left, right) {
-    final typeOrderComparison = _eventRosterTypeOrder(
-      left.tipoVinculo,
-    ).compareTo(_eventRosterTypeOrder(right.tipoVinculo));
+    final orderComparison = switch (sortOrder) {
+      _EventReportSortOrder.item => _compareEventItems(
+        left.numeroItem,
+        right.numeroItem,
+      ),
+      _EventReportSortOrder.office => _compareNullableText(
+        left.officeName,
+        right.officeName,
+      ),
+      _EventReportSortOrder.time ||
+      _EventReportSortOrder.typeName => _compareEventRosterTypeName(
+        left.tipoVinculo,
+        left.fullName,
+        right.tipoVinculo,
+        right.fullName,
+      ),
+    };
 
-    if (typeOrderComparison != 0) {
-      return typeOrderComparison;
+    if (orderComparison != 0) {
+      return orderComparison;
     }
 
-    return left.fullName.toLowerCase().compareTo(right.fullName.toLowerCase());
+    return _compareEventRosterTypeName(
+      left.tipoVinculo,
+      left.fullName,
+      right.tipoVinculo,
+      right.fullName,
+    );
   });
 
   return sortedEntries;
+}
+
+int _compareEventRosterTypeName(
+  String? leftTipoVinculo,
+  String leftFullName,
+  String? rightTipoVinculo,
+  String rightFullName,
+) {
+  final typeOrderComparison = _eventRosterTypeOrder(
+    leftTipoVinculo,
+  ).compareTo(_eventRosterTypeOrder(rightTipoVinculo));
+
+  if (typeOrderComparison != 0) {
+    return typeOrderComparison;
+  }
+
+  return leftFullName.toLowerCase().compareTo(rightFullName.toLowerCase());
+}
+
+int _compareEventItems(String? leftItem, String? rightItem) {
+  return _personnelItemSortValue(
+    leftItem ?? '',
+  ).compareTo(_personnelItemSortValue(rightItem ?? ''));
+}
+
+int _compareNullableText(String? left, String? right) {
+  final leftValue = left?.trim().toLowerCase() ?? '';
+  final rightValue = right?.trim().toLowerCase() ?? '';
+
+  if (leftValue.isEmpty && rightValue.isNotEmpty) {
+    return 1;
+  }
+
+  if (leftValue.isNotEmpty && rightValue.isEmpty) {
+    return -1;
+  }
+
+  return leftValue.compareTo(rightValue);
 }
 
 int _eventRosterTypeOrder(String? tipoVinculo) {
