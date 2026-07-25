@@ -172,6 +172,9 @@ const DEVICE_ONLINE_THRESHOLD_MS = clampInt(
   10_000,
   120_000,
 );
+const LUNCH_REGISTRATION_QR_PAYLOAD = "INNOVA_FUNCIONARIO:ALMUERZO:REGISTRO:1";
+const EXIT_PERMIT_REGISTRATION_QR_PAYLOAD =
+  "INNOVA_FUNCIONARIO:SALIDAS:REGISTRO:1";
 
 type AuthenticatedUser = {
   id: number;
@@ -949,8 +952,12 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/almuerzos/scan") {
-      assertLunchScannerRequester(authenticatedUser);
       const input = parseLunchScanInput(await readJsonBody(request));
+      if (isLunchRegistrationQrPayload(input.qrValue)) {
+        assertSelfRegistrationQrRequester(authenticatedUser);
+      } else {
+        assertLunchScannerRequester(authenticatedUser);
+      }
       const result = await registerLunchScan(input.qrValue, authenticatedUser.id);
 
       sendJson(response, 201, {
@@ -960,8 +967,12 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/salidas/scan") {
-      assertExitPermitScannerRequester(authenticatedUser);
       const input = parseLunchScanInput(await readJsonBody(request));
+      if (isExitPermitRegistrationQrPayload(input.qrValue)) {
+        assertSelfRegistrationQrRequester(authenticatedUser);
+      } else {
+        assertExitPermitScannerRequester(authenticatedUser);
+      }
       const result = await registerExitPermitScan(input.qrValue, authenticatedUser.id);
 
       sendJson(response, 201, {
@@ -5698,16 +5709,24 @@ async function loadFuncionarioRatingsByCis(
   const dateSql = buildFuncionarioRatingDateSql(dateRange, params);
   const result = await pool.query<{
     ci: string;
-    buenas: number;
+    muyMalo: number;
+    malo: number;
     regular: number;
+    bueno: number;
+    muyBueno: number;
+    buenas: number;
     malas: number;
   }>(
     `
       SELECT
         u."ci" AS "ci",
-        COUNT(*) FILTER (WHERE "calificacion" = 'feliz')::int AS "buenas",
-        COUNT(*) FILTER (WHERE "calificacion" = 'neutral')::int AS "regular",
-        COUNT(*) FILTER (WHERE "calificacion" = 'enojada')::int AS "malas"
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_malo')::int AS "muyMalo",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('malo', 'enojada'))::int AS "malo",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('regular', 'neutral'))::int AS "regular",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'feliz'))::int AS "bueno",
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_bueno')::int AS "muyBueno",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'muy_bueno', 'feliz'))::int AS "buenas",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('muy_malo', 'malo', 'enojada'))::int AS "malas"
       FROM "usuarios" u
       LEFT JOIN "calificaciones_funcionario" c
         ON c."funcionario_id" = u."id"
@@ -5722,8 +5741,12 @@ async function loadFuncionarioRatingsByCis(
       row.ci,
       {
         ci: row.ci,
-        buenas: row.buenas,
+        muyMalo: row.muyMalo,
+        malo: row.malo,
         regular: row.regular,
+        bueno: row.bueno,
+        muyBueno: row.muyBueno,
+        buenas: row.buenas,
         malas: row.malas,
       },
     ]),
@@ -5738,8 +5761,12 @@ async function loadFuncionarioRatingsByCis(
 
     return {
       ci,
-      buenas: 0,
+      muyMalo: 0,
+      malo: 0,
       regular: 0,
+      bueno: 0,
+      muyBueno: 0,
+      buenas: 0,
       malas: 0,
     };
   });
@@ -5753,16 +5780,24 @@ async function loadFuncionarioRatingsByCi(
   const dateSql = buildFuncionarioRatingDateSql(dateRange, params);
   const result = await pool.query<{
     ci: string;
-    buenas: number;
+    muyMalo: number;
+    malo: number;
     regular: number;
+    bueno: number;
+    muyBueno: number;
+    buenas: number;
     malas: number;
   }>(
     `
       SELECT
         u."ci" AS "ci",
-        COUNT(*) FILTER (WHERE c."calificacion" = 'feliz')::int AS "buenas",
-        COUNT(*) FILTER (WHERE c."calificacion" = 'neutral')::int AS "regular",
-        COUNT(*) FILTER (WHERE c."calificacion" = 'enojada')::int AS "malas"
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_malo')::int AS "muyMalo",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('malo', 'enojada'))::int AS "malo",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('regular', 'neutral'))::int AS "regular",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'feliz'))::int AS "bueno",
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_bueno')::int AS "muyBueno",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'muy_bueno', 'feliz'))::int AS "buenas",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('muy_malo', 'malo', 'enojada'))::int AS "malas"
       FROM "usuarios" u
       LEFT JOIN "calificaciones_funcionario" c
         ON c."funcionario_id" = u."id"
@@ -5780,8 +5815,12 @@ async function loadFuncionarioRatingsByCi(
 
   return {
     ci: row.ci,
-    buenas: row.buenas,
+    muyMalo: row.muyMalo,
+    malo: row.malo,
     regular: row.regular,
+    bueno: row.bueno,
+    muyBueno: row.muyBueno,
+    buenas: row.buenas,
     malas: row.malas,
   };
 }
@@ -5803,16 +5842,24 @@ async function loadFuncionarioRatingsByOffice(
   const dateSql = buildFuncionarioRatingDateSql(dateRange, params);
   const result = await pool.query<{
     ci: string;
-    buenas: number;
+    muyMalo: number;
+    malo: number;
     regular: number;
+    bueno: number;
+    muyBueno: number;
+    buenas: number;
     malas: number;
   }>(
     `
       SELECT
         COALESCE(u."ci", '') AS "ci",
-        COUNT(c."id") FILTER (WHERE c."calificacion" = 'feliz')::int AS "buenas",
-        COUNT(c."id") FILTER (WHERE c."calificacion" = 'neutral')::int AS "regular",
-        COUNT(c."id") FILTER (WHERE c."calificacion" = 'enojada')::int AS "malas"
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_malo')::int AS "muyMalo",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('malo', 'enojada'))::int AS "malo",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('regular', 'neutral'))::int AS "regular",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'feliz'))::int AS "bueno",
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_bueno')::int AS "muyBueno",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'muy_bueno', 'feliz'))::int AS "buenas",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('muy_malo', 'malo', 'enojada'))::int AS "malas"
       FROM "usuarios" u
       LEFT JOIN "calificaciones_funcionario" c
         ON c."funcionario_id" = u."id"
@@ -5828,8 +5875,12 @@ async function loadFuncionarioRatingsByOffice(
 
   return result.rows.map((row) => ({
     ci: row.ci,
-    buenas: row.buenas,
+    muyMalo: row.muyMalo,
+    malo: row.malo,
     regular: row.regular,
+    bueno: row.bueno,
+    muyBueno: row.muyBueno,
+    buenas: row.buenas,
     malas: row.malas,
   }));
 }
@@ -7466,6 +7517,30 @@ function assertExitPermitScannerRequester(user: AuthenticatedUser) {
   }
 }
 
+function assertSelfRegistrationQrRequester(user: AuthenticatedUser) {
+  if (
+    user.id <= 0 ||
+    user.activo !== true ||
+    !isSelfRegistrationQrRole(user.rol)
+  ) {
+    throw new HttpError(
+      403,
+      "Tu cuenta no puede registrar almuerzos o salidas con este QR.",
+    );
+  }
+}
+
+function isSelfRegistrationQrRole(
+  role: (typeof rol_usuario)[keyof typeof rol_usuario],
+) {
+  return (
+    role === rol_usuario.OPERADOR ||
+    role === rol_usuario.ADMIN_SALUD ||
+    role === rol_usuario.ADMIN_CONSULTORES ||
+    role === rol_usuario.ADMIN_EVENTUALES
+  );
+}
+
 function assertLunchReportRequester(user: AuthenticatedUser) {
   if (user.id <= 0 || user.activo !== true || !isAdminRole(user.rol)) {
     throw new HttpError(403, "Solo un administrador puede consultar almuerzos.");
@@ -8515,20 +8590,28 @@ function buildAttendanceRegistrationLocation(input: RegisterAttendanceInput) {
 
 async function registerLunchScan(qrValue: string, scannerUserId: number) {
   const scannedValue = qrValue.trim();
-  const lookupCode = extractLookupCode(scannedValue);
+  const selfRegistration = isLunchRegistrationQrPayload(scannedValue);
+  let lookupCode = selfRegistration
+    ? "QR_ALMUERZO_FIJO"
+    : extractLookupCode(scannedValue);
 
   if (!lookupCode) {
     throw new HttpError(400, "Debes enviar un codigo QR valido.");
   }
 
-  const person = await findPersonByScannedValue(scannedValue, lookupCode);
-  const funcionario = person?.usuario ?? null;
+  const { person, funcionario } = selfRegistration
+    ? await resolveSelfRegistrationFuncionario(scannerUserId)
+    : await resolveFuncionarioByScannedQr(scannedValue, lookupCode);
 
   if (!person || !funcionario) {
     throw new HttpError(404, "No se encontro un funcionario con ese codigo QR.");
   }
 
-  if (funcionario.activo !== true || funcionario.rol !== rol_usuario.OPERADOR) {
+  if (
+    funcionario.activo !== true ||
+    (!selfRegistration && funcionario.rol !== rol_usuario.OPERADOR) ||
+    (selfRegistration && !isSelfRegistrationQrRole(funcionario.rol))
+  ) {
     throw new HttpError(
       400,
       "El QR escaneado no pertenece a un funcionario activo.",
@@ -8655,22 +8738,68 @@ function parseTimeTextToMinutes(value: string) {
   return hour * 60 + minute;
 }
 
+function isLunchRegistrationQrPayload(value: string) {
+  return value.trim() === LUNCH_REGISTRATION_QR_PAYLOAD;
+}
+
+function isExitPermitRegistrationQrPayload(value: string) {
+  return value.trim() === EXIT_PERMIT_REGISTRATION_QR_PAYLOAD;
+}
+
+async function resolveFuncionarioByScannedQr(
+  scannedValue: string,
+  lookupCode: string,
+) {
+  const person = await findPersonByScannedValue(scannedValue, lookupCode);
+
+  return {
+    person,
+    funcionario: person?.usuario ?? null,
+  };
+}
+
+async function resolveSelfRegistrationFuncionario(userId: number) {
+  const funcionario = await prisma.usuarios.findUnique({
+    where: { id: userId },
+    include: userWithOfficeInclude,
+  });
+
+  if (!funcionario || funcionario.activo !== true) {
+    throw new HttpError(401, "Sesion invalida o expirada.");
+  }
+
+  const person = await ensurePersonIdentityForUser(prisma, funcionario);
+
+  return {
+    person,
+    funcionario,
+  };
+}
+
 async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
   const scannedValue = qrValue.trim();
-  const lookupCode = extractLookupCode(scannedValue);
+  const selfRegistration = isExitPermitRegistrationQrPayload(scannedValue);
+  let lookupCode = selfRegistration
+    ? "QR_SALIDAS_FIJO"
+    : extractLookupCode(scannedValue);
 
   if (!lookupCode) {
     throw new HttpError(400, "Debes enviar un codigo QR valido.");
   }
 
-  const person = await findPersonByScannedValue(scannedValue, lookupCode);
-  const funcionario = person?.usuario ?? null;
+  const { person, funcionario } = selfRegistration
+    ? await resolveSelfRegistrationFuncionario(scannerUserId)
+    : await resolveFuncionarioByScannedQr(scannedValue, lookupCode);
 
   if (!person || !funcionario) {
     throw new HttpError(404, "No se encontro un funcionario con ese codigo QR.");
   }
 
-  if (funcionario.activo !== true || funcionario.rol !== rol_usuario.OPERADOR) {
+  if (
+    funcionario.activo !== true ||
+    (!selfRegistration && funcionario.rol !== rol_usuario.OPERADOR) ||
+    (selfRegistration && !isSelfRegistrationQrRole(funcionario.rol))
+  ) {
     throw new HttpError(
       400,
       "El QR escaneado no pertenece a un funcionario activo.",
@@ -11547,7 +11676,7 @@ function resolveEffectiveJobTitleName(user: any) {
 }
 
 type SubmitFuncionarioRatingInput = {
-  calificacion: "feliz" | "neutral" | "enojada";
+  calificacion: "muy_malo" | "malo" | "regular" | "bueno" | "muy_bueno";
   comentario: string | null;
   calificadorNombre: string | null;
   calificadorCelular: string | null;
@@ -11579,9 +11708,11 @@ function parseSubmitFuncionarioRatingInput(
     .toLowerCase();
 
   if (
-    calificacion !== "feliz" &&
-    calificacion !== "neutral" &&
-    calificacion !== "enojada"
+    calificacion !== "muy_malo" &&
+    calificacion !== "malo" &&
+    calificacion !== "regular" &&
+    calificacion !== "bueno" &&
+    calificacion !== "muy_bueno"
   ) {
     throw new HttpError(400, "La calificacion enviada no es valida.");
   }
@@ -11981,7 +12112,7 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
     }
     .ratings {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(5, 1fr);
       gap: 12px;
     }
     button.rating {
@@ -12133,6 +12264,7 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
       }
       .ratings {
         gap: 10px;
+        grid-template-columns: repeat(2, 1fr);
       }
       button.rating {
         min-height: 112px;
@@ -12166,9 +12298,11 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
           <div class="muted">${safeOffice}</div>
         </div>
         <div class="ratings" role="group" aria-label="Calificaci&oacute;n">
-          <button class="rating" type="button" data-rating="feliz"><span>&#128578;</span>Bueno</button>
-          <button class="rating" type="button" data-rating="neutral"><span>&#128528;</span>Regular</button>
-          <button class="rating" type="button" data-rating="enojada"><span>&#128577;</span>Mala</button>
+          <button class="rating" type="button" data-rating="muy_malo"><span>&#128545;</span>Muy malo</button>
+          <button class="rating" type="button" data-rating="malo"><span>&#128577;</span>Malo</button>
+          <button class="rating" type="button" data-rating="regular"><span>&#128528;</span>Regular</button>
+          <button class="rating" type="button" data-rating="bueno"><span>&#128578;</span>Bueno</button>
+          <button class="rating" type="button" data-rating="muy_bueno"><span>&#128516;</span>Muy bueno</button>
         </div>
         <div class="optional-grid">
           <label for="calificadorNombre">Tu nombre opcional
@@ -12418,9 +12552,11 @@ async function loadFuncionarioRatingsSummary(
         COALESCE(u."subcargo", u."cargo", '') AS "cargo",
         COALESCE(comision."oficina", principal."oficina", u."unidad", '') AS "oficina",
         COUNT(c."id")::int AS "total",
-        COUNT(c."id") FILTER (WHERE c."calificacion" = 'feliz')::int AS "feliz",
-        COUNT(c."id") FILTER (WHERE c."calificacion" = 'neutral')::int AS "neutral",
-        COUNT(c."id") FILTER (WHERE c."calificacion" = 'enojada')::int AS "enojada",
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_malo')::int AS "muyMalo",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('malo', 'enojada'))::int AS "malo",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('regular', 'neutral'))::int AS "regular",
+        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'feliz'))::int AS "bueno",
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_bueno')::int AS "muyBueno",
         COALESCE(
           json_agg(
             json_build_object(

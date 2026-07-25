@@ -595,15 +595,19 @@ class _RatingsScreenState extends State<RatingsScreen> {
                 4: pw.FixedColumnWidth(45),
                 5: pw.FixedColumnWidth(45),
                 6: pw.FixedColumnWidth(45),
+                7: pw.FixedColumnWidth(45),
+                8: pw.FixedColumnWidth(45),
               },
               headers: const [
                 'CI',
                 'Nombre',
                 'Cargo',
                 'Oficina',
-                'Bueno',
+                'Muy malo',
+                'Malo',
                 'Regular',
-                'Mala',
+                'Bueno',
+                'Muy bueno',
               ],
               data: rows
                   .map(
@@ -612,9 +616,11 @@ class _RatingsScreenState extends State<RatingsScreen> {
                       row.nombreCompleto,
                       row.cargo,
                       row.oficina,
-                      '${row.feliz}',
-                      '${row.neutral}',
-                      '${row.enojada}',
+                      '${row.muyMalo}',
+                      '${row.malo}',
+                      '${row.regular}',
+                      '${row.bueno}',
+                      '${row.muyBueno}',
                     ],
                   )
                   .toList(growable: false),
@@ -1290,19 +1296,29 @@ class _RatingSummaryTile extends StatelessWidget {
             runSpacing: 8,
             children: [
               _CountPill(
-                icon: Icons.sentiment_satisfied_alt_rounded,
-                label: 'Bueno',
-                value: summary.feliz,
+                icon: Icons.sentiment_very_dissatisfied_rounded,
+                label: 'Muy malo',
+                value: summary.muyMalo,
+              ),
+              _CountPill(
+                icon: Icons.sentiment_dissatisfied_rounded,
+                label: 'Malo',
+                value: summary.malo,
               ),
               _CountPill(
                 icon: Icons.sentiment_neutral_rounded,
                 label: 'Regular',
-                value: summary.neutral,
+                value: summary.regular,
               ),
               _CountPill(
-                icon: Icons.sentiment_very_dissatisfied_rounded,
-                label: 'Mala',
-                value: summary.enojada,
+                icon: Icons.sentiment_satisfied_alt_rounded,
+                label: 'Bueno',
+                value: summary.bueno,
+              ),
+              _CountPill(
+                icon: Icons.sentiment_very_satisfied_rounded,
+                label: 'Muy bueno',
+                value: summary.muyBueno,
               ),
             ],
           ),
@@ -1832,18 +1848,28 @@ String _formatRatingTime(DateTime date) {
 
 String _ratingLabel(String value) {
   return switch (value) {
+    'muy_malo' => 'Muy malo',
+    'malo' => 'Malo',
+    'regular' => 'Regular',
+    'bueno' => 'Bueno',
+    'muy_bueno' => 'Muy bueno',
     'feliz' => 'Bueno',
     'neutral' => 'Regular',
-    'enojada' => 'Mala',
+    'enojada' => 'Malo',
     _ => value,
   };
 }
 
 IconData _ratingIcon(String value) {
   return switch (value) {
+    'muy_malo' => Icons.sentiment_very_dissatisfied_rounded,
+    'malo' => Icons.sentiment_dissatisfied_rounded,
+    'regular' => Icons.sentiment_neutral_rounded,
+    'bueno' => Icons.sentiment_satisfied_alt_rounded,
+    'muy_bueno' => Icons.sentiment_very_satisfied_rounded,
     'feliz' => Icons.sentiment_satisfied_alt_rounded,
     'neutral' => Icons.sentiment_neutral_rounded,
-    'enojada' => Icons.sentiment_very_dissatisfied_rounded,
+    'enojada' => Icons.sentiment_dissatisfied_rounded,
     _ => Icons.rate_review_outlined,
   };
 }

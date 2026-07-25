@@ -194,9 +194,11 @@ class RatingSummary {
     required this.cargo,
     required this.oficina,
     required this.total,
-    required this.feliz,
-    required this.neutral,
-    required this.enojada,
+    required this.muyMalo,
+    required this.malo,
+    required this.regular,
+    required this.bueno,
+    required this.muyBueno,
     required this.comentarios,
   });
 
@@ -206,9 +208,11 @@ class RatingSummary {
   final String cargo;
   final String oficina;
   final int total;
-  final int feliz;
-  final int neutral;
-  final int enojada;
+  final int muyMalo;
+  final int malo;
+  final int regular;
+  final int bueno;
+  final int muyBueno;
   final List<RatingComment> comentarios;
 
   factory RatingSummary.fromJson(Map<String, dynamic> source) {
@@ -220,9 +224,11 @@ class RatingSummary {
       cargo: _readString(source['cargo'], 'cargo'),
       oficina: _readString(source['oficina'], 'oficina'),
       total: _readInt(source['total'], 'total'),
-      feliz: _readInt(source['feliz'], 'feliz'),
-      neutral: _readInt(source['neutral'], 'neutral'),
-      enojada: _readInt(source['enojada'], 'enojada'),
+      muyMalo: _readInt(source['muyMalo'], 'muyMalo'),
+      malo: _readInt(source['malo'], 'malo'),
+      regular: _readInt(source['regular'], 'regular'),
+      bueno: _readInt(source['bueno'], 'bueno'),
+      muyBueno: _readInt(source['muyBueno'], 'muyBueno'),
       comentarios: comments is List
           ? comments
                 .map(

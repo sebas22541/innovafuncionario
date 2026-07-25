@@ -1,9 +1,14 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
 import '../../../../shared/infrastructure/excel_exporter.dart';
+import '../../../../shared/infrastructure/file_downloader.dart';
+import '../../../../shared/models/attendance_qr_payloads.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../infrastructure/services/exit_permits_api_service.dart';
@@ -790,6 +795,7 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
   List<ExitPermitRecord> _records = const [];
   bool _isLoading = true;
   bool _isExporting = false;
+  bool _isDownloadingQr = false;
   String? _errorMessage;
 
   bool get _hasSearch => _searchController.text.trim().isNotEmpty;
@@ -961,6 +967,37 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
     }
   }
 
+  Future<void> _downloadExitPermitQr() async {
+    if (_isDownloadingQr) {
+      return;
+    }
+
+    setState(() {
+      _isDownloadingQr = true;
+    });
+
+    try {
+      await _downloadRegistrationQrImage(
+        payload: exitPermitRegistrationQrPayload,
+        fileName: 'qr-registro-salidas.png',
+      );
+
+      if (mounted) {
+        AppAlert.showSuccess(context, 'QR de salidas descargado.');
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible descargar el QR.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDownloadingQr = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -1004,6 +1041,21 @@ class _ExitPermitsAdminListState extends State<_ExitPermitsAdminList> {
                         : const Icon(Icons.table_view_rounded),
                     label: Text(
                       _isExporting ? 'Exportando...' : 'Exportar Excel',
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _isDownloadingQr ? null : _downloadExitPermitQr,
+                    icon: _isDownloadingQr
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.qr_code_2_rounded),
+                    label: Text(
+                      _isDownloadingQr
+                          ? 'Descargando...'
+                          : 'Descargar QR salidas',
                     ),
                   ),
                   SizedBox(
@@ -1700,14 +1752,56 @@ Future<DateTimeRange?> _pickExportRange(
 
 String _approvedPermitHint(ExitPermitRecord record) {
   if (record.startTime.trim().isEmpty) {
-    return 'Permiso aprobado. Registra la salida con el QR de tu credencial.';
+    return 'Permiso aprobado. Registra la salida con el QR de salidas.';
   }
 
   if (record.arrivalTime.trim().isEmpty) {
-    return 'Salida registrada. Registra la llegada con el QR de tu credencial.';
+    return 'Salida registrada. Registra la llegada con el QR de salidas.';
   }
 
   return 'Salida y llegada registradas por QR.';
+}
+
+Future<void> _downloadRegistrationQrImage({
+  required String payload,
+  required String fileName,
+}) async {
+  final painter = QrPainter(
+    data: payload,
+    version: QrVersions.auto,
+    gapless: true,
+    eyeStyle: const QrEyeStyle(
+      eyeShape: QrEyeShape.square,
+      color: Colors.black,
+    ),
+    dataModuleStyle: const QrDataModuleStyle(
+      dataModuleShape: QrDataModuleShape.square,
+      color: Colors.black,
+    ),
+  );
+  const imageSize = 900.0;
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder)
+    ..drawRect(
+      const Rect.fromLTWH(0, 0, imageSize, imageSize),
+      Paint()..color = Colors.white,
+    );
+  painter.paint(canvas, const Size(imageSize, imageSize));
+  final image = await recorder.endRecording().toImage(
+    imageSize.toInt(),
+    imageSize.toInt(),
+  );
+  final imageData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+  if (imageData == null) {
+    throw StateError('No fue posible crear la imagen QR.');
+  }
+
+  await downloadFile(
+    fileName: fileName,
+    bytes: imageData.buffer.asUint8List(),
+    mimeType: 'image/png',
+  );
 }
 
 bool _isDirectorUser(AppUser user) {

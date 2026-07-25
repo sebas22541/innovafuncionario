@@ -495,6 +495,8 @@ class _AppNavigationShellState extends State<AppNavigationShell> {
             });
           },
         );
+      case AppSection.attendanceQrScanner:
+        return AttendanceQrScannerScreen(currentUser: _currentUser);
       case AppSection.qrScanner:
         return _currentUser.canUseEventScanner
             ? QrScannerScreen(
@@ -2222,6 +2224,7 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
     return const [
       AppSection.users,
       AppSection.credentials,
+      AppSection.attendanceQrScanner,
       AppSection.myQr,
       AppSection.settings,
     ];
@@ -2272,6 +2275,7 @@ List<AppSection> _visibleSectionsForUser(AppUser user) {
     AppSection.availableEvents,
     AppSection.myQr,
     if (!_isDirectorJobTitle(user)) AppSection.permissionExits,
+    if (!_isDirectorJobTitle(user)) AppSection.attendanceQrScanner,
     if (!_isDirectorJobTitle(user)) AppSection.myExitPermits,
     if (_isExitPermitApproverUser(user)) AppSection.exitPermitRequests,
     // AppSection.swornDeclarations,
@@ -2298,6 +2302,7 @@ bool _isAttendanceSection(AppSection section) {
     case AppSection.swornDeclarations:
     case AppSection.lunches:
     case AppSection.lunchScanner:
+    case AppSection.attendanceQrScanner:
     case AppSection.qrScanner:
     case AppSection.myQr:
     case AppSection.users:
@@ -2334,6 +2339,7 @@ bool _isPermissionSection(AppSection section) {
     case AppSection.notifications:
     case AppSection.credentials:
     case AppSection.qrScanner:
+    case AppSection.attendanceQrScanner:
     case AppSection.myQr:
     case AppSection.lunchScanner:
     case AppSection.settings:

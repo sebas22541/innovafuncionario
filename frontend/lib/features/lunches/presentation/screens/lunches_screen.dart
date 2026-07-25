@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
 import '../../../../shared/infrastructure/backend_api_client.dart';
 import '../../../../shared/infrastructure/excel_exporter.dart';
+import '../../../../shared/infrastructure/file_downloader.dart';
 import '../../../../shared/models/app_user.dart';
+import '../../../../shared/models/attendance_qr_payloads.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../../qr_scanner/infrastructure/models/qr_scan_result_model.dart';
 import '../../../qr_scanner/presentation/widgets/qr_scanner_overlay.dart';
@@ -278,9 +282,205 @@ class _LunchScannerScreenState extends State<LunchScannerScreen> {
   }
 }
 
+class AttendanceQrScannerScreen extends StatefulWidget {
+  const AttendanceQrScannerScreen({super.key, required this.currentUser});
+
+  final AppUser currentUser;
+
+  @override
+  State<AttendanceQrScannerScreen> createState() =>
+      _AttendanceQrScannerScreenState();
+}
+
+class _AttendanceQrScannerScreenState extends State<AttendanceQrScannerScreen> {
+  final MobileScannerController _controller = MobileScannerController(
+    autoStart: true,
+    facing: CameraFacing.back,
+    cameraResolution: const Size(1280, 720),
+    detectionSpeed: DetectionSpeed.normal,
+    detectionTimeoutMs: 250,
+    formats: const [BarcodeFormat.qrCode],
+    autoZoom: true,
+  );
+
+  LunchScanResponse? _lastLunchResponse;
+  ExitPermitScanResponse? _lastExitPermitResponse;
+  String? _lastError;
+  bool _isHandlingDetection = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleDetect(BarcodeCapture capture) async {
+    if (_isHandlingDetection || capture.barcodes.isEmpty) {
+      return;
+    }
+
+    final scan = QrScanResultModel.fromBarcode(capture.barcodes.first);
+    final qrType = parseAttendanceRegistrationQr(scan.value);
+
+    if (qrType == null) {
+      setState(() {
+        _lastError =
+            'Este QR no corresponde al registro de almuerzo o permisos.';
+      });
+      return;
+    }
+
+    setState(() {
+      _isHandlingDetection = true;
+      _lastError = null;
+    });
+    await _controller.stop();
+
+    try {
+      final confirmed = await _confirmRegistration(qrType);
+
+      if (confirmed != true) {
+        return;
+      }
+
+      if (qrType == AttendanceRegistrationQrType.lunch) {
+        final response = await dependencies.lunchesApiService.registerScan(
+          qrValue: scan.value,
+        );
+
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _lastLunchResponse = response;
+          _lastExitPermitResponse = null;
+        });
+        AppAlert.showSuccess(context, response.message);
+      } else {
+        final response = await dependencies.exitPermitsApiService
+            .registerQrScan(qrValue: scan.value);
+
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _lastExitPermitResponse = response;
+          _lastLunchResponse = null;
+        });
+        AppAlert.showSuccess(context, response.message);
+      }
+    } on BackendApiException catch (error) {
+      if (mounted) {
+        setState(() {
+          _lastError = error.message;
+        });
+        AppAlert.showError(context, error.message);
+      }
+    } catch (_) {
+      if (mounted) {
+        const message = 'No fue posible registrar el QR.';
+        setState(() {
+          _lastError = message;
+        });
+        AppAlert.showError(context, message);
+      }
+    } finally {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (mounted) {
+        await _controller.start();
+        setState(() {
+          _isHandlingDetection = false;
+        });
+      }
+    }
+  }
+
+  Future<bool?> _confirmRegistration(AttendanceRegistrationQrType qrType) {
+    final lunchReturnPending = _lastLunchResponse?.record.isOpen == true;
+    final exitArrivalPending =
+        _lastExitPermitResponse?.record.departureAt != null &&
+        _lastExitPermitResponse?.record.arrivalAt == null;
+    final title = qrType == AttendanceRegistrationQrType.lunch
+        ? 'Registro de almuerzo'
+        : 'Registro de permiso';
+    final message = qrType == AttendanceRegistrationQrType.lunch
+        ? lunchReturnPending
+              ? 'Desea registrar su entrada de almuerzo?'
+              : 'Desea registrar su salida de almuerzo?'
+        : exitArrivalPending
+        ? 'Desea registrar su entrada del permiso?'
+        : 'Desea registrar su salida del permiso?';
+
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(title),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(context).pop(true),
+              icon: const Icon(Icons.check_rounded),
+              label: const Text('Registrar'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isWide = constraints.maxWidth >= 900;
+          final scanner = _LunchScannerViewport(
+            controller: _controller,
+            isScannerActive: !_isHandlingDetection,
+            onDetect: _handleDetect,
+            mode: _ScannerMode.selfService,
+          );
+          final resultCard = _LunchScanResultCard(
+            mode: _ScannerMode.selfService,
+            lunchResponse: _lastLunchResponse,
+            exitPermitResponse: _lastExitPermitResponse,
+            errorMessage: _lastError,
+            isScanning: !_isHandlingDetection,
+          );
+
+          if (isWide) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 7, child: scanner),
+                const SizedBox(width: 16),
+                Expanded(flex: 5, child: resultCard),
+              ],
+            );
+          }
+
+          return Column(
+            children: [scanner, const SizedBox(height: 12), resultCard],
+          );
+        },
+      ),
+    );
+  }
+}
+
 enum _ScannerMode {
   lunch('Almuerzo', Icons.restaurant_menu_rounded),
-  exitPermit('Permiso de salida', Icons.assignment_turned_in_rounded);
+  exitPermit('Permiso de salida', Icons.assignment_turned_in_rounded),
+  selfService('Leer QR', Icons.qr_code_scanner_rounded);
 
   const _ScannerMode(this.label, this.icon);
 
@@ -384,9 +584,11 @@ class _ScannerModeTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text = mode == _ScannerMode.lunch
-        ? 'ESCANEO DE QR ALMUERZO'
-        : 'ESCANEO DE QR PERMISO DE SALIDA';
+    final text = switch (mode) {
+      _ScannerMode.lunch => 'ESCANEO DE QR ALMUERZO',
+      _ScannerMode.exitPermit => 'ESCANEO DE QR PERMISO DE SALIDA',
+      _ScannerMode.selfService => 'LECTOR DE QR',
+    };
 
     return Text(
       text,
@@ -406,6 +608,7 @@ class _LunchesAdminScreenState extends State<LunchesAdminScreen> {
   List<LunchRecord> _records = const [];
   bool _isLoading = true;
   bool _isExporting = false;
+  bool _isDownloadingQr = false;
   String? _errorMessage;
 
   @override
@@ -563,6 +766,37 @@ class _LunchesAdminScreenState extends State<LunchesAdminScreen> {
     }
   }
 
+  Future<void> _downloadLunchQr() async {
+    if (_isDownloadingQr) {
+      return;
+    }
+
+    setState(() {
+      _isDownloadingQr = true;
+    });
+
+    try {
+      await _downloadRegistrationQrImage(
+        payload: lunchRegistrationQrPayload,
+        fileName: 'qr-registro-almuerzo.png',
+      );
+
+      if (mounted) {
+        AppAlert.showSuccess(context, 'QR de almuerzo descargado.');
+      }
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(context, 'No fue posible descargar el QR.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDownloadingQr = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final openCount = _records.where((record) => record.isOpen).length;
@@ -622,6 +856,23 @@ class _LunchesAdminScreenState extends State<LunchesAdminScreen> {
                             : const Icon(Icons.table_view_rounded),
                         label: Text(
                           _isExporting ? 'Exportando...' : 'Exportar Excel',
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _isDownloadingQr ? null : _downloadLunchQr,
+                        icon: _isDownloadingQr
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.qr_code_2_rounded),
+                        label: Text(
+                          _isDownloadingQr
+                              ? 'Descargando...'
+                              : 'Descargar QR almuerzo',
                         ),
                       ),
                     ],
@@ -780,7 +1031,7 @@ class _LunchScanResultCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final lunchRecord = lunchResponse?.record;
     final exitPermitRecord = exitPermitResponse?.record;
-    final color = mode == _ScannerMode.lunch
+    final color = mode == _ScannerMode.lunch || lunchResponse != null
         ? lunchResponse?.action == LunchScanAction.returnToWork
               ? Colors.green.shade700
               : AppPalette.orange
@@ -795,13 +1046,18 @@ class _LunchScanResultCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              mode == _ScannerMode.lunch
+              lunchResponse != null || mode == _ScannerMode.lunch
                   ? 'Registro de almuerzo'
-                  : 'Registro de permiso de salida',
+                  : exitPermitResponse != null ||
+                        mode == _ScannerMode.exitPermit
+                  ? 'Registro de permiso de salida'
+                  : 'Escanea el QR de registro',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 12),
-            if (mode == _ScannerMode.lunch) ...[
+            if (mode == _ScannerMode.lunch ||
+                lunchResponse != null ||
+                mode == _ScannerMode.selfService) ...[
               _ResultBanner(
                 icon: Icons.schedule_rounded,
                 color: AppPalette.orange,
@@ -864,7 +1120,9 @@ class _LunchScanResultCard extends StatelessWidget {
                 icon: Icons.qr_code_scanner_rounded,
                 color: AppPalette.night,
                 text: isScanning
-                    ? 'Esperando QR de credencial para ${mode.label.toLowerCase()}.'
+                    ? mode == _ScannerMode.selfService
+                          ? 'Escanea el QR de almuerzo o el QR de salidas.'
+                          : 'Esperando QR de credencial para ${mode.label.toLowerCase()}.'
                     : 'Procesando lectura.',
               ),
           ],
@@ -1124,10 +1382,18 @@ class _ScannerHelp extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
-        mode == _ScannerMode.lunch
-            ? 'Alinea el QR de la credencial para registrar almuerzo.'
-            : 'Alinea el QR de la credencial para registrar salida o llegada.',
-        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
+        switch (mode) {
+          _ScannerMode.lunch =>
+            'Alinea el QR de la credencial para registrar almuerzo.',
+          _ScannerMode.exitPermit =>
+            'Alinea el QR de la credencial para registrar salida o llegada.',
+          _ScannerMode.selfService =>
+            'Alinea el QR de almuerzo o salidas descargado por el administrador.',
+        },
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w500,
+        ),
       ),
     );
   }
@@ -1163,6 +1429,48 @@ class _ScannerErrorState extends StatelessWidget {
       ),
     );
   }
+}
+
+Future<void> _downloadRegistrationQrImage({
+  required String payload,
+  required String fileName,
+}) async {
+  final painter = QrPainter(
+    data: payload,
+    version: QrVersions.auto,
+    gapless: true,
+    eyeStyle: const QrEyeStyle(
+      eyeShape: QrEyeShape.square,
+      color: Colors.black,
+    ),
+    dataModuleStyle: const QrDataModuleStyle(
+      dataModuleShape: QrDataModuleShape.square,
+      color: Colors.black,
+    ),
+  );
+  const imageSize = 900.0;
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder)
+    ..drawRect(
+      const Rect.fromLTWH(0, 0, imageSize, imageSize),
+      Paint()..color = Colors.white,
+    );
+  painter.paint(canvas, const Size(imageSize, imageSize));
+  final image = await recorder.endRecording().toImage(
+    imageSize.toInt(),
+    imageSize.toInt(),
+  );
+  final imageData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+  if (imageData == null) {
+    throw StateError('No fue posible crear la imagen QR.');
+  }
+
+  await downloadFile(
+    fileName: fileName,
+    bytes: imageData.buffer.asUint8List(),
+    mimeType: 'image/png',
+  );
 }
 
 String _formatDate(DateTime date) {

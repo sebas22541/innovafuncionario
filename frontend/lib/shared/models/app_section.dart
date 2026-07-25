@@ -17,6 +17,7 @@ enum AppSection {
   swornDeclarations,
   lunches,
   lunchScanner,
+  attendanceQrScanner,
   qrScanner,
   myQr,
   settings,
@@ -59,6 +60,8 @@ extension AppSectionX on AppSection {
         return 'Almuerzos';
       case AppSection.lunchScanner:
         return 'Escaner almuerzo';
+      case AppSection.attendanceQrScanner:
+        return 'Leer QR';
       case AppSection.qrScanner:
         return 'Escanear';
       case AppSection.myQr:
@@ -102,6 +105,8 @@ extension AppSectionX on AppSection {
         return 'Control de almuerzos';
       case AppSection.lunchScanner:
         return 'Escaner de almuerzo';
+      case AppSection.attendanceQrScanner:
+        return 'Registro por QR';
       case AppSection.qrScanner:
         return 'Escaneo QR';
       case AppSection.myQr:
@@ -144,6 +149,8 @@ extension AppSectionX on AppSection {
       case AppSection.lunches:
         return Icons.restaurant_menu_rounded;
       case AppSection.lunchScanner:
+        return Icons.qr_code_scanner_rounded;
+      case AppSection.attendanceQrScanner:
         return Icons.qr_code_scanner_rounded;
       case AppSection.qrScanner:
         return Icons.qr_code_scanner_rounded;
