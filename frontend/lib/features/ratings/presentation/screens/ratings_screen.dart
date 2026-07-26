@@ -281,13 +281,9 @@ class _RatingsScreenState extends State<RatingsScreen> {
       final report = await dependencies.ratingsApiService.fetchReport(
         fechaInicio: _startDate,
         fechaFin: _endDate,
-        cargoCodigo: filter == _RatingsReportFilter.cargo
-            ? _selectedCargo?.code
-            : null,
-        oficinaId: filter == _RatingsReportFilter.office
-            ? _selectedOffice?.id
-            : null,
-        query: filter == _RatingsReportFilter.search ? _reportQuery : null,
+        cargoCodigo: _selectedCargo?.code,
+        oficinaId: _selectedOffice?.id,
+        query: _reportQuery.trim().length >= 2 ? _reportQuery : null,
       );
       if (!mounted) {
         return;
@@ -568,16 +564,12 @@ class _RatingsScreenState extends State<RatingsScreen> {
               style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
             ),
             pw.SizedBox(height: 6),
-            if (_activeReportFilter == _RatingsReportFilter.dateRange)
-              pw.Text('Rango: $_startDate a $_endDate'),
-            if (_activeReportFilter == _RatingsReportFilter.cargo &&
-                _selectedCargo != null)
+            pw.Text('Rango: $_startDate a $_endDate'),
+            if (_selectedCargo != null)
               pw.Text('Cargo: ${_selectedCargo!.name}'),
-            if (_activeReportFilter == _RatingsReportFilter.office &&
-                _selectedOffice != null)
+            if (_selectedOffice != null)
               pw.Text('Oficina: ${_selectedOffice!.name}'),
-            if (_activeReportFilter == _RatingsReportFilter.search &&
-                _reportQuery.trim().isNotEmpty)
+            if (_reportQuery.trim().isNotEmpty)
               pw.Text('Filtro: ${_reportQuery.trim()}'),
             pw.SizedBox(height: 12),
             pw.TableHelper.fromTextArray(
@@ -720,11 +712,17 @@ class _RatingsScreenState extends State<RatingsScreen> {
         if (query.length >= 2) {
           _loadReport(filter: _RatingsReportFilter.search);
         } else if (query.isEmpty) {
-          setState(() {
-            _report = const [];
-            _hasLoadedReport = false;
-            _activeReportFilter = null;
-          });
+          if (_hasLoadedReport ||
+              _selectedCargo != null ||
+              _selectedOffice != null) {
+            _loadReport();
+          } else {
+            setState(() {
+              _report = const [];
+              _hasLoadedReport = false;
+              _activeReportFilter = null;
+            });
+          }
         }
       }
     });
@@ -744,11 +742,7 @@ class _RatingsScreenState extends State<RatingsScreen> {
 
       if (value.trim().isEmpty &&
           _activeReportFilter == _RatingsReportFilter.office) {
-        setState(() {
-          _report = const [];
-          _hasLoadedReport = false;
-          _activeReportFilter = null;
-        });
+        _loadReport();
       }
     });
   }
@@ -1169,11 +1163,11 @@ class _RatingsScreenState extends State<RatingsScreen> {
                                   _selectedOffice = null;
                                   if (_activeReportFilter ==
                                       _RatingsReportFilter.office) {
-                                    _report = const [];
-                                    _hasLoadedReport = false;
-                                    _activeReportFilter = null;
+                                    _activeReportFilter =
+                                        _RatingsReportFilter.dateRange;
                                   }
                                 });
+                                _loadReport();
                               },
                               icon: const Icon(Icons.close_rounded),
                             ),

@@ -8,14 +8,9 @@ import {
   scryptSync,
   timingSafeEqual,
 } from "node:crypto";
-import http, {
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
+import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
-import { cert, getApps, initializeApp } from "firebase-admin/app";
-import { getMessaging } from "firebase-admin/messaging";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
@@ -41,6 +36,71 @@ import {
   logInfo,
   logWarning,
 } from "./logger.ts";
+import {
+  configureNotificationService,
+  createReceivedNotifications,
+  deleteNotificationToken,
+  loadNotificationTokensForUser,
+  loadReceivedNotifications,
+  loadSentNotificationHistory,
+  markReceivedNotificationRead,
+  parseRegisterNotificationTokenInput,
+  parseSendNotificationInput,
+  registerNotificationToken,
+  sendFirebaseDataMulticastMessage,
+  sendFirebaseMulticastNotification,
+  sendFirebaseNotification,
+  serializeReceivedNotification,
+} from "./modules/notificaciones/services/notification-service.ts";
+import {
+  buildLunchReportWhere,
+  configureLunchService,
+  serializeLunchRecord,
+} from "./modules/almuerzos/services/lunch-service.ts";
+import {
+  parseLunchReportQuery,
+  parseLunchScanInput,
+} from "./modules/almuerzos/validators/lunch-validator.ts";
+import {
+  configureExitPermitService,
+  serializeExitPermit,
+} from "./modules/salidas/services/exit-permit-service.ts";
+import {
+  parseCreateExitPermitInput,
+  parseUpdateExitPermitArrivalInput,
+  parseUpdateExitPermitStatusInput,
+  readExitPermitOnlyMineQuery,
+  readExitPermitQueryDate,
+  readExitPermitQuerySearch,
+} from "./modules/salidas/validators/exit-permit-validator.ts";
+import {
+  configureSwornDeclarationService,
+  listSwornDeclarations,
+  loadSwornDeclarationForPdf,
+  serializeSwornDeclaration,
+} from "./modules/declaracionesJuradas/services/sworn-declaration-service.ts";
+import {
+  parseCreateSwornDeclarationInput,
+  parseReviewSwornDeclarationInput,
+} from "./modules/declaracionesJuradas/validators/sworn-declaration-validator.ts";
+import {
+  configureReportService,
+  serializeAttendanceReportRecord,
+  serializeReportPerson,
+} from "./modules/reportes/services/report-service.ts";
+import {
+  configureDeviceService,
+  loadManagedDevices,
+  markUserDevicesOffline,
+  registerDeviceHeartbeat,
+  requestDeviceLogin,
+  requestDeviceLogout,
+} from "./modules/celulares/services/device-service.ts";
+import {
+  parseDeviceHeartbeatInput,
+  readDeviceIdParam,
+} from "./modules/celulares/validators/device-validator.ts";
+import { loadFuncionarioRatingsSummary } from "./modules/calificaciones/services/ratings-report-service.ts";
 
 const DEFAULT_PORT = 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -136,7 +196,8 @@ const PUBLIC_RATING_LOGO_SRC = readAssetDataUri(
 const FUNCIONARIO_CI_SERVICE_TOKEN_SHA256 = normalizeOptionalEnvValue(
   process.env.FUNCIONARIO_CI_SERVICE_TOKEN_SHA256,
 );
-const FUNCIONARIO_CI_SERVICE_PATH = "/api/integraciones/funcionarios/verificar-ci";
+const FUNCIONARIO_CI_SERVICE_PATH =
+  "/api/integraciones/funcionarios/verificar-ci";
 const FUNCIONARIO_CALIFICACIONES_SERVICE_PATH =
   "/api/integraciones/funcionarios/calificaciones";
 // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
@@ -155,6 +216,34 @@ const pool = new Pool({
   idleTimeoutMillis: DB_POOL_IDLE_TIMEOUT_MS,
   connectionTimeoutMillis: DB_POOL_CONNECTION_TIMEOUT_MS,
 });
+configureNotificationService({
+  pool,
+  firebaseServiceAccountJson: FIREBASE_SERVICE_ACCOUNT_JSON,
+});
+configureLunchService({
+  buildUserDisplayName,
+  toDateOnlyText,
+});
+configureExitPermitService({
+  buildUserDisplayName,
+  toDateOnlyText,
+});
+configureSwornDeclarationService({
+  pool,
+  isAdminUser,
+});
+configureReportService({
+  resolveLinkedOfficeName,
+  resolveLinkedOfficeId,
+  resolveLinkedOfficeCode,
+  serializeAttendanceControlRecord,
+  buildSerializedControlSummary,
+  buildResolvedPersonDisplayName,
+  serializeLocalEventDate,
+  buildUserDisplayName,
+  resolveEffectiveJobTitleName,
+  buildUserQrCode,
+});
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 const requestIdHeader = "X-Request-Id";
@@ -165,13 +254,23 @@ const CONSULTANT_LINK_TYPE = "CONSULTOR";
 const SERVICES_LINK_TYPE = "SERVICIOS";
 const TEMPORARY_LINK_TYPE = "EVENTUAL";
 const CONTRACT_LINK_TYPES = new Set([CONSULTANT_LINK_TYPE, SERVICES_LINK_TYPE]);
-const USER_LINK_TYPES = ["ITEM", TEMPORARY_LINK_TYPE, CONSULTANT_LINK_TYPE, SERVICES_LINK_TYPE] as const;
+const USER_LINK_TYPES = [
+  "ITEM",
+  TEMPORARY_LINK_TYPE,
+  CONSULTANT_LINK_TYPE,
+  SERVICES_LINK_TYPE,
+] as const;
 const DEVICE_ONLINE_THRESHOLD_MS = clampInt(
   process.env.DEVICE_ONLINE_THRESHOLD_MS ?? null,
   30_000,
   10_000,
   120_000,
 );
+configureDeviceService({
+  pool,
+  onlineThresholdMs: DEVICE_ONLINE_THRESHOLD_MS,
+  buildUserDisplayName,
+});
 const LUNCH_REGISTRATION_QR_PAYLOAD = "INNOVA_FUNCIONARIO:ALMUERZO:REGISTRO:1";
 const EXIT_PERMIT_REGISTRATION_QR_PAYLOAD =
   "INNOVA_FUNCIONARIO:SALIDAS:REGISTRO:1";
@@ -351,11 +450,16 @@ const server = http.createServer(async (request, response) => {
   requestPath = buildSafeRequestPath(url);
 
   if (!applyCors(request, response)) {
-    logWarning("Origen no permitido.", buildRequestLogFields(request, requestId, {
-      origin: normalizeRequestOrigin(readSingleHeader(request.headers.origin)),
-      referrerOrigin: readReferrerOrigin(request),
-      statusCode: 403,
-    }));
+    logWarning(
+      "Origen no permitido.",
+      buildRequestLogFields(request, requestId, {
+        origin: normalizeRequestOrigin(
+          readSingleHeader(request.headers.origin),
+        ),
+        referrerOrigin: readReferrerOrigin(request),
+        statusCode: 403,
+      }),
+    );
     sendJson(response, 403, { error: "Origen no permitido." });
     return;
   }
@@ -394,7 +498,10 @@ const server = http.createServer(async (request, response) => {
     }
 
     // INICIO SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
-    if (request.method === "POST" && url.pathname === FUNCIONARIO_CI_SERVICE_PATH) {
+    if (
+      request.method === "POST" &&
+      url.pathname === FUNCIONARIO_CI_SERVICE_PATH
+    ) {
       assertFuncionarioCiServiceToken(request);
       const input = parseFuncionarioCiLookupInput(await readJsonBody(request));
       const funcionario = await prisma.usuarios.findFirst({
@@ -416,7 +523,9 @@ const server = http.createServer(async (request, response) => {
       url.pathname === FUNCIONARIO_CALIFICACIONES_SERVICE_PATH
     ) {
       assertFuncionarioCiServiceToken(request);
-      const input = parseFuncionarioRatingsLookupInput(await readJsonBody(request));
+      const input = parseFuncionarioRatingsLookupInput(
+        await readJsonBody(request),
+      );
 
       if (input.type === "ci") {
         sendPlainJson(
@@ -430,7 +539,10 @@ const server = http.createServer(async (request, response) => {
       sendPlainJson(response, 200, {
         data:
           input.type === "oficina"
-            ? await loadFuncionarioRatingsByOffice(input.oficinaId, input.dateRange)
+            ? await loadFuncionarioRatingsByOffice(
+                input.oficinaId,
+                input.dateRange,
+              )
             : await loadFuncionarioRatingsByCis(input.cis, input.dateRange),
       });
       return;
@@ -455,7 +567,9 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && publicRatingMatch) {
       const token = decodeURIComponent(publicRatingMatch[1] ?? "");
       const funcionario = await resolveRatingTokenFuncionario(token);
-      const input = parseSubmitFuncionarioRatingInput(await readJsonBody(request));
+      const input = parseSubmitFuncionarioRatingInput(
+        await readJsonBody(request),
+      );
       const result = await submitFuncionarioRating({
         funcionario,
         input,
@@ -503,7 +617,10 @@ const server = http.createServer(async (request, response) => {
             });
 
       if (input.oficinaComisionId != null && !selectedCommissionOffice) {
-        throw new HttpError(400, "La oficina de comision seleccionada no existe.");
+        throw new HttpError(
+          400,
+          "La oficina de comision seleccionada no existe.",
+        );
       }
       assertHealthAdminCanUseOffice(requester, selectedCommissionOffice);
 
@@ -652,7 +769,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/api/celulares/heartbeat") {
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/celulares/heartbeat"
+    ) {
       assertAuthenticatedRequester(authenticatedUser);
       const input = parseDeviceHeartbeatInput(await readJsonBody(request));
       const result = await registerDeviceHeartbeat(authenticatedUser.id, input);
@@ -683,11 +803,7 @@ const server = http.createServer(async (request, response) => {
         authenticatedUser.email,
         "Solo un administrador puede cerrar sesiones de celulares.",
       );
-      const deviceId = decodeURIComponent(deviceLogoutMatch[1] ?? "").trim();
-
-      if (deviceId.length < 8 || deviceId.length > 120) {
-        throw new HttpError(400, "El celular seleccionado no es valido.");
-      }
+      const deviceId = readDeviceIdParam(deviceLogoutMatch[1] ?? "");
 
       await requestDeviceLogout(deviceId, authenticatedUser.id);
 
@@ -705,11 +821,7 @@ const server = http.createServer(async (request, response) => {
         authenticatedUser.email,
         "Solo un administrador puede iniciar sesiones de celulares.",
       );
-      const deviceId = decodeURIComponent(deviceLoginMatch[1] ?? "").trim();
-
-      if (deviceId.length < 8 || deviceId.length > 120) {
-        throw new HttpError(400, "El celular seleccionado no es valido.");
-      }
+      const deviceId = readDeviceIdParam(deviceLoginMatch[1] ?? "");
 
       const loginRequest = await requestDeviceLogin(deviceId);
       const wakeResult = await sendDeviceLoginCommand(
@@ -759,14 +871,15 @@ const server = http.createServer(async (request, response) => {
         );
       }
 
-      const nextPhotoSource = input.fotoData == null
-        ? existingUser.foto_url
-        : await storeUserProfilePhoto({
-            photoSource: input.fotoData,
-            email: existingUser.email,
-            ci: existingUser.ci,
-            userId: existingUser.id,
-          });
+      const nextPhotoSource =
+        input.fotoData == null
+          ? existingUser.foto_url
+          : await storeUserProfilePhoto({
+              photoSource: input.fotoData,
+              email: existingUser.email,
+              ci: existingUser.ci,
+              userId: existingUser.id,
+            });
 
       const updatedUser = await prisma.usuarios.update({
         where: { email: authenticatedUser.email },
@@ -836,7 +949,12 @@ const server = http.createServer(async (request, response) => {
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);
-      const dynamicQr = await issueDynamicQrForUser(prisma, person, user, input);
+      const dynamicQr = await issueDynamicQrForUser(
+        prisma,
+        person,
+        user,
+        input,
+      );
 
       sendJson(response, 200, {
         data: dynamicQr,
@@ -884,9 +1002,15 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/api/auth/credential/pdf") {
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/auth/credential/pdf"
+    ) {
       const payload = await readJsonBody(request);
-      const user = await resolveCredentialTargetUser(authenticatedUser, payload);
+      const user = await resolveCredentialTargetUser(
+        authenticatedUser,
+        payload,
+      );
       const pdfUser = applyCredentialPdfOverrides(user, payload);
       const person = await ensurePersonIdentityForUser(prisma, user);
       const pdfBytes = await generateUserCredentialPdf(pdfUser, person);
@@ -900,13 +1024,19 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "PUT" && url.pathname === "/api/auth/credential/photo") {
+    if (
+      request.method === "PUT" &&
+      url.pathname === "/api/auth/credential/photo"
+    ) {
       const payload = await readJsonBody(request);
       await assertCredentialsRequester(
         authenticatedUser.email,
         "Solo un administrador o usuario de credenciales puede actualizar fotos de credenciales.",
       );
-      const user = await resolveCredentialTargetUser(authenticatedUser, payload);
+      const user = await resolveCredentialTargetUser(
+        authenticatedUser,
+        payload,
+      );
       const body = expectRecord(payload);
       const fotoData = readRequiredString(body, "fotoData", 20, 5_000_000);
       const nextPhotoSource = await storeUserProfilePhoto({
@@ -933,15 +1063,15 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/almuerzos") {
       assertLunchReportRequester(authenticatedUser);
-      const query = parseLunchReportQuery(url);
+      const query = parseLunchReportQuery(url, {
+        readOptionalQueryInt,
+        readDateOnlyString,
+        formatDateInAppTimeZone,
+      });
       const records = await prisma.almuerzos.findMany({
         where: buildLunchReportWhere(query),
         include: lunchRecordInclude,
-        orderBy: [
-          { fecha: "desc" },
-          { salida_en: "desc" },
-          { id: "desc" },
-        ],
+        orderBy: [{ fecha: "desc" }, { salida_en: "desc" }, { id: "desc" }],
         take: 500,
       });
 
@@ -958,7 +1088,10 @@ const server = http.createServer(async (request, response) => {
       } else {
         assertLunchScannerRequester(authenticatedUser);
       }
-      const result = await registerLunchScan(input.qrValue, authenticatedUser.id);
+      const result = await registerLunchScan(
+        input.qrValue,
+        authenticatedUser.id,
+      );
 
       sendJson(response, 201, {
         data: result,
@@ -973,7 +1106,10 @@ const server = http.createServer(async (request, response) => {
       } else {
         assertExitPermitScannerRequester(authenticatedUser);
       }
-      const result = await registerExitPermitScan(input.qrValue, authenticatedUser.id);
+      const result = await registerExitPermitScan(
+        input.qrValue,
+        authenticatedUser.id,
+      );
 
       sendJson(response, 201, {
         data: result,
@@ -1022,9 +1158,13 @@ const server = http.createServer(async (request, response) => {
       });
 
       notifyExitPermitApprovers(salida.id).catch((error) => {
-        logError("No se pudo enviar la notificacion de solicitud de salida.", error, {
-          salidaId: salida.id,
-        });
+        logError(
+          "No se pudo enviar la notificacion de solicitud de salida.",
+          error,
+          {
+            salidaId: salida.id,
+          },
+        );
       });
 
       sendJson(response, 201, {
@@ -1033,7 +1173,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/api/salidas/pendientes") {
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/salidas/pendientes"
+    ) {
       const approver = await prisma.usuarios.findUnique({
         where: { id: authenticatedUser.id },
         include: userWithOfficeInclude,
@@ -1083,7 +1226,7 @@ const server = http.createServer(async (request, response) => {
             isExitPermitApproverUser(requester) &&
             !url.searchParams.has("fecha")))
           ? null
-          : readExitPermitQueryDate(url);
+          : readExitPermitQueryDate(url, readDateOnlyString, toDateOnlyText);
       const where = buildExitPermitListWhere(
         authenticatedUser,
         requester,
@@ -1117,7 +1260,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/api/declaraciones-juradas") {
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/declaraciones-juradas"
+    ) {
       assertAuthenticatedRequester(authenticatedUser);
       const query = normalizeOptionalText(url.searchParams.get("q"));
       const onlyMine =
@@ -1135,7 +1281,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/api/declaraciones-juradas") {
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/declaraciones-juradas"
+    ) {
       const user = await prisma.usuarios.findUnique({
         where: { id: authenticatedUser.id },
         include: userWithOfficeInclude,
@@ -1152,7 +1301,9 @@ const server = http.createServer(async (request, response) => {
         );
       }
 
-      const input = parseCreateSwornDeclarationInput(await readJsonBody(request));
+      const input = parseCreateSwornDeclarationInput(
+        await readJsonBody(request),
+      );
       const result = await pool.query(
         `
           INSERT INTO "declaraciones_juradas" (
@@ -1212,7 +1363,9 @@ const server = http.createServer(async (request, response) => {
         swornDeclarationUpdateMatch[1] ?? "",
         10,
       );
-      const input = parseCreateSwornDeclarationInput(await readJsonBody(request));
+      const input = parseCreateSwornDeclarationInput(
+        await readJsonBody(request),
+      );
       const result = await pool.query(
         `
           UPDATE "declaraciones_juradas"
@@ -1256,7 +1409,10 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && swornDeclarationPdfMatch != null) {
       assertAuthenticatedRequester(authenticatedUser);
-      const declarationId = Number.parseInt(swornDeclarationPdfMatch[1] ?? "", 10);
+      const declarationId = Number.parseInt(
+        swornDeclarationPdfMatch[1] ?? "",
+        10,
+      );
       const record = await loadSwornDeclarationForPdf(
         declarationId,
         authenticatedUser,
@@ -1287,7 +1443,9 @@ const server = http.createServer(async (request, response) => {
         swornDeclarationStatusMatch[1] ?? "",
         10,
       );
-      const input = parseReviewSwornDeclarationInput(await readJsonBody(request));
+      const input = parseReviewSwornDeclarationInput(
+        await readJsonBody(request),
+      );
       const reviewer = await prisma.usuarios.findUnique({
         where: { id: authenticatedUser.id },
       });
@@ -1309,7 +1467,9 @@ const server = http.createServer(async (request, response) => {
           input.estado,
           input.observacion,
           authenticatedUser.id,
-          reviewer == null ? authenticatedUser.email : buildUserDisplayName(reviewer),
+          reviewer == null
+            ? authenticatedUser.email
+            : buildUserDisplayName(reviewer),
         ],
       );
 
@@ -1329,7 +1489,9 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "PUT" && salidaLlegadaMatch != null) {
       const salidaId = Number.parseInt(salidaLlegadaMatch[1] ?? "", 10);
-      const input = parseUpdateExitPermitArrivalInput(await readJsonBody(request));
+      const input = parseUpdateExitPermitArrivalInput(
+        await readJsonBody(request),
+      );
 
       const salida = await prisma.salidas.findUnique({
         where: { id: salidaId },
@@ -1341,11 +1503,17 @@ const server = http.createServer(async (request, response) => {
       }
 
       if (salida.usuario_id !== authenticatedUser.id) {
-        throw new HttpError(403, "Solo el solicitante puede registrar su llegada.");
+        throw new HttpError(
+          403,
+          "Solo el solicitante puede registrar su llegada.",
+        );
       }
 
       if (salida.estado !== estado_salida.APROBADO) {
-        throw new HttpError(409, "Solo puedes registrar llegada de una salida aprobada.");
+        throw new HttpError(
+          409,
+          "Solo puedes registrar llegada de una salida aprobada.",
+        );
       }
 
       const updatedSalida = await prisma.salidas.update({
@@ -1369,7 +1537,9 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "PUT" && salidaEstadoMatch != null) {
       const salidaId = Number.parseInt(salidaEstadoMatch[1] ?? "", 10);
-      const input = parseUpdateExitPermitStatusInput(await readJsonBody(request));
+      const input = parseUpdateExitPermitStatusInput(
+        await readJsonBody(request),
+      );
       const approver = await prisma.usuarios.findUnique({
         where: { id: authenticatedUser.id },
         include: userWithOfficeInclude,
@@ -1444,9 +1614,14 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/api/notificaciones/token") {
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/notificaciones/token"
+    ) {
       assertAuthenticatedRequester(authenticatedUser);
-      const input = parseRegisterNotificationTokenInput(await readJsonBody(request));
+      const input = parseRegisterNotificationTokenInput(
+        await readJsonBody(request),
+      );
 
       await registerNotificationToken(authenticatedUser.id, input);
 
@@ -1456,9 +1631,14 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "DELETE" && url.pathname === "/api/notificaciones/token") {
+    if (
+      request.method === "DELETE" &&
+      url.pathname === "/api/notificaciones/token"
+    ) {
       assertAuthenticatedRequester(authenticatedUser);
-      const input = parseRegisterNotificationTokenInput(await readJsonBody(request));
+      const input = parseRegisterNotificationTokenInput(
+        await readJsonBody(request),
+      );
 
       await deleteNotificationToken(authenticatedUser.id, input.token);
 
@@ -1468,9 +1648,14 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/api/notificaciones/recibidas") {
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/notificaciones/recibidas"
+    ) {
       assertAuthenticatedRequester(authenticatedUser);
-      const notifications = await loadReceivedNotifications(authenticatedUser.id);
+      const notifications = await loadReceivedNotifications(
+        authenticatedUser.id,
+      );
 
       sendJson(response, 200, {
         data: notifications.map(serializeReceivedNotification),
@@ -1484,7 +1669,10 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "PUT" && notificationReadMatch != null) {
       assertAuthenticatedRequester(authenticatedUser);
-      const notificationId = Number.parseInt(notificationReadMatch[1] ?? "", 10);
+      const notificationId = Number.parseInt(
+        notificationReadMatch[1] ?? "",
+        10,
+      );
 
       if (!Number.isInteger(notificationId) || notificationId <= 0) {
         throw new HttpError(400, "La notificacion seleccionada no es valida.");
@@ -1498,7 +1686,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/api/notificaciones/enviadas") {
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/notificaciones/enviadas"
+    ) {
       await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede consultar notificaciones enviadas.",
@@ -1512,13 +1703,19 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/api/notificaciones/enviar") {
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/notificaciones/enviar"
+    ) {
       await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede enviar notificaciones.",
       );
       const input = parseSendNotificationInput(await readJsonBody(request));
-      const result = await sendFirebaseNotification(input, authenticatedUser.id);
+      const result = await sendFirebaseNotification(
+        input,
+        authenticatedUser.id,
+      );
 
       sendJson(response, 200, {
         data: result,
@@ -1568,22 +1765,29 @@ const server = http.createServer(async (request, response) => {
         authenticatedUser.email,
         "Solo un administrador puede consultar calificaciones.",
       );
-      const fechaInicio = readOptionalQueryDateOnly(url, "fechaInicio") ??
+      const fechaInicio =
+        readOptionalQueryDateOnly(url, "fechaInicio") ??
         readOptionalQueryDateOnly(url, "fecha");
-      const fechaFin = readOptionalQueryDateOnly(url, "fechaFin") ?? fechaInicio;
-      const cargoCodigo = normalizeOptionalText(url.searchParams.get("cargoCodigo"));
+      const fechaFin =
+        readOptionalQueryDateOnly(url, "fechaFin") ?? fechaInicio;
+      const cargoCodigo = normalizeOptionalText(
+        url.searchParams.get("cargoCodigo"),
+      );
       const oficinaId = readOptionalQueryInt(url, "oficinaId");
       const search = normalizeOptionalText(
         url.searchParams.get("q") ?? url.searchParams.get("ci"),
       );
-      const rows = await loadFuncionarioRatingsSummary(
+      const rows = await loadFuncionarioRatingsSummary({
+        pool,
         requester,
         fechaInicio,
         fechaFin,
         cargoCodigo,
         oficinaId,
         search,
-      );
+        healthOfficeLevel: HEALTH_OFFICE_LEVEL,
+        seedAdminEmail: SEED_ADMIN_EMAIL,
+      });
 
       sendJson(response, 200, {
         data: {
@@ -1599,7 +1803,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/api/calificaciones/qrs") {
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/calificaciones/qrs"
+    ) {
       const requester = await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede consultar QR activos de calificaciones.",
@@ -1614,12 +1821,17 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/api/calificaciones/qr") {
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/calificaciones/qr"
+    ) {
       const requester = await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede generar QR de calificaciones.",
       );
-      const input = parseGenerateFuncionarioRatingQrInput(await readJsonBody(request));
+      const input = parseGenerateFuncionarioRatingQrInput(
+        await readJsonBody(request),
+      );
       const funcionario = await loadFuncionarioForRatingAdmin(
         input.funcionarioId,
         requester,
@@ -1642,7 +1854,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/api/calificaciones/qr/oficina") {
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/calificaciones/qr/oficina"
+    ) {
       const requester = await assertAdminRequester(
         authenticatedUser.email,
         "Solo un administrador puede generar QR de calificaciones por oficina.",
@@ -1719,7 +1934,10 @@ const server = http.createServer(async (request, response) => {
             });
 
       if (input.oficinaComisionId != null && !selectedCommissionOffice) {
-        throw new HttpError(400, "La oficina de comision seleccionada no existe.");
+        throw new HttpError(
+          400,
+          "La oficina de comision seleccionada no existe.",
+        );
       }
       assertHealthAdminCanUseOffice(requester, selectedCommissionOffice);
 
@@ -1766,7 +1984,10 @@ const server = http.createServer(async (request, response) => {
       });
 
       if (existingUser) {
-        throw new HttpError(409, "Ya existe un usuario con ese usuario de acceso.");
+        throw new HttpError(
+          409,
+          "Ya existe un usuario con ese usuario de acceso.",
+        );
       }
 
       if (duplicatedUser) {
@@ -1920,29 +2141,34 @@ const server = http.createServer(async (request, response) => {
             );
           }
 
-          const resolvedUnit = selectedOffice?.oficina ?? managedInput.unidad ?? "";
+          const resolvedUnit =
+            selectedOffice?.oficina ?? managedInput.unidad ?? "";
           const resolvedOfficeId = selectedOffice?.id ?? null;
-          const resolvedCommissionOfficeId = selectedCommissionOffice?.id ?? null;
+          const resolvedCommissionOfficeId =
+            selectedCommissionOffice?.id ?? null;
           const resolvedCargo = selectedCargo?.cargo ?? managedInput.cargo;
           const resolvedCargoCode = selectedCargo?.codigo ?? null;
-          const resolvedSubcargo = selectedSubcargo?.cargo ?? managedInput.subcargo;
+          const resolvedSubcargo =
+            selectedSubcargo?.cargo ?? managedInput.subcargo;
           const resolvedSubcargoCode = selectedSubcargo?.codigo ?? null;
           const resolvedLugar = resolvePorteroLugar(
             resolvedCargo,
             resolvedCargoCode,
             managedInput.lugar,
           );
-          const nextPhotoSource = managedInput.fotoData == null
-            ? existingUser.foto_url
-            : await storeUserProfilePhoto({
-                photoSource: managedInput.fotoData,
-                email: managedInput.email,
-                ci: managedInput.ci,
-                userId,
-              });
-          const nextPasswordHash = managedInput.password == null
-            ? existingUser.password_hash
-            : hashPassword(managedInput.password);
+          const nextPhotoSource =
+            managedInput.fotoData == null
+              ? existingUser.foto_url
+              : await storeUserProfilePhoto({
+                  photoSource: managedInput.fotoData,
+                  email: managedInput.email,
+                  ci: managedInput.ci,
+                  userId,
+                });
+          const nextPasswordHash =
+            managedInput.password == null
+              ? existingUser.password_hash
+              : hashPassword(managedInput.password);
 
           const nextUser = await tx.usuarios.update({
             where: { id: userId },
@@ -1994,7 +2220,10 @@ const server = http.createServer(async (request, response) => {
         const nextUser = await tx.usuarios.update({
           where: { id: userId },
           data: {
-            activo: resolveActiveForExistingContract(existingUser, input.activo),
+            activo: resolveActiveForExistingContract(
+              existingUser,
+              input.activo,
+            ),
             updated_at: new Date(),
           },
           include: userWithOfficeInclude,
@@ -2034,11 +2263,13 @@ const server = http.createServer(async (request, response) => {
             ? await loadSerializedEventSummaries(authenticatedUser)
             : view === "assigned"
               ? await loadSerializedAssignedEventSummaries(authenticatedUser)
-            : (await prisma.eventos.findMany({
-                where: healthEventWhereForRequester(authenticatedUser),
-                orderBy: [{ fecha_evento: "desc" }, { id: "desc" }],
-                include: eventInclude,
-              })).map(serializeEvent),
+              : (
+                  await prisma.eventos.findMany({
+                    where: healthEventWhereForRequester(authenticatedUser),
+                    orderBy: [{ fecha_evento: "desc" }, { id: "desc" }],
+                    include: eventInclude,
+                  })
+                ).map(serializeEvent),
       });
       return;
     }
@@ -2404,28 +2635,29 @@ const server = http.createServer(async (request, response) => {
 
       const records =
         scope === "eventos"
-          ? (await prisma.asistencia_controles.findMany({
-              where: {
-                latitud_registro: {
-                  not: null,
-                },
-                longitud_registro: {
-                  not: null,
-                },
-                ...(controlId == null
+          ? (
+              await prisma.asistencia_controles.findMany({
+                where: {
+                  latitud_registro: {
+                    not: null,
+                  },
+                  longitud_registro: {
+                    not: null,
+                  },
+                  ...(controlId == null
                     ? {}
                     : {
                         control_id: controlId,
                       }),
-                asistencias: {
-                  ...(eventId == null
+                  asistencias: {
+                    ...(eventId == null
                       ? {}
                       : {
                           evento_id: eventId,
                         }),
-                  personas: {
-                    ...healthPersonWhere,
-                    ...(query.length === 0
+                    personas: {
+                      ...healthPersonWhere,
+                      ...(query.length === 0
                         ? {}
                         : {
                             OR: [
@@ -2447,38 +2679,39 @@ const server = http.createServer(async (request, response) => {
                               },
                             ],
                           }),
+                    },
                   },
-                },
-                ...(generatedFrom == null && generatedTo == null
+                  ...(generatedFrom == null && generatedTo == null
                     ? {}
                     : {
                         registrado_en: {
                           ...(generatedFrom == null
-                              ? {}
-                              : {
-                                  gte: generatedFrom,
-                                }),
+                            ? {}
+                            : {
+                                gte: generatedFrom,
+                              }),
                           ...(generatedTo == null
-                              ? {}
-                              : {
-                                  lte: generatedTo,
-                                }),
+                            ? {}
+                            : {
+                                lte: generatedTo,
+                              }),
                         },
                       }),
-              },
-              include: {
-                evento_controles: true,
-                asistencias: {
-                  include: {
-                    eventos: true,
-                    personas: {
-                      include: personIdentityInclude,
+                },
+                include: {
+                  evento_controles: true,
+                  asistencias: {
+                    include: {
+                      eventos: true,
+                      personas: {
+                        include: personIdentityInclude,
+                      },
                     },
                   },
                 },
-              },
-              orderBy: [{ registrado_en: "desc" }, { id: "desc" }],
-            }))
+                orderBy: [{ registrado_en: "desc" }, { id: "desc" }],
+              })
+            )
               .map(serializeEventScanMapRecord)
               .filter(isQrMapRecord)
               .filter((record) => matchesQrMapFilter(record, query, filterBy))
@@ -2490,20 +2723,22 @@ const server = http.createServer(async (request, response) => {
                   new Date(right.generatedAt).getTime() -
                   new Date(left.generatedAt).getTime(),
               )
-          : (await prisma.personas.findMany({
-              where: {
-                AND: [
-                  {
-                    usuario_id: {
-                      not: null,
+          : (
+              await prisma.personas.findMany({
+                where: {
+                  AND: [
+                    {
+                      usuario_id: {
+                        not: null,
+                      },
                     },
-                  },
-                  ...healthWhereArray(healthPersonWhere),
-                ],
-              },
-              include: personIdentityInclude,
-              orderBy: [{ updated_at: "desc" }, { id: "desc" }],
-            }))
+                    ...healthWhereArray(healthPersonWhere),
+                  ],
+                },
+                include: personIdentityInclude,
+                orderBy: [{ updated_at: "desc" }, { id: "desc" }],
+              })
+            )
               .flatMap((person) => serializeQrGenerationHistoryRecords(person))
               .filter(isQrMapRecord)
               .filter((record) => matchesQrMapFilter(record, query, filterBy))
@@ -2672,20 +2907,22 @@ const server = http.createServer(async (request, response) => {
           },
         });
 
-        const attendedControl = input.estado === estado_asistencia.ASISTIO
-          ? { id: controlAttendance.id }
-          : await tx.asistencia_controles.findFirst({
-              where: {
-                asistencia_id: baseAttendance.id,
-                estado: estado_asistencia.ASISTIO,
-              },
-              select: {
-                id: true,
-              },
-            });
-        const resolvedAttendanceState = attendedControl != null
-          ? estado_asistencia.ASISTIO
-          : estado_asistencia.OBSERVADO;
+        const attendedControl =
+          input.estado === estado_asistencia.ASISTIO
+            ? { id: controlAttendance.id }
+            : await tx.asistencia_controles.findFirst({
+                where: {
+                  asistencia_id: baseAttendance.id,
+                  estado: estado_asistencia.ASISTIO,
+                },
+                select: {
+                  id: true,
+                },
+              });
+        const resolvedAttendanceState =
+          attendedControl != null
+            ? estado_asistencia.ASISTIO
+            : estado_asistencia.OBSERVADO;
 
         const updatedAttendance = await tx.asistencias.update({
           where: { id: baseAttendance.id },
@@ -2760,8 +2997,9 @@ const server = http.createServer(async (request, response) => {
       // busca CI -> backend resuelve persona real -> frontend permite registrar
       // solo como observado sin depender del QR leido.
       assertPersonLookupRequester(authenticatedUser);
-      const ci = decodeURIComponent(url.pathname.replace("/api/personas/ci/", ""))
-        .trim();
+      const ci = decodeURIComponent(
+        url.pathname.replace("/api/personas/ci/", ""),
+      ).trim();
 
       if (!ci) {
         sendJson(response, 400, { error: "Debes enviar un CI valido." });
@@ -2888,12 +3126,15 @@ const server = http.createServer(async (request, response) => {
     sendJson(response, 404, { error: "Ruta no encontrada." });
   } catch (error) {
     if (error instanceof HttpError) {
-      logWarning(error.message, buildRequestLogFields(request, requestId, {
-        path: requestPath,
-        statusCode: error.statusCode,
-        userId: authenticatedUserForLog?.id,
-        userEmail: authenticatedUserForLog?.email,
-      }));
+      logWarning(
+        error.message,
+        buildRequestLogFields(request, requestId, {
+          path: requestPath,
+          statusCode: error.statusCode,
+          userId: authenticatedUserForLog?.id,
+          userEmail: authenticatedUserForLog?.email,
+        }),
+      );
       if (isFuncionarioExternalServicePath(requestPath)) {
         sendPlainJson(response, error.statusCode, {
           status: error.statusCode,
@@ -2907,16 +3148,16 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    logError("Error no controlado procesando request.", error, buildRequestLogFields(
-      request,
-      requestId,
-      {
+    logError(
+      "Error no controlado procesando request.",
+      error,
+      buildRequestLogFields(request, requestId, {
         path: requestPath,
         statusCode: 500,
         userId: authenticatedUserForLog?.id,
         userEmail: authenticatedUserForLog?.email,
-      },
-    ));
+      }),
+    );
     sendJson(response, 500, {
       error: "Error interno del servidor.",
       details: getErrorMessage(error),
@@ -2929,8 +3170,14 @@ server.headersTimeout = 66_000;
 
 server.on("error", (error: NodeJS.ErrnoException) => {
   if (error.code === "EADDRINUSE") {
-    logFatal(`No se puede iniciar el backend: el puerto ${PORT} ya esta en uso.`, error);
-    logFatal("Cierra el proceso anterior o define otro puerto con la variable PORT.", error);
+    logFatal(
+      `No se puede iniciar el backend: el puerto ${PORT} ya esta en uso.`,
+      error,
+    );
+    logFatal(
+      "Cierra el proceso anterior o define otro puerto con la variable PORT.",
+      error,
+    );
     process.exit(1);
   }
 
@@ -3077,86 +3324,6 @@ type GenerateDynamicQrInput = {
   accuracy: number | null;
 };
 
-type CreateExitPermitInput = {
-  motivo: (typeof motivo_salida)[keyof typeof motivo_salida];
-  lugarDestino: string;
-  descripcion: string | null;
-  fechaPermiso: Date;
-};
-
-type UpdateExitPermitStatusInput = {
-  estado: typeof estado_salida.APROBADO | typeof estado_salida.RECHAZADO;
-};
-
-type UpdateExitPermitArrivalInput = {
-  horaLlegada: string;
-};
-
-type LunchScanInput = {
-  qrValue: string;
-};
-
-type LunchReportQuery = {
-  fecha: Date;
-  search: string | null;
-  status: "ABIERTOS" | "CERRADOS" | null;
-  scannerId: number | null;
-  officeId: number | null;
-};
-
-type RegisterNotificationTokenInput = {
-  token: string;
-  platform: string;
-};
-
-type DeviceHeartbeatInput = {
-  deviceId: string;
-  platform: string;
-  manufacturer: string | null;
-  model: string | null;
-  androidSdk: number | null;
-  batteryLevel: number | null;
-  isCharging: boolean | null;
-  brightness: number | null;
-  kioskEnabled: boolean;
-};
-
-type SendNotificationInput = {
-  title: string;
-  body: string;
-  cargoCodigos: string[];
-  oficinaIds: number[];
-  cis: string[];
-  tiposVinculo: string[];
-  sendToAll: boolean;
-};
-
-type ReceivedNotificationRecord = {
-  id: number;
-  usuario_id: number;
-  tipo: string;
-  titulo: string;
-  cuerpo: string;
-  destino_seccion: string | null;
-  salida_id: number | null;
-  leida_en: Date | null;
-  created_at: Date;
-};
-
-type SentNotificationRecord = {
-  id: number;
-  enviado_por_id: number;
-  titulo: string;
-  cuerpo: string;
-  filtros: any;
-  destinatarios_solicitados: number;
-  enviados: number;
-  fallidos: number;
-  tokens_invalidos_removidos: number;
-  mensaje_resultado: string | null;
-  created_at: Date;
-};
-
 type RegisterUserInput = {
   email: string;
   password: string;
@@ -3194,7 +3361,10 @@ type UpdateUserStatusInput = {
   activo: boolean;
 };
 
-type UpdateManagedUserInput = Omit<RegisterUserInput, "password" | "fotoData"> & {
+type UpdateManagedUserInput = Omit<
+  RegisterUserInput,
+  "password" | "fotoData"
+> & {
   requesterEmail: string;
   rol: (typeof rol_usuario)[keyof typeof rol_usuario];
   password: string | null;
@@ -3203,9 +3373,7 @@ type UpdateManagedUserInput = Omit<RegisterUserInput, "password" | "fotoData"> &
 
 type AttendanceReportQuery = {
   ci: string;
-  estado:
-    | (typeof estado_asistencia)[keyof typeof estado_asistencia]
-    | null;
+  estado: (typeof estado_asistencia)[keyof typeof estado_asistencia] | null;
 };
 
 type EventAttendanceCounts = {
@@ -3239,7 +3407,9 @@ type QrMapRecord = {
 };
 
 function applyCors(request: IncomingMessage, response: ServerResponse) {
-  const origin = normalizeRequestOrigin(readSingleHeader(request.headers.origin));
+  const origin = normalizeRequestOrigin(
+    readSingleHeader(request.headers.origin),
+  );
   const referrerOrigin = readReferrerOrigin(request);
   const isAllowedOrigin = origin == null || isAllowedRequestOrigin(origin);
   const isAllowedReferrer =
@@ -3258,7 +3428,10 @@ function applyCors(request: IncomingMessage, response: ServerResponse) {
     response.setHeader("Vary", "Origin");
   }
 
-  response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  response.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,DELETE,OPTIONS",
+  );
   response.setHeader(
     "Access-Control-Allow-Headers",
     "Content-Type, Authorization, x-service",
@@ -3380,11 +3553,7 @@ function sendPlainJson(
   response.end(JSON.stringify(payload, null, 2));
 }
 
-function sendHtml(
-  response: ServerResponse,
-  statusCode: number,
-  html: string,
-) {
+function sendHtml(response: ServerResponse, statusCode: number, html: string) {
   response.setHeader("Content-Type", "text/html; charset=utf-8");
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("Pragma", "no-cache");
@@ -3432,7 +3601,8 @@ function buildCredentialPdfFilename(user: {
   email?: string | null;
   id: number;
 }) {
-  const safeId = normalizeOptionalText(user.ci) ??
+  const safeId =
+    normalizeOptionalText(user.ci) ??
     normalizeOptionalText(user.email)
       ?.toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
@@ -3507,9 +3677,11 @@ function parseAllowedCorsOrigins(value: string | undefined) {
     "http://localhost:4016",
     "http://localhost:8080",
   ];
-  const origins = (value == null || value.trim().length === 0
-    ? defaultOrigins
-    : value.split(","))
+  const origins = (
+    value == null || value.trim().length === 0
+      ? defaultOrigins
+      : value.split(",")
+  )
     .map((origin) => origin.trim().replace(/\/+$/, ""))
     .filter((origin) => origin.length > 0 && origin !== "*");
 
@@ -3540,10 +3712,7 @@ function readClientIp(request: IncomingMessage) {
     return firstForwardedIp.trim();
   }
 
-  return (
-    remoteAddress ??
-    "unknown"
-  );
+  return remoteAddress ?? "unknown";
 }
 
 function isTrustedProxyAddress(address: string) {
@@ -3581,7 +3750,10 @@ function isTrustedProxyAddress(address: string) {
 }
 
 function normalizeSocketAddress(address: string) {
-  return address.trim().toLowerCase().replace(/^::ffff:/, "");
+  return address
+    .trim()
+    .toLowerCase()
+    .replace(/^::ffff:/, "");
 }
 
 async function authenticateRequestIfRequired(
@@ -3643,10 +3815,7 @@ function isPublicRoute(request: IncomingMessage, url: URL) {
   }
   // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
 
-  if (
-    request.method === "POST" &&
-    url.pathname === "/api/auth/login"
-  ) {
+  if (request.method === "POST" && url.pathname === "/api/auth/login") {
     return true;
   }
 
@@ -3696,7 +3865,12 @@ function assertFuncionarioCiServiceToken(request: IncomingMessage) {
     throw new HttpError(401, "Debes enviar el token del servicio.");
   }
 
-  if (!constantTimeEqualText(sha256Hex(token), FUNCIONARIO_CI_SERVICE_TOKEN_SHA256)) {
+  if (
+    !constantTimeEqualText(
+      sha256Hex(token),
+      FUNCIONARIO_CI_SERVICE_TOKEN_SHA256,
+    )
+  ) {
     throw new HttpError(403, "Token del servicio invalido.");
   }
 }
@@ -3773,9 +3947,10 @@ function verifyAuthToken(token: string): AuthTokenPayload {
   const exp = readFiniteNumber(parsedPayload.exp);
   const iat = readFiniteNumber(parsedPayload.iat) ?? 0;
   const sv = readFiniteNumber(parsedPayload.sv) ?? 0;
-  const email = typeof parsedPayload.email === "string"
-    ? normalizeEmailValue(parsedPayload.email)
-    : "";
+  const email =
+    typeof parsedPayload.email === "string"
+      ? normalizeEmailValue(parsedPayload.email)
+      : "";
 
   if (sub == null || exp == null) {
     throw new HttpError(401, "Token de sesion invalido.");
@@ -3812,9 +3987,8 @@ async function readUserSessionVersion(userId: number) {
     [userId],
   );
   const value = result.rows[0]?.session_version;
-  const version = typeof value === "number"
-    ? value
-    : Number.parseInt(value ?? "0", 10);
+  const version =
+    typeof value === "number" ? value : Number.parseInt(value ?? "0", 10);
 
   return Number.isInteger(version) && version >= 0 ? version : 0;
 }
@@ -3847,7 +4021,11 @@ function parseBase64UrlJson(value: string) {
       Buffer.from(value, "base64url").toString("utf8"),
     );
 
-    if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) {
+    if (
+      !parsedValue ||
+      typeof parsedValue !== "object" ||
+      Array.isArray(parsedValue)
+    ) {
       throw new Error("Invalid payload");
     }
 
@@ -3861,8 +4039,10 @@ function safeEqualText(left: string, right: string) {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
 
-  return leftBuffer.length === rightBuffer.length &&
-    timingSafeEqual(leftBuffer, rightBuffer);
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    timingSafeEqual(leftBuffer, rightBuffer)
+  );
 }
 
 async function ensureRuntimeSchema() {
@@ -4653,7 +4833,11 @@ function encryptJsonPayload(payload: unknown) {
   }
 
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", PAYLOAD_ENCRYPTION_KEY_BYTES, iv);
+  const cipher = createCipheriv(
+    "aes-256-gcm",
+    PAYLOAD_ENCRYPTION_KEY_BYTES,
+    iv,
+  );
   const encrypted = Buffer.concat([
     cipher.update(JSON.stringify(payload), "utf8"),
     cipher.final(),
@@ -4796,15 +4980,13 @@ function parseEventInputPayload(payload: unknown) {
   const latitud = readRequiredFloat(body, "latitud", -90, 90);
   const longitud = readRequiredFloat(body, "longitud", -180, 180);
   const oficinaIds = readOptionalIntList(body, "oficinaIds");
-  const oficinaIdsFinales = readOptionalIntList(
+  const oficinaIdsFinales = readOptionalIntList(body, "oficinaIdsFinales");
+  const oficinaIdsExcluidos = readOptionalIntList(body, "oficinaIdsExcluidos");
+  const cargoCodigos = readOptionalStringList(
     body,
-    "oficinaIdsFinales",
+    "cargoCodigos",
+    "cargoCodigo",
   );
-  const oficinaIdsExcluidos = readOptionalIntList(
-    body,
-    "oficinaIdsExcluidos",
-  );
-  const cargoCodigos = readOptionalStringList(body, "cargoCodigos", "cargoCodigo");
   const cargoCodigosPorOficina = parseOfficeJobTitleInput(body);
   const controles = parseEventControlsInput(body);
 
@@ -4837,7 +5019,9 @@ function parseEventInputPayload(payload: unknown) {
   };
 }
 
-function parseOfficeJobTitleInput(source: JsonRecord): EventOfficeJobTitleInput[] {
+function parseOfficeJobTitleInput(
+  source: JsonRecord,
+): EventOfficeJobTitleInput[] {
   const rawItems = source["cargoCodigosPorOficina"];
 
   if (rawItems == null) {
@@ -4856,7 +5040,11 @@ function parseOfficeJobTitleInput(source: JsonRecord): EventOfficeJobTitleInput[
 
     return {
       oficinaId: readRequiredInt(record, "oficinaId"),
-      cargoCodigos: readOptionalStringList(record, "cargoCodigos", "cargoCodigo"),
+      cargoCodigos: readOptionalStringList(
+        record,
+        "cargoCodigos",
+        "cargoCodigo",
+      ),
     };
   });
 }
@@ -4903,8 +5091,12 @@ async function resolveExpandedEventOffices(
   const uniqueFinalOfficeIds = [...new Set(finalOfficeIds)];
   const allOffices = (await tx.oficinas.findMany()) as EventOfficeNode[];
   const officesById = new Map(allOffices.map((office) => [office.id, office]));
-  const directOffices = uniqueOfficeIds.map((officeId) => officesById.get(officeId));
-  const finalOffices = uniqueFinalOfficeIds.map((officeId) => officesById.get(officeId));
+  const directOffices = uniqueOfficeIds.map((officeId) =>
+    officesById.get(officeId),
+  );
+  const finalOffices = uniqueFinalOfficeIds.map((officeId) =>
+    officesById.get(officeId),
+  );
 
   if (directOffices.some((office) => office == null)) {
     throw new HttpError(400, "Debes seleccionar una o mas oficinas validas.");
@@ -4919,24 +5111,23 @@ async function resolveExpandedEventOffices(
   const directCodes = resolvedDirectOffices
     .map((office) => normalizeOfficeCode(office.cod))
     .filter((code) => code.length > 0);
-  const requestedExcludedOffices = [...new Set(excludedOfficeIds)].map((officeId) =>
-    officesById.get(officeId),
+  const requestedExcludedOffices = [...new Set(excludedOfficeIds)].map(
+    (officeId) => officesById.get(officeId),
   );
 
   if (requestedExcludedOffices.some((office) => office == null)) {
-    throw new HttpError(
-      400,
-      "Las ramas excluidas del evento no son validas.",
-    );
+    throw new HttpError(400, "Las ramas excluidas del evento no son validas.");
   }
 
-  const normalizedExcludedOffices = (requestedExcludedOffices as EventOfficeNode[])
+  const normalizedExcludedOffices = (
+    requestedExcludedOffices as EventOfficeNode[]
+  )
     .filter((office) => !directIdSet.has(office.id))
     .filter((office) => {
       const officeCode = normalizeOfficeCode(office.cod);
 
-      return directCodes.some(
-        (selectedCode) => isOfficeCoveredByBranch(officeCode, selectedCode),
+      return directCodes.some((selectedCode) =>
+        isOfficeCoveredByBranch(officeCode, selectedCode),
       );
     });
   const excludedCodes = normalizedExcludedOffices
@@ -4944,26 +5135,29 @@ async function resolveExpandedEventOffices(
     .filter((code) => code.length > 0);
 
   const resolvedFinalOfficeSet = new Set(uniqueFinalOfficeIds);
-  const expandedOfficesSource = uniqueFinalOfficeIds.length > 0
-    ? (finalOffices as EventOfficeNode[]).filter((office) =>
-        resolvedFinalOfficeSet.has(office.id),
-      )
-    : allOffices.filter((office: EventOfficeNode) => {
-        const officeCode = normalizeOfficeCode(office.cod);
+  const expandedOfficesSource =
+    uniqueFinalOfficeIds.length > 0
+      ? (finalOffices as EventOfficeNode[]).filter((office) =>
+          resolvedFinalOfficeSet.has(office.id),
+        )
+      : allOffices.filter((office: EventOfficeNode) => {
+          const officeCode = normalizeOfficeCode(office.cod);
 
-      const isIncluded = directCodes.some(
-        (selectedCode) => isOfficeCoveredByBranch(officeCode, selectedCode),
-      );
-      const isExcluded = excludedCodes.some(
-        (excludedCode) => isOfficeCoveredByBranch(officeCode, excludedCode),
-      );
+          const isIncluded = directCodes.some((selectedCode) =>
+            isOfficeCoveredByBranch(officeCode, selectedCode),
+          );
+          const isExcluded = excludedCodes.some((excludedCode) =>
+            isOfficeCoveredByBranch(officeCode, excludedCode),
+          );
 
-        return isIncluded && !isExcluded;
-      });
-  const expandedOffices = expandedOfficesSource.map((office: EventOfficeNode) => ({
-    ...office,
-    isDirectSelection: directIdSet.has(office.id),
-  }));
+          return isIncluded && !isExcluded;
+        });
+  const expandedOffices = expandedOfficesSource.map(
+    (office: EventOfficeNode) => ({
+      ...office,
+      isDirectSelection: directIdSet.has(office.id),
+    }),
+  );
 
   expandedOffices.sort(compareOfficeHierarchy);
   normalizedExcludedOffices.sort(compareOfficeHierarchy);
@@ -4991,7 +5185,9 @@ async function createEventControls(
 }
 
 async function getEventAttendanceContext(eventId: number) {
-  const cachedEvent = readCacheValue(eventAttendanceContextCache.get(eventId) ?? null);
+  const cachedEvent = readCacheValue(
+    eventAttendanceContextCache.get(eventId) ?? null,
+  );
 
   if (cachedEvent != null) {
     return cachedEvent;
@@ -5257,7 +5453,8 @@ function requiresLugarForCargo(
   const normalizedCargo = normalizeLooseMatchText(cargo);
 
   return (
-    (normalizedCode != null && locationRequiredCargoCodes.has(normalizedCode)) ||
+    (normalizedCode != null &&
+      locationRequiredCargoCodes.has(normalizedCode)) ||
     normalizedCargo?.startsWith("PORTERO") === true ||
     normalizedCargo?.startsWith("GUARDIA MUNICIPAL") === true
   );
@@ -5281,11 +5478,7 @@ type EventJobTitleCandidate = {
 };
 
 type EventJobTitleGroup =
-  | "CHIEF"
-  | "DIRECTOR"
-  | "MUNICIPAL_SECRETARY"
-  | "SUBMAYOR"
-  | "TECHNICAL";
+  "CHIEF" | "DIRECTOR" | "MUNICIPAL_SECRETARY" | "SUBMAYOR" | "TECHNICAL";
 
 function resolveUserEventJobTitles(user: any): EventJobTitleCandidate[] {
   const candidates = [
@@ -5376,9 +5569,7 @@ function matchesCargoSelection(
 
   if (
     onlyTechnicalSelection &&
-    userJobTitles.some((jobTitle) =>
-      isEventLeadershipJobTitle(jobTitle.name),
-    )
+    userJobTitles.some((jobTitle) => isEventLeadershipJobTitle(jobTitle.name))
   ) {
     return false;
   }
@@ -5420,8 +5611,7 @@ function matchesCargoSelection(
     if (
       allowedGroup != null &&
       userJobTitles.some(
-        (jobTitle) =>
-          resolveEventJobTitleGroup(jobTitle.name) === allowedGroup,
+        (jobTitle) => resolveEventJobTitleGroup(jobTitle.name) === allowedGroup,
       )
     ) {
       return true;
@@ -5450,12 +5640,16 @@ function isOfficeCoveredByBranch(officeCode: string, branchCode: string) {
     submayoraltyEventBranchCodes[normalizedBranchCode];
 
   if (explicitBranchCodes != null) {
-    return normalizedOfficeCode === normalizedBranchCode ||
-      explicitBranchCodes.has(normalizedOfficeCode);
+    return (
+      normalizedOfficeCode === normalizedBranchCode ||
+      explicitBranchCodes.has(normalizedOfficeCode)
+    );
   }
 
-  return normalizedOfficeCode === normalizedBranchCode ||
-    normalizedOfficeCode.startsWith(`${normalizedBranchCode}.`);
+  return (
+    normalizedOfficeCode === normalizedBranchCode ||
+    normalizedOfficeCode.startsWith(`${normalizedBranchCode}.`)
+  );
 }
 
 const submayoraltyEventBranchCodes: Record<string, Set<string>> = {
@@ -5526,10 +5720,11 @@ function parseRegisterAttendanceInput(
   const controlId = readRequiredInt(body, "controlId");
   const qrValue = readOptionalString(body, "qrValue", 1, 500);
   const ci = readOptionalString(body, "ci", 3, 30);
-  const registrationSource = readRequiredUppercaseChoice(body, "registrationSource", [
-    "QR",
-    "CI",
-  ]) as "QR" | "CI";
+  const registrationSource = readRequiredUppercaseChoice(
+    body,
+    "registrationSource",
+    ["QR", "CI"],
+  ) as "QR" | "CI";
   const observacion = readOptionalString(body, "observacion", 0, 500);
   const payloadFields = readOptionalRecord(body, "payloadFields");
   const scannedAt = readOptionalDate(body, "scannedAt");
@@ -5542,10 +5737,7 @@ function parseRegisterAttendanceInput(
     estadoValue !== estado_asistencia.ASISTIO &&
     estadoValue !== estado_asistencia.OBSERVADO
   ) {
-    throw new HttpError(
-      400,
-      "El estado debe ser ASISTIO u OBSERVADO.",
-    );
+    throw new HttpError(400, "El estado debe ser ASISTIO u OBSERVADO.");
   }
 
   if (registrationSource === "QR" && qrValue == null) {
@@ -5560,10 +5752,7 @@ function parseRegisterAttendanceInput(
     estadoValue === estado_asistencia.OBSERVADO &&
     normalizeOptionalText(observacion) == null
   ) {
-    throw new HttpError(
-      400,
-      "Debes indicar el motivo de la observacion.",
-    );
+    throw new HttpError(400, "Debes indicar el motivo de la observacion.");
   }
 
   if (
@@ -5652,7 +5841,10 @@ function parseFuncionarioRatingsLookupInput(payload: unknown) {
   }
 
   if (cis.length > 500) {
-    throw new HttpError(400, "Solo puedes consultar hasta 500 CI por solicitud.");
+    throw new HttpError(
+      400,
+      "Solo puedes consultar hasta 500 CI por solicitud.",
+    );
   }
 
   return {
@@ -5912,10 +6104,7 @@ async function resolveCredentialTargetUser(
   }
 
   if (user.activo !== true) {
-    throw new HttpError(
-      403,
-      "El usuario seleccionado se encuentra inactivo.",
-    );
+    throw new HttpError(403, "El usuario seleccionado se encuentra inactivo.");
   }
 
   if (isHealthAdminUser(authenticatedUser) && !isUserInHealthScope(user)) {
@@ -6025,202 +6214,11 @@ function parseGenerateDynamicQrInput(payload: unknown): GenerateDynamicQrInput {
   };
 }
 
-function parseCreateExitPermitInput(payload: unknown): CreateExitPermitInput {
-  const body = expectRecord(payload);
-
-  return {
-    motivo: readRequiredUppercaseChoice(body, "motivo", [
-      motivo_salida.TRABAJO,
-      motivo_salida.PARTICULAR,
-    ]) as (typeof motivo_salida)[keyof typeof motivo_salida],
-    lugarDestino: readRequiredString(body, "lugarDestino", 2, 255),
-    descripcion: readOptionalString(body, "descripcion", 0, 1000),
-    fechaPermiso: readRequiredDateOnly(body, "fechaPermiso"),
-  };
-}
-
-function parseUpdateExitPermitStatusInput(
-  payload: unknown,
-): UpdateExitPermitStatusInput {
-  const body = expectRecord(payload);
-  const estado = readRequiredUppercaseChoice(body, "estado", [
-    estado_salida.APROBADO,
-    estado_salida.RECHAZADO,
-  ]);
-
-  return {
-    estado: estado as typeof estado_salida.APROBADO | typeof estado_salida.RECHAZADO,
-  };
-}
-
-function parseUpdateExitPermitArrivalInput(
-  payload: unknown,
-): UpdateExitPermitArrivalInput {
-  const body = expectRecord(payload);
-
-  return {
-    horaLlegada: readRequiredTimeText(body, "horaLlegada"),
-  };
-}
-
-function parseLunchScanInput(payload: unknown): LunchScanInput {
-  const body = expectRecord(payload);
-
-  return {
-    qrValue: readRequiredString(body, "qrValue", 5, 2000),
-  };
-}
-
-function parseDeviceHeartbeatInput(payload: unknown): DeviceHeartbeatInput {
-  const body = expectRecord(payload);
-
-  return {
-    deviceId: readRequiredString(body, "deviceId", 8, 120),
-    platform:
-      readOptionalString(body, "platform", 1, 30)?.toUpperCase() ?? "UNKNOWN",
-    manufacturer: readOptionalString(body, "manufacturer", 0, 120),
-    model: readOptionalString(body, "model", 0, 160),
-    androidSdk: readOptionalIntInRange(body, "androidSdk", 1, 10_000),
-    batteryLevel: readOptionalIntInRange(body, "batteryLevel", 0, 100),
-    isCharging: readOptionalBoolean(body, "isCharging"),
-    brightness: readOptionalIntInRange(body, "brightness", 0, 100),
-    kioskEnabled: readOptionalBoolean(body, "kioskEnabled") ?? false,
-  };
-}
-
-function parseLunchReportQuery(url: URL): LunchReportQuery {
-  const rawStatus = url.searchParams.get("estado")?.trim().toUpperCase() ?? null;
-  let status: LunchReportQuery["status"] = null;
-
-  if (rawStatus != null && rawStatus.length > 0) {
-    if (rawStatus !== "ABIERTOS" && rawStatus !== "CERRADOS") {
-      throw new HttpError(400, "El estado de almuerzo no es valido.");
-    }
-
-    status = rawStatus;
-  }
-
-  return {
-    fecha: readLunchQueryDate(url),
-    search: readLunchQuerySearch(url),
-    status,
-    scannerId: readOptionalQueryInt(url, "scannerId"),
-    officeId: readOptionalQueryInt(url, "oficinaId"),
-  };
-}
-
-function parseRegisterNotificationTokenInput(
-  payload: unknown,
-): RegisterNotificationTokenInput {
-  const body = expectRecord(payload);
-
-  return {
-    token: readRequiredString(body, "token", 20, 4096),
-    platform: readRequiredUppercaseChoice(body, "platform", [
-      "ANDROID",
-      "IOS",
-    ]),
-  };
-}
-
-function parseSendNotificationInput(payload: unknown): SendNotificationInput {
-  const body = expectRecord(payload);
-  const sendToAll = readOptionalBoolean(body, "sendToAll") ?? false;
-  const cargoCodigos = readOptionalStringList(body, "cargoCodigos", "cargo");
-  const oficinaIds = readOptionalIntList(body, "oficinaIds");
-  const cis = readOptionalStringList(body, "cis", "CI").map(normalizeCiLookupValue);
-  const tiposVinculo = readOptionalUppercaseChoiceList(body, "tiposVinculo", [
-    ...USER_LINK_TYPES,
-  ]);
-  const hasFilters =
-    cargoCodigos.length > 0 ||
-    oficinaIds.length > 0 ||
-    cis.length > 0 ||
-    tiposVinculo.length > 0;
-
-  if (!sendToAll && !hasFilters) {
-    throw new HttpError(
-      400,
-      "Selecciona todos o al menos un filtro de destinatarios.",
-    );
-  }
-
-  return {
-    title: readRequiredString(body, "title", 3, 120),
-    body: readRequiredString(body, "body", 3, 500),
-    cargoCodigos,
-    oficinaIds,
-    cis,
-    tiposVinculo,
-    sendToAll,
-  };
-}
-
-function readLunchQueryDate(url: URL) {
-  const rawValue = url.searchParams.get("fecha")?.trim();
-
-  if (rawValue == null || rawValue.length === 0) {
-    return readDateOnlyString(formatDateInAppTimeZone(new Date()), "fecha");
-  }
-
-  return readDateOnlyString(rawValue, "fecha");
-}
-
-function readLunchQuerySearch(url: URL) {
-  const rawValue =
-    url.searchParams.get("q")?.trim() ?? url.searchParams.get("ci")?.trim();
-
-  if (rawValue == null || rawValue.length === 0) {
-    return null;
-  }
-
-  if (rawValue.length > 80) {
-    throw new HttpError(400, "La busqueda no puede superar 80 caracteres.");
-  }
-
-  return rawValue;
-}
-
-function readExitPermitQueryDate(url: URL) {
-  const rawValue = url.searchParams.get("fecha")?.trim();
-
-  if (rawValue == null || rawValue.length === 0) {
-    return readDateOnlyString(toDateOnlyText(new Date()), "fecha");
-  }
-
-  return readDateOnlyString(rawValue, "fecha");
-}
-
-function readExitPermitQuerySearch(url: URL) {
-  const rawValue =
-    url.searchParams.get("q")?.trim() ?? url.searchParams.get("ci")?.trim();
-
-  if (rawValue == null || rawValue.length === 0) {
-    return null;
-  }
-
-  if (rawValue.length > 80) {
-    throw new HttpError(400, "La busqueda no puede superar 80 caracteres.");
-  }
-
-  return rawValue;
-}
-
-function readExitPermitOnlyMineQuery(url: URL) {
-  const rawValue =
-    url.searchParams.get("propias")?.trim().toLowerCase() ??
-    url.searchParams.get("mine")?.trim().toLowerCase();
-
-  return rawValue === "true" || rawValue === "1";
-}
-
 function parseRegisterUserInput(payload: unknown): RegisterUserInput {
   const body = expectRecord(payload);
-  const tipoVinculo = readRequiredUppercaseChoice(
-    body,
-    "tipoVinculo",
-    [...USER_LINK_TYPES],
-  );
+  const tipoVinculo = readRequiredUppercaseChoice(body, "tipoVinculo", [
+    ...USER_LINK_TYPES,
+  ]);
   const oficinaId = readOptionalInt(body, "oficinaId");
   const oficinaComisionId = readOptionalInt(body, "oficinaComisionId");
   const unidad = readOptionalString(body, "unidad", 0, 120);
@@ -6319,7 +6317,10 @@ function parseConsultantContractInput(body: JsonRecord, tipoVinculo: string) {
     );
   }
 
-  if (contratoAdenda != null && contratoFin.getTime() > contratoAdenda.getTime()) {
+  if (
+    contratoAdenda != null &&
+    contratoFin.getTime() > contratoAdenda.getTime()
+  ) {
     throw new HttpError(
       400,
       "La fecha de adenda no puede ser menor a la fecha fin de contrato.",
@@ -6367,7 +6368,10 @@ function resolveActiveForExistingContract(
 
   const contractEnd = user.contrato_adenda ?? user.contrato_fin;
 
-  if (!CONTRACT_LINK_TYPES.has(user.tipo_vinculo ?? "") || contractEnd == null) {
+  if (
+    !CONTRACT_LINK_TYPES.has(user.tipo_vinculo ?? "") ||
+    contractEnd == null
+  ) {
     return requestedActive;
   }
 
@@ -6389,11 +6393,9 @@ function parseUpdateUserStatusInput(payload: unknown): UpdateUserStatusInput {
 
 function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
   const body = expectRecord(payload);
-  const tipoVinculo = readRequiredUppercaseChoice(
-    body,
-    "tipoVinculo",
-    [...USER_LINK_TYPES],
-  );
+  const tipoVinculo = readRequiredUppercaseChoice(body, "tipoVinculo", [
+    ...USER_LINK_TYPES,
+  ]);
   const oficinaId = readOptionalInt(body, "oficinaId");
   const oficinaComisionId = readOptionalInt(body, "oficinaComisionId");
   const unidad = readOptionalString(body, "unidad", 0, 120);
@@ -6693,7 +6695,11 @@ function readOptionalIntInRange(
         ? Number.parseInt(value, 10)
         : Number.NaN;
 
-  if (!Number.isInteger(numericValue) || numericValue < min || numericValue > max) {
+  if (
+    !Number.isInteger(numericValue) ||
+    numericValue < min ||
+    numericValue > max
+  ) {
     return null;
   }
 
@@ -6739,10 +6745,7 @@ function readRequiredIntList(
   return [readRequiredInt(source, singularFallbackKey)];
 }
 
-function readOptionalIntList(
-  source: JsonRecord,
-  key: string,
-) {
+function readOptionalIntList(source: JsonRecord, key: string) {
   const rawValue = source[key];
 
   if (rawValue == null) {
@@ -6762,10 +6765,7 @@ function readOptionalIntList(
           : Number.NaN;
 
     if (!Number.isInteger(numericValue) || numericValue <= 0) {
-      throw new HttpError(
-        400,
-        `El valor ${index + 1} de ${key} no es valido.`,
-      );
+      throw new HttpError(400, `El valor ${index + 1} de ${key} no es valido.`);
     }
 
     return numericValue;
@@ -6791,19 +6791,13 @@ function readOptionalStringList(
 
   const parsedValues = rawValue.map((value, index) => {
     if (typeof value !== "string") {
-      throw new HttpError(
-        400,
-        `El valor ${index + 1} de ${key} no es valido.`,
-      );
+      throw new HttpError(400, `El valor ${index + 1} de ${key} no es valido.`);
     }
 
     const normalizedValue = value.trim();
 
     if (normalizedValue.length < 1 || normalizedValue.length > 50) {
-      throw new HttpError(
-        400,
-        `El ${itemName} ${index + 1} no es valido.`,
-      );
+      throw new HttpError(400, `El ${itemName} ${index + 1} no es valido.`);
     }
 
     return normalizedValue;
@@ -6970,7 +6964,11 @@ function readRequiredFloat(
         ? Number.parseFloat(value)
         : Number.NaN;
 
-  if (!Number.isFinite(numericValue) || numericValue < min || numericValue > max) {
+  if (
+    !Number.isFinite(numericValue) ||
+    numericValue < min ||
+    numericValue > max
+  ) {
     throw new HttpError(400, `El campo ${key} no tiene un valor valido.`);
   }
 
@@ -6996,7 +6994,11 @@ function readOptionalFloat(
         ? Number.parseFloat(value)
         : Number.NaN;
 
-  if (!Number.isFinite(numericValue) || numericValue < min || numericValue > max) {
+  if (
+    !Number.isFinite(numericValue) ||
+    numericValue < min ||
+    numericValue > max
+  ) {
     throw new HttpError(400, `El campo ${key} no tiene un valor valido.`);
   }
 
@@ -7022,7 +7024,11 @@ function readOptionalFloatOrNull(
         ? Number.parseFloat(value)
         : Number.NaN;
 
-  if (!Number.isFinite(numericValue) || numericValue < min || numericValue > max) {
+  if (
+    !Number.isFinite(numericValue) ||
+    numericValue < min ||
+    numericValue > max
+  ) {
     return null;
   }
 
@@ -7119,11 +7125,15 @@ function isScopedUserAdminRole(
   );
 }
 
-function isUserManagerRole(role: (typeof rol_usuario)[keyof typeof rol_usuario]) {
+function isUserManagerRole(
+  role: (typeof rol_usuario)[keyof typeof rol_usuario],
+) {
   return isAdminRole(role) || isScopedUserAdminRole(role);
 }
 
-function isUserReaderRole(role: (typeof rol_usuario)[keyof typeof rol_usuario]) {
+function isUserReaderRole(
+  role: (typeof rol_usuario)[keyof typeof rol_usuario],
+) {
   return role === rol_usuario.LECTOR_USUARIOS;
 }
 
@@ -7150,7 +7160,9 @@ function isHealthOffice(office: { nivel?: number | null } | null | undefined) {
 }
 
 function isUserInHealthScope(user: any) {
-  return isHealthOffice(user?.oficinas) || isHealthOffice(user?.oficina_comision);
+  return (
+    isHealthOffice(user?.oficinas) || isHealthOffice(user?.oficina_comision)
+  );
 }
 
 function healthUserWhereForRequester(requester: any) {
@@ -7381,7 +7393,10 @@ function assertHealthAdminCanUseEventOffices(requester: any, offices: any[]) {
     return;
   }
 
-  if (offices.length === 0 || offices.some((office) => !isHealthOffice(office))) {
+  if (
+    offices.length === 0 ||
+    offices.some((office) => !isHealthOffice(office))
+  ) {
     throw new HttpError(
       403,
       "El administrador de salud solo puede crear eventos para oficinas nivel 11.",
@@ -7394,9 +7409,13 @@ function assertHealthAdminCanManageEvent(requester: any, event: any) {
     return;
   }
 
-  const offices = event?.evento_oficinas?.map((item: any) => item.oficinas) ?? [];
+  const offices =
+    event?.evento_oficinas?.map((item: any) => item.oficinas) ?? [];
 
-  if (offices.length === 0 || offices.some((office: any) => !isHealthOffice(office))) {
+  if (
+    offices.length === 0 ||
+    offices.some((office: any) => !isHealthOffice(office))
+  ) {
     throw new HttpError(
       403,
       "El administrador de salud solo puede gestionar eventos de oficinas nivel 11.",
@@ -7483,13 +7502,24 @@ function canScanQrData(user: AuthenticatedUser) {
 }
 
 function assertLunchScannerRequester(user: AuthenticatedUser) {
-  if (user.id <= 0 || user.activo !== true || user.rol !== rol_usuario.ALMUERZO) {
-    throw new HttpError(403, "Solo una cuenta de almuerzo puede registrar almuerzos.");
+  if (
+    user.id <= 0 ||
+    user.activo !== true ||
+    user.rol !== rol_usuario.ALMUERZO
+  ) {
+    throw new HttpError(
+      403,
+      "Solo una cuenta de almuerzo puede registrar almuerzos.",
+    );
   }
 }
 
 function assertExitPermitScannerRequester(user: AuthenticatedUser) {
-  if (user.id <= 0 || user.activo !== true || user.rol !== rol_usuario.ALMUERZO) {
+  if (
+    user.id <= 0 ||
+    user.activo !== true ||
+    user.rol !== rol_usuario.ALMUERZO
+  ) {
     throw new HttpError(
       403,
       "Solo una cuenta de almuerzo puede registrar salidas por QR.",
@@ -7523,7 +7553,10 @@ function isSelfRegistrationQrRole(
 
 function assertLunchReportRequester(user: AuthenticatedUser) {
   if (user.id <= 0 || user.activo !== true || !isAdminRole(user.rol)) {
-    throw new HttpError(403, "Solo un administrador puede consultar almuerzos.");
+    throw new HttpError(
+      403,
+      "Solo un administrador puede consultar almuerzos.",
+    );
   }
 }
 
@@ -7546,7 +7579,10 @@ function assertExitPermitApprover(user: any) {
   }
 
   if (resolveLinkedOfficeId(user) == null) {
-    throw new HttpError(403, "Tu usuario no tiene oficina asignada para revisar salidas.");
+    throw new HttpError(
+      403,
+      "Tu usuario no tiene oficina asignada para revisar salidas.",
+    );
   }
 }
 
@@ -7615,7 +7651,10 @@ function buildExitPermitListWhere(
 ) {
   if (onlyOwnExitPermits) {
     if (fechaPermiso == null) {
-      throw new HttpError(400, "La fecha es obligatoria para consultar salidas.");
+      throw new HttpError(
+        400,
+        "La fecha es obligatoria para consultar salidas.",
+      );
     }
 
     return {
@@ -7629,7 +7668,9 @@ function buildExitPermitListWhere(
       AND: [
         ...(fechaPermiso == null ? [] : [{ fecha_permiso: fechaPermiso }]),
         ...(searchText == null ? [] : [buildExitPermitSearchWhere(searchText)]),
-        ...healthWhereArray(healthExitPermitWhereForRequester(authenticatedUser)),
+        ...healthWhereArray(
+          healthExitPermitWhereForRequester(authenticatedUser),
+        ),
       ],
     };
   }
@@ -7797,7 +7838,9 @@ function isChiefExitPermitApplicant(user: any) {
   return (
     (normalizedCode != null &&
       EXIT_PERMIT_CHIEF_CARGO_CODES.has(normalizedCode)) ||
-    normalizeTextForComparison(resolveEffectiveJobTitleName(user)).includes("jefe")
+    normalizeTextForComparison(resolveEffectiveJobTitleName(user)).includes(
+      "jefe",
+    )
   );
 }
 
@@ -7831,14 +7874,19 @@ function isSeniorJobTitle(value: string | null | undefined) {
 function resolveDirectorOfficeCode(user: any) {
   const officeCode = normalizeOptionalText(resolveLinkedOfficeCode(user));
 
-  if (officeCode == null || !EXIT_PERMIT_DIRECTOR_OFFICE_CODES.has(officeCode)) {
+  if (
+    officeCode == null ||
+    !EXIT_PERMIT_DIRECTOR_OFFICE_CODES.has(officeCode)
+  ) {
     return null;
   }
 
   return officeCode;
 }
 
-function buildOfficeCodeScopeUserFilters(officeCode: string | null | undefined) {
+function buildOfficeCodeScopeUserFilters(
+  officeCode: string | null | undefined,
+) {
   const normalizedCode = normalizeOptionalText(officeCode);
 
   if (normalizedCode == null) {
@@ -8041,7 +8089,10 @@ async function ensurePersonIdentityForUser(tx: any, user: any) {
           include: personIdentityInclude,
           orderBy: [{ activo: "desc" }, { updated_at: "desc" }, { id: "desc" }],
         }));
-  const qrCode = resolveUserQrCode(linkedUser, matchedPerson?.codigo_qr ?? null);
+  const qrCode = resolveUserQrCode(
+    linkedUser,
+    matchedPerson?.codigo_qr ?? null,
+  );
   const data = {
     nombre_completo: buildUserDisplayName(linkedUser),
     ci: normalizedCi,
@@ -8234,7 +8285,10 @@ function hashPassword(password: string) {
   return `scrypt:${salt}:${derivedKey}`;
 }
 
-function readAssetDataUri(fileLocations: Array<string | URL>, mimeType: string) {
+function readAssetDataUri(
+  fileLocations: Array<string | URL>,
+  mimeType: string,
+) {
   for (const location of fileLocations) {
     try {
       return `data:${mimeType};base64,${readFileSync(location).toString("base64")}`;
@@ -8294,7 +8348,10 @@ async function findUserForLogin(login: string) {
     orderBy: [{ activo: "desc" }, { updated_at: "desc" }, { id: "desc" }],
   });
 
-  return users.find((user) => normalizeCiLookupValue(user.ci) === normalizedCi) ?? null;
+  return (
+    users.find((user) => normalizeCiLookupValue(user.ci) === normalizedCi) ??
+    null
+  );
 }
 
 function verifyDefaultCiPassword(
@@ -8321,13 +8378,14 @@ function buildDefaultCiPasswordOrNull(input: {
   primer_apellido?: string | null;
 }) {
   const ci = normalizeCiValue(input.ci ?? null);
-  const lastNamePrefix = input.primer_apellido
-    ?.trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z]/g, "")
-    .toLowerCase()
-    .slice(0, 3) ?? "";
+  const lastNamePrefix =
+    input.primer_apellido
+      ?.trim()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z]/g, "")
+      .toLowerCase()
+      .slice(0, 3) ?? "";
   const password = `${lastNamePrefix}${ci}`;
 
   return ci.length >= 3 && lastNamePrefix.length > 0 && password.length >= 6
@@ -8361,12 +8419,14 @@ async function findUserByLoginOrCi(
     },
   });
 
-  return users.find((user: { email: string; ci: string | null }) => {
-    return (
-      normalizeEmailValue(user.email) === normalizedLogin ||
-      normalizeCiLookupValue(user.ci) === normalizedCi
-    );
-  }) ?? null;
+  return (
+    users.find((user: { email: string; ci: string | null }) => {
+      return (
+        normalizeEmailValue(user.email) === normalizedLogin ||
+        normalizeCiLookupValue(user.ci) === normalizedCi
+      );
+    }) ?? null
+  );
 }
 
 function sameCiValue(left: string | null, right: string) {
@@ -8463,11 +8523,17 @@ async function findPersonByScannedValue(
   return null;
 }
 
-async function resolvePersonByQrValue(scannedValue: string, lookupCode: string) {
+async function resolvePersonByQrValue(
+  scannedValue: string,
+  lookupCode: string,
+) {
   // Si el QR ya pertenece a una persona existente la reutilizamos.
   // Si no existe, se crea una persona placeholder para no perder la lectura
   // y dejar trazabilidad del valor exacto que llego desde la camara.
-  const existingPerson = await findPersonByScannedValue(scannedValue, lookupCode);
+  const existingPerson = await findPersonByScannedValue(
+    scannedValue,
+    lookupCode,
+  );
 
   if (existingPerson) {
     return existingPerson;
@@ -8584,7 +8650,10 @@ async function registerLunchScan(qrValue: string, scannerUserId: number) {
     : await resolveFuncionarioByScannedQr(scannedValue, lookupCode);
 
   if (!person || !funcionario) {
-    throw new HttpError(404, "No se encontro un funcionario con ese codigo QR.");
+    throw new HttpError(
+      404,
+      "No se encontro un funcionario con ese codigo QR.",
+    );
   }
 
   if (
@@ -8772,7 +8841,10 @@ async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
     : await resolveFuncionarioByScannedQr(scannedValue, lookupCode);
 
   if (!person || !funcionario) {
-    throw new HttpError(404, "No se encontro un funcionario con ese codigo QR.");
+    throw new HttpError(
+      404,
+      "No se encontro un funcionario con ese codigo QR.",
+    );
   }
 
   if (
@@ -8809,11 +8881,7 @@ async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
         },
         hora_llegada: null,
       },
-      orderBy: [
-        { salida_en: "desc" },
-        { aprobado_en: "desc" },
-        { id: "desc" },
-      ],
+      orderBy: [{ salida_en: "desc" }, { aprobado_en: "desc" }, { id: "desc" }],
     });
 
     if (openExitPermit) {
@@ -8838,11 +8906,7 @@ async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
         estado: estado_salida.APROBADO,
         hora_inicio: null,
       },
-      orderBy: [
-        { aprobado_en: "asc" },
-        { created_at: "asc" },
-        { id: "asc" },
-      ],
+      orderBy: [{ aprobado_en: "asc" }, { created_at: "asc" }, { id: "asc" }],
     });
 
     if (pendingDeparturePermit) {
@@ -8895,46 +8959,6 @@ async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
     accion: action,
     mensaje: `${actionLabel} de permiso registrada para ${record.solicitante_nombre_completo}.`,
     registro: serializeExitPermit(record),
-  };
-}
-
-function buildLunchReportWhere(query: LunchReportQuery): Prisma.almuerzosWhereInput {
-  const search = query.search;
-  const insensitive = "insensitive" as const;
-  const conditions: Prisma.almuerzosWhereInput[] = [
-    { fecha: query.fecha },
-    ...(query.status === "ABIERTOS" ? [{ hora_retorno: null }] : []),
-    ...(query.status === "CERRADOS" ? [{ hora_retorno: { not: null } }] : []),
-    ...(query.officeId == null
-      ? []
-      : [{ funcionario_oficina_id: query.officeId }]),
-    ...(query.scannerId == null
-      ? []
-      : [
-          {
-            OR: [
-              { registrado_salida_por_id: query.scannerId },
-              { registrado_retorno_por_id: query.scannerId },
-            ],
-          },
-        ]),
-    ...(search == null
-      ? []
-      : [
-          {
-            OR: [
-              { funcionario_nombre_completo: { contains: search, mode: insensitive } },
-              { funcionario_ci: { contains: search, mode: insensitive } },
-              { funcionario_numero_item: { contains: search, mode: insensitive } },
-              { funcionario_cargo: { contains: search, mode: insensitive } },
-              { funcionario_oficina: { contains: search, mode: insensitive } },
-            ],
-          },
-        ]),
-  ];
-
-  return {
-    AND: conditions,
   };
 }
 
@@ -9006,7 +9030,10 @@ function resolveControlRegistrationTiming(
   return { isLate: currentTime > endTime };
 }
 
-function buildQrLookupCandidates(scannedValue: string, providedLookupCode?: string) {
+function buildQrLookupCandidates(
+  scannedValue: string,
+  providedLookupCode?: string,
+) {
   // Orden de candidatos:
   // 1. lookupCode extraido del payload/URL/texto.
   // 2. token de URL de credencial antigua.
@@ -9021,15 +9048,18 @@ function buildQrLookupCandidates(scannedValue: string, providedLookupCode?: stri
   const lookupCode = providedLookupCode ?? extractLookupCode(trimmedValue);
   const exactValue = trimmedValue.length <= 255 ? trimmedValue : null;
   const placeholderCode = buildPlaceholderQrCode(trimmedValue);
-  const credentialTokenCandidates = extractCredentialQrLookupCandidates(trimmedValue);
+  const credentialTokenCandidates =
+    extractCredentialQrLookupCandidates(trimmedValue);
 
   return [
-    ...new Set([
-      lookupCode,
-      ...credentialTokenCandidates,
-      exactValue,
-      placeholderCode,
-    ].filter(isValidQrCode)),
+    ...new Set(
+      [
+        lookupCode,
+        ...credentialTokenCandidates,
+        exactValue,
+        placeholderCode,
+      ].filter(isValidQrCode),
+    ),
   ];
 }
 
@@ -9140,7 +9170,16 @@ function extractLookupCode(scannedValue: string) {
     return trimmedValue.toUpperCase();
   }
 
-  const lookupKeys = ["qr", "codigoQr", "codigo_qr", "code", "id", "slug", "token", "ci"];
+  const lookupKeys = [
+    "qr",
+    "codigoQr",
+    "codigo_qr",
+    "code",
+    "id",
+    "slug",
+    "token",
+    "ci",
+  ];
 
   for (const key of lookupKeys) {
     const value = uri.searchParams.get(key)?.trim();
@@ -9187,7 +9226,9 @@ function buildDynamicQrPayload(qrCode: string, expiresAt: Date) {
   return `${DYNAMIC_QR_VERSION}.${qrCode}.${expiresAtKey}.${signature}`;
 }
 
-function tryParseDynamicQrPayload(scannedValue: string): DynamicQrPayload | null {
+function tryParseDynamicQrPayload(
+  scannedValue: string,
+): DynamicQrPayload | null {
   const normalizedValue = scannedValue.trim().toUpperCase();
   const match = normalizedValue.match(
     /^DQR1\.(QREXT-[A-F0-9]{20})\.([0-9A-Z]+)\.([A-F0-9]{16})$/,
@@ -9258,8 +9299,9 @@ function isPrintedCredentialQr(scannedValue: string) {
   }
 
   const decodedPath = safeDecodeUriComponent(uri.pathname);
-  return /\/imagenes\/credenciales\/credencial-frente-pdf-[^/]+(?:\.jpg)?$/i
-    .test(decodedPath);
+  return /\/imagenes\/credenciales\/credencial-frente-pdf-[^/]+(?:\.jpg)?$/i.test(
+    decodedPath,
+  );
 }
 
 function tryParseQrPayloadRecord(scannedValue: string) {
@@ -9383,7 +9425,8 @@ function buildUserQrPayloadObject(user: any, qrCode: string) {
     usuarioId: user.id,
     ci: normalizeOptionalText(user.ci) ?? "",
     email: normalizeOptionalText(user.email) ?? "",
-    nombreCompleto: normalizeOptionalText(user.nombres) ??
+    nombreCompleto:
+      normalizeOptionalText(user.nombres) ??
       normalizeOptionalText(user.nombre_completo) ??
       "",
     primerApellido: normalizeOptionalText(user.primer_apellido) ?? "",
@@ -9402,8 +9445,10 @@ function buildUserQrPayloadObject(user: any, qrCode: string) {
 function buildUserQrPayload(user: any, qrCode: string) {
   // El QR visible del perfil replica el payload publico de la credencial.
   // Si Cloudinary no esta configurado, conserva el token firmado estable anterior.
-  return buildCredentialCloudinaryQrPayload(user, qrCode) ??
-    buildDynamicQrPayload(qrCode, STATIC_DYNAMIC_QR_EXPIRES_AT);
+  return (
+    buildCredentialCloudinaryQrPayload(user, qrCode) ??
+    buildDynamicQrPayload(qrCode, STATIC_DYNAMIC_QR_EXPIRES_AT)
+  );
 }
 
 function buildCredentialCloudinaryQrPayload(user: any, qrCode: string) {
@@ -9418,8 +9463,7 @@ function buildCredentialCloudinaryQrPayload(user: any, qrCode: string) {
   const pathParts = ["imagenes", "credenciales", publicId]
     .map(encodeURIComponent)
     .join("/");
-  const frontImageUrl =
-    `https://res.cloudinary.com/${encodeURIComponent(cloudName)}/image/upload/pg_1,dn_400,w_1200,f_jpg,q_auto:best/${pathParts}.jpg`;
+  const frontImageUrl = `https://res.cloudinary.com/${encodeURIComponent(cloudName)}/image/upload/pg_1,dn_400,w_1200,f_jpg,q_auto:best/${pathParts}.jpg`;
   const separator = frontImageUrl.includes("?") ? "&" : "?";
 
   return `${frontImageUrl}${separator}codigoQr=${encodeURIComponent(qrCode)}`;
@@ -9533,15 +9577,15 @@ function buildNextDynamicQrMetadata(
   const previousHistory = Array.isArray(previousDynamicQr?.history)
     ? previousDynamicQr!.history.filter(
         (item) =>
-          item != null &&
-          typeof item === "object" &&
-          !Array.isArray(item),
+          item != null && typeof item === "object" && !Array.isArray(item),
       )
     : [];
   const historyEntry = {
     generatedAt: dynamicIssue.issuedAt.toISOString(),
     expiresAt: dynamicIssue.expiresAt.toISOString(),
-    tokenHash: createHash("sha256").update(dynamicIssue.qrPayload).digest("hex"),
+    tokenHash: createHash("sha256")
+      .update(dynamicIssue.qrPayload)
+      .digest("hex"),
     location: {
       latitud: dynamicIssue.latitud,
       longitud: dynamicIssue.longitud,
@@ -9555,7 +9599,10 @@ function buildNextDynamicQrMetadata(
     lastExpiresAt: dynamicIssue.expiresAt.toISOString(),
     lastTokenHash: historyEntry.tokenHash,
     lastLocation: historyEntry.location,
-    history: [historyEntry, ...previousHistory].slice(0, DYNAMIC_QR_HISTORY_LIMIT),
+    history: [historyEntry, ...previousHistory].slice(
+      0,
+      DYNAMIC_QR_HISTORY_LIMIT,
+    ),
   };
 }
 
@@ -9572,7 +9619,9 @@ function parseQrGenerationFilterBy(url: URL) {
 }
 
 function parseQrMapScope(url: URL) {
-  const scope = (url.searchParams.get("scope") ?? "eventos").trim().toLowerCase();
+  const scope = (url.searchParams.get("scope") ?? "eventos")
+    .trim()
+    .toLowerCase();
 
   if (scope === "generaciones" || scope === "eventos") {
     return scope;
@@ -9602,34 +9651,36 @@ function serializeQrGenerationHistoryRecords(person: any): QrMapRecord[] {
     }
 
     records.push({
-        id: `${person.id}-${generatedAt}-${index}`,
-        source: "GENERACION" as const,
-        personaId: person.id,
-        usuarioId: linkedUser?.id ?? null,
-        nombreCompleto: fullName,
-        ci,
-        email: linkedUser?.email ?? null,
-        oficina: officeName,
-        codigoQr: person.codigo_qr ?? null,
-        latitud,
-        longitud,
-        accuracy,
-        generatedAt,
-        expiresAt,
-        eventoId: null,
-        eventoNombre: null,
-        controlId: null,
-        controlNombre: null,
-        estado: null,
-        observacion: null,
-        registrationSource: "QR" as const,
+      id: `${person.id}-${generatedAt}-${index}`,
+      source: "GENERACION" as const,
+      personaId: person.id,
+      usuarioId: linkedUser?.id ?? null,
+      nombreCompleto: fullName,
+      ci,
+      email: linkedUser?.email ?? null,
+      oficina: officeName,
+      codigoQr: person.codigo_qr ?? null,
+      latitud,
+      longitud,
+      accuracy,
+      generatedAt,
+      expiresAt,
+      eventoId: null,
+      eventoNombre: null,
+      controlId: null,
+      controlNombre: null,
+      estado: null,
+      observacion: null,
+      registrationSource: "QR" as const,
     });
   });
 
   return records;
 }
 
-function serializeEventScanMapRecord(controlAttendance: any): QrMapRecord | null {
+function serializeEventScanMapRecord(
+  controlAttendance: any,
+): QrMapRecord | null {
   const attendance = controlAttendance.asistencias;
   const person = attendance.personas;
   const linkedUser = person.usuario ?? null;
@@ -9662,9 +9713,9 @@ function serializeEventScanMapRecord(controlAttendance: any): QrMapRecord | null
     longitud,
     accuracy:
       typeof controlAttendance.accuracy_registro === "number" &&
-        Number.isFinite(controlAttendance.accuracy_registro)
-      ? controlAttendance.accuracy_registro
-      : null,
+      Number.isFinite(controlAttendance.accuracy_registro)
+        ? controlAttendance.accuracy_registro
+        : null,
     generatedAt: controlAttendance.registrado_en.toISOString(),
     expiresAt: null,
     eventoId: attendance.eventos.id,
@@ -9694,10 +9745,9 @@ function matchesQrMapFilter(
     return record.ci.toLowerCase().includes(query);
   }
 
-  return [
-    record.nombreCompleto,
-    record.email ?? "",
-  ].some((value) => value.toLowerCase().includes(query));
+  return [record.nombreCompleto, record.email ?? ""].some((value) =>
+    value.toLowerCase().includes(query),
+  );
 }
 
 function matchesQrMapDateRange(
@@ -9715,7 +9765,10 @@ function matchesQrMapDateRange(
     return false;
   }
 
-  if (generatedFrom != null && generatedAt.getTime() < generatedFrom.getTime()) {
+  if (
+    generatedFrom != null &&
+    generatedAt.getTime() < generatedFrom.getTime()
+  ) {
     return false;
   }
 
@@ -9743,14 +9796,15 @@ function readAttendanceRegistrationSource(
   return source === "CI" ? "CI" : source === "QR" ? "QR" : null;
 }
 
-function isQrMapRecord(
-  value: QrMapRecord | null,
-): value is QrMapRecord {
+function isQrMapRecord(value: QrMapRecord | null): value is QrMapRecord {
   return value != null;
 }
 
 async function findPersonByLegacyUserQrCode(scannedCode: string) {
-  const match = scannedCode.trim().toUpperCase().match(/^USR-(\d+)-([A-F0-9]{12})$/);
+  const match = scannedCode
+    .trim()
+    .toUpperCase()
+    .match(/^USR-(\d+)-([A-F0-9]{12})$/);
 
   if (!match) {
     return null;
@@ -9912,546 +9966,6 @@ async function loadDashboardSummary(requester?: AuthenticatedUser) {
   return summary;
 }
 
-async function registerDeviceHeartbeat(
-  userId: number,
-  input: DeviceHeartbeatInput,
-) {
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const result = await client.query<{ force_logout: boolean }>(
-      `
-        INSERT INTO "celulares_asistencia" (
-          "device_id",
-          "usuario_id",
-          "platform",
-          "manufacturer",
-          "model",
-          "android_sdk",
-          "battery_level",
-          "is_charging",
-          "brightness",
-          "kiosk_enabled",
-          "last_seen_at",
-          "updated_at"
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ON CONFLICT ("device_id") DO UPDATE SET
-          "usuario_id" = EXCLUDED."usuario_id",
-          "platform" = EXCLUDED."platform",
-          "manufacturer" = EXCLUDED."manufacturer",
-          "model" = EXCLUDED."model",
-          "android_sdk" = EXCLUDED."android_sdk",
-          "battery_level" = EXCLUDED."battery_level",
-          "is_charging" = EXCLUDED."is_charging",
-          "brightness" = EXCLUDED."brightness",
-          "kiosk_enabled" = EXCLUDED."kiosk_enabled",
-          "last_seen_at" = CURRENT_TIMESTAMP,
-          "updated_at" = CURRENT_TIMESTAMP
-        RETURNING "logout_requested_at" IS NOT NULL AS "force_logout"
-      `,
-      [
-        input.deviceId,
-        userId,
-        input.platform,
-        input.manufacturer,
-        input.model,
-        input.androidSdk,
-        input.batteryLevel,
-        input.isCharging,
-        input.brightness,
-        input.kioskEnabled,
-      ],
-    );
-    const forceLogout = result.rows[0]?.force_logout === true;
-
-    await client.query(
-      `
-        DELETE FROM "celulares_asistencia"
-        WHERE "usuario_id" = $1
-          AND "device_id" <> $2
-      `,
-      [userId, input.deviceId],
-    );
-
-    if (forceLogout) {
-      await client.query(
-        `
-          UPDATE "celulares_asistencia"
-          SET "logout_requested_at" = NULL,
-              "logout_requested_by_id" = NULL,
-              "kiosk_enabled" = FALSE,
-              "last_seen_at" = CURRENT_TIMESTAMP - ($2::int * INTERVAL '1 millisecond'),
-              "updated_at" = CURRENT_TIMESTAMP
-          WHERE "device_id" = $1
-        `,
-        [input.deviceId, DEVICE_ONLINE_THRESHOLD_MS + 1000],
-      );
-    }
-
-    await client.query("COMMIT");
-
-    return {
-      forceLogout,
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function loadManagedDevices() {
-  const result = await pool.query(
-    `
-      SELECT DISTINCT ON (c."usuario_id")
-        c."device_id",
-        c."usuario_id",
-        c."platform",
-        c."manufacturer",
-        c."model",
-        c."android_sdk",
-        c."battery_level",
-        c."is_charging",
-        c."brightness",
-        c."kiosk_enabled",
-        c."last_seen_at",
-        c."logout_requested_at",
-        u."nombre_completo",
-        u."nombres",
-        u."primer_apellido",
-        u."segundo_apellido",
-        u."tercer_apellido",
-        u."ci"
-      FROM "celulares_asistencia" c
-      INNER JOIN "usuarios" u ON u."id" = c."usuario_id"
-      WHERE u."rol" = 'ALMUERZO'
-      ORDER BY c."usuario_id", c."last_seen_at" DESC, c."id" DESC
-    `,
-  );
-
-  return result.rows
-    .map(serializeManagedDevice)
-    .sort((left, right) => {
-      if (left.isOnline !== right.isOnline) {
-        return left.isOnline ? -1 : 1;
-      }
-
-      return right.lastSeenAt.localeCompare(left.lastSeenAt);
-    });
-}
-
-async function requestDeviceLogout(deviceId: string, requesterUserId: number) {
-  const result = await pool.query(
-    `
-      UPDATE "celulares_asistencia"
-      SET "logout_requested_at" = CURRENT_TIMESTAMP,
-          "logout_requested_by_id" = $2,
-          "kiosk_enabled" = FALSE,
-          "last_seen_at" = CURRENT_TIMESTAMP - ($3::int * INTERVAL '1 millisecond'),
-          "updated_at" = CURRENT_TIMESTAMP
-      WHERE "device_id" = $1
-      RETURNING "device_id"
-    `,
-    [deviceId, requesterUserId, DEVICE_ONLINE_THRESHOLD_MS + 1000],
-  );
-
-  if (result.rowCount === 0) {
-    throw new HttpError(404, "No se encontro el celular seleccionado.");
-  }
-}
-
-async function requestDeviceLogin(deviceId: string) {
-  const result = await pool.query<{ usuario_id: number }>(
-    `
-      UPDATE "celulares_asistencia"
-      SET "logout_requested_at" = NULL,
-          "logout_requested_by_id" = NULL,
-          "updated_at" = CURRENT_TIMESTAMP
-      WHERE "device_id" = $1
-      RETURNING "usuario_id"
-    `,
-    [deviceId],
-  );
-
-  const row = result.rows[0];
-
-  if (row == null) {
-    throw new HttpError(404, "No se encontro el celular seleccionado.");
-  }
-
-  return {
-    userId: Number(row.usuario_id),
-  };
-}
-
-async function markUserDevicesOffline(userId: number) {
-  await pool.query(
-    `
-      UPDATE "celulares_asistencia"
-      SET "logout_requested_at" = NULL,
-          "logout_requested_by_id" = NULL,
-          "kiosk_enabled" = FALSE,
-          "last_seen_at" = CURRENT_TIMESTAMP - ($2::int * INTERVAL '1 millisecond'),
-          "updated_at" = CURRENT_TIMESTAMP
-      WHERE "usuario_id" = $1
-    `,
-    [userId, DEVICE_ONLINE_THRESHOLD_MS + 1000],
-  );
-}
-
-function serializeManagedDevice(device: any) {
-  const lastSeenAt = device.last_seen_at instanceof Date
-    ? device.last_seen_at
-    : new Date(device.last_seen_at);
-  const logoutRequestedAt = device.logout_requested_at instanceof Date
-    ? device.logout_requested_at
-    : device.logout_requested_at == null
-      ? null
-      : new Date(device.logout_requested_at);
-  const userName = buildUserDisplayName({
-    nombre_completo: device.nombre_completo,
-    nombres: device.nombres,
-    primer_apellido: device.primer_apellido,
-    segundo_apellido: device.segundo_apellido,
-    tercer_apellido: device.tercer_apellido,
-  });
-
-  return {
-    deviceId: device.device_id ?? "",
-    userId: Number(device.usuario_id ?? 0),
-    userName,
-    userCi: device.ci ?? "",
-    platform: device.platform ?? "",
-    manufacturer: device.manufacturer ?? "",
-    model: device.model ?? "",
-    androidSdk: nullableNumber(device.android_sdk),
-    batteryLevel: nullableNumber(device.battery_level),
-    isCharging: typeof device.is_charging === "boolean" ? device.is_charging : null,
-    brightness: nullableNumber(device.brightness),
-    kioskEnabled: device.kiosk_enabled === true,
-    isOnline:
-      device.kiosk_enabled === true &&
-      logoutRequestedAt == null &&
-      Date.now() - lastSeenAt.getTime() <= DEVICE_ONLINE_THRESHOLD_MS,
-    lastSeenAt: lastSeenAt.toISOString(),
-    logoutRequestedAt: logoutRequestedAt?.toISOString() ?? null,
-  };
-}
-
-function nullableNumber(value: unknown) {
-  if (typeof value === "number") {
-    return value;
-  }
-
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsedValue = Number(value);
-    return Number.isFinite(parsedValue) ? parsedValue : null;
-  }
-
-  return null;
-}
-
-async function registerNotificationToken(
-  userId: number,
-  input: RegisterNotificationTokenInput,
-) {
-  await pool.query(
-    `
-      INSERT INTO "notificacion_tokens" ("usuario_id", "token", "platform")
-      VALUES ($1, $2, $3)
-      ON CONFLICT ("token") DO UPDATE SET
-        "usuario_id" = EXCLUDED."usuario_id",
-        "platform" = EXCLUDED."platform",
-        "updated_at" = CURRENT_TIMESTAMP
-    `,
-    [userId, input.token, input.platform],
-  );
-}
-
-async function deleteNotificationToken(userId: number, token: string) {
-  await pool.query(
-    `
-      DELETE FROM "notificacion_tokens"
-      WHERE "usuario_id" = $1 AND "token" = $2
-    `,
-    [userId, token],
-  );
-}
-
-async function loadReceivedNotifications(userId: number) {
-  const result = await pool.query<ReceivedNotificationRecord>(
-    `
-      SELECT
-        "id",
-        "usuario_id",
-        "tipo",
-        "titulo",
-        "cuerpo",
-        "destino_seccion",
-        "salida_id",
-        "leida_en",
-        "created_at"
-      FROM "notificaciones"
-      WHERE "usuario_id" = $1
-      ORDER BY "created_at" DESC, "id" DESC
-      LIMIT 80
-    `,
-    [userId],
-  );
-
-  return result.rows;
-}
-
-async function markReceivedNotificationRead(userId: number, notificationId: number) {
-  await pool.query(
-    `
-      UPDATE "notificaciones"
-      SET "leida_en" = COALESCE("leida_en", CURRENT_TIMESTAMP)
-      WHERE "id" = $1 AND "usuario_id" = $2
-    `,
-    [notificationId, userId],
-  );
-}
-
-function serializeReceivedNotification(notification: ReceivedNotificationRecord) {
-  return {
-    id: notification.id,
-    usuarioId: notification.usuario_id,
-    tipo: notification.tipo,
-    titulo: notification.titulo,
-    cuerpo: notification.cuerpo,
-    destinoSeccion: notification.destino_seccion,
-    salidaId: notification.salida_id,
-    leidaEn: notification.leida_en?.toISOString() ?? null,
-    createdAt: notification.created_at.toISOString(),
-  };
-}
-
-const SENT_NOTIFICATION_HISTORY_PAGE_SIZE = 20;
-
-async function loadSentNotificationHistory(page: number) {
-  const offset = (page - 1) * SENT_NOTIFICATION_HISTORY_PAGE_SIZE;
-  const [itemsResult, countResult] = await Promise.all([
-    pool.query<SentNotificationRecord>(
-      `
-        SELECT
-          "id",
-          "enviado_por_id",
-          "titulo",
-          "cuerpo",
-          "filtros",
-          "destinatarios_solicitados",
-          "enviados",
-          "fallidos",
-          "tokens_invalidos_removidos",
-          "mensaje_resultado",
-          "created_at"
-        FROM "notificacion_envios"
-        ORDER BY "created_at" DESC, "id" DESC
-        LIMIT $1 OFFSET $2
-      `,
-      [SENT_NOTIFICATION_HISTORY_PAGE_SIZE, offset],
-    ),
-    pool.query<{ total: string }>(
-      `SELECT COUNT(*)::text AS "total" FROM "notificacion_envios"`,
-    ),
-  ]);
-  const total = Number.parseInt(countResult.rows[0]?.total ?? "0", 10);
-
-  return {
-    page,
-    pageSize: SENT_NOTIFICATION_HISTORY_PAGE_SIZE,
-    total,
-    totalPages: Math.max(1, Math.ceil(total / SENT_NOTIFICATION_HISTORY_PAGE_SIZE)),
-    items: itemsResult.rows.map(serializeSentNotification),
-  };
-}
-
-function serializeSentNotification(notification: SentNotificationRecord) {
-  return {
-    id: notification.id,
-    enviadoPorId: notification.enviado_por_id,
-    titulo: notification.titulo,
-    cuerpo: notification.cuerpo,
-    filtros: notification.filtros ?? {},
-    requested: notification.destinatarios_solicitados,
-    sent: notification.enviados,
-    failed: notification.fallidos,
-    removedInvalidTokens: notification.tokens_invalidos_removidos,
-    message: notification.mensaje_resultado,
-    createdAt: notification.created_at.toISOString(),
-  };
-}
-
-async function sendFirebaseNotification(input: SendNotificationInput, senderUserId: number) {
-  const targets = await loadNotificationTargets(input);
-  await createReceivedNotifications(targets.userIds, {
-    type: "general",
-    title: input.title,
-    body: input.body,
-    targetSection: "notifications",
-    salidaId: null,
-  });
-  let result: {
-    requested: number;
-    sent: number;
-    failed: number;
-    removedInvalidTokens?: number;
-    message?: string;
-  };
-
-  try {
-    result = await sendFirebaseMulticastNotification(targets.tokens, {
-      title: input.title,
-      body: input.body,
-      data: {
-        source: "innovafuncionario",
-        type: "general",
-        targetSection: "notifications",
-      },
-    });
-  } catch (error) {
-    const mappedError = error instanceof HttpError ? error : mapFirebaseMessagingError(error);
-    result = {
-      requested: targets.tokens.length,
-      sent: 0,
-      failed: targets.tokens.length,
-      message: mappedError instanceof HttpError
-        ? mappedError.message
-        : getErrorMessage(mappedError),
-    };
-  }
-
-  await saveSentNotification(input, senderUserId, result);
-
-  return result;
-}
-
-async function saveSentNotification(
-  input: SendNotificationInput,
-  senderUserId: number,
-  result: {
-    requested: number;
-    sent: number;
-    failed: number;
-    removedInvalidTokens?: number;
-    message?: string;
-  },
-) {
-  await pool.query(
-    `
-      INSERT INTO "notificacion_envios" (
-        "enviado_por_id",
-        "titulo",
-        "cuerpo",
-        "filtros",
-        "destinatarios_solicitados",
-        "enviados",
-        "fallidos",
-        "tokens_invalidos_removidos",
-        "mensaje_resultado"
-      )
-      VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9)
-    `,
-    [
-      senderUserId,
-      input.title,
-      input.body,
-      JSON.stringify({
-        sendToAll: input.sendToAll,
-        cargoCodigos: input.cargoCodigos,
-        oficinaIds: input.oficinaIds,
-        cis: input.cis,
-        tiposVinculo: input.tiposVinculo,
-      }),
-      result.requested,
-      result.sent,
-      result.failed,
-      result.removedInvalidTokens ?? 0,
-      result.message ?? null,
-    ],
-  );
-}
-
-async function sendFirebaseMulticastNotification(
-  tokens: string[],
-  input: {
-    title: string;
-    body: string;
-    data?: Record<string, string>;
-  },
-) {
-  if (tokens.length === 0) {
-    return {
-      requested: 0,
-      sent: 0,
-      failed: 0,
-      message: "No hay dispositivos registrados para esos filtros.",
-    };
-  }
-
-  const messaging = getFirebaseMessagingClient();
-  let sent = 0;
-  let failed = 0;
-  const invalidTokens: string[] = [];
-
-  try {
-    for (const tokenChunk of chunkArray(tokens, 500)) {
-      const batchResult = await messaging.sendEachForMulticast({
-        tokens: tokenChunk,
-        notification: {
-          title: input.title,
-          body: input.body,
-        },
-        android: {
-          priority: "high",
-        },
-        apns: {
-          payload: {
-            aps: {
-              sound: "default",
-            },
-          },
-        },
-        data: {
-          source: "innovafuncionario",
-          ...(input.data ?? {}),
-        },
-      });
-
-      sent += batchResult.successCount;
-      failed += batchResult.failureCount;
-      batchResult.responses.forEach((item, index) => {
-        const code = item.error?.code;
-
-        if (
-          code === "messaging/registration-token-not-registered" ||
-          code === "messaging/invalid-registration-token"
-        ) {
-          invalidTokens.push(tokenChunk[index]);
-        }
-      });
-    }
-  } catch (error) {
-    throw mapFirebaseMessagingError(error);
-  }
-
-  if (invalidTokens.length > 0) {
-    await removeNotificationTokens(invalidTokens);
-  }
-
-  return {
-    requested: tokens.length,
-    sent,
-    failed,
-    removedInvalidTokens: invalidTokens.length,
-  };
-}
-
 async function sendDeviceLoginCommand(userId: number, deviceId: string) {
   const targets = await loadNotificationTokensForUser(userId);
 
@@ -10461,77 +9975,6 @@ async function sendDeviceLoginCommand(userId: number, deviceId: string) {
     action: "open_app",
     deviceId,
   });
-}
-
-async function loadNotificationTokensForUser(userId: number) {
-  const result = await pool.query<{ token: string }>(
-    `
-      SELECT DISTINCT "token"
-      FROM "notificacion_tokens"
-      WHERE "usuario_id" = $1
-        AND "platform" = 'ANDROID'
-    `,
-    [userId],
-  );
-
-  return result.rows.map((row) => row.token);
-}
-
-async function sendFirebaseDataMulticastMessage(
-  tokens: string[],
-  data: Record<string, string>,
-) {
-  if (tokens.length === 0) {
-    return {
-      requested: 0,
-      sent: 0,
-      failed: 0,
-      message: "No hay token push registrado para este celular.",
-    };
-  }
-
-  const messaging = getFirebaseMessagingClient();
-  let sent = 0;
-  let failed = 0;
-  const invalidTokens: string[] = [];
-
-  try {
-    for (const tokenChunk of chunkArray(tokens, 500)) {
-      const batchResult = await messaging.sendEachForMulticast({
-        tokens: tokenChunk,
-        android: {
-          priority: "high",
-        },
-        data,
-      });
-
-      sent += batchResult.successCount;
-      failed += batchResult.failureCount;
-      batchResult.responses.forEach((item, index) => {
-        const code = item.error?.code;
-
-        if (
-          code === "messaging/registration-token-not-registered" ||
-          code === "messaging/invalid-registration-token"
-        ) {
-          invalidTokens.push(tokenChunk[index]);
-        }
-      });
-    }
-  } catch (error) {
-    throw mapFirebaseMessagingError(error);
-  }
-
-  if (invalidTokens.length > 0) {
-    await removeNotificationTokens(invalidTokens);
-  }
-
-  return {
-    requested: tokens.length,
-    sent,
-    failed,
-    removedInvalidTokens: invalidTokens.length,
-  };
 }
 
 async function notifyExitPermitApprovers(salidaId: number) {
@@ -10608,51 +10051,6 @@ async function loadExitPermitApproverNotificationTargets(salida: any) {
   };
 }
 
-async function createReceivedNotifications(
-  userIds: number[],
-  input: {
-    type: string;
-    title: string;
-    body: string;
-    targetSection: string;
-    salidaId: number | null;
-  },
-) {
-  const uniqueUserIds = [...new Set(userIds.filter((userId) => userId > 0))];
-
-  if (uniqueUserIds.length === 0) {
-    return;
-  }
-
-  await pool.query(
-    `
-      INSERT INTO "notificaciones" (
-        "usuario_id",
-        "tipo",
-        "titulo",
-        "cuerpo",
-        "destino_seccion",
-        "salida_id"
-      )
-      SELECT
-        unnest($1::int[]),
-        $2,
-        $3,
-        $4,
-        $5,
-        $6
-    `,
-    [
-      uniqueUserIds,
-      input.type,
-      input.title,
-      input.body,
-      input.targetSection,
-      input.salidaId,
-    ],
-  );
-}
-
 function buildExitPermitNotificationCandidateWhere(salida: any) {
   return {
     id: { not: salida.usuario_id },
@@ -10666,7 +10064,10 @@ async function canReviewExitPermit(approver: any, salida: any, applicant: any) {
   const applicantIsChief = isChiefExitPermitApplicant(applicant);
   const applicantIsDirector = isDirectorExitPermitApprover(applicant);
 
-  if (!isExitPermitApproverUser(approver) || salida.usuario_id === approver.id) {
+  if (
+    !isExitPermitApproverUser(approver) ||
+    salida.usuario_id === approver.id
+  ) {
     return false;
   }
 
@@ -10718,8 +10119,12 @@ async function canSeniorReviewExitPermit(
   salida: any,
   applicant: any,
 ) {
-  const seniorOfficeCode = normalizeOptionalText(resolveLinkedOfficeCode(approver));
-  const applicantOfficeCode = normalizeOptionalText(resolveLinkedOfficeCode(applicant));
+  const seniorOfficeCode = normalizeOptionalText(
+    resolveLinkedOfficeCode(approver),
+  );
+  const applicantOfficeCode = normalizeOptionalText(
+    resolveLinkedOfficeCode(applicant),
+  );
 
   if (
     seniorOfficeCode == null ||
@@ -10742,7 +10147,10 @@ async function canSeniorReviewExitPermit(
     return false;
   }
 
-  if (isDirectorExitPermitApprover(applicant) || isSeniorExitPermitApprover(applicant)) {
+  if (
+    isDirectorExitPermitApprover(applicant) ||
+    isSeniorExitPermitApprover(applicant)
+  ) {
     return false;
   }
 
@@ -10750,7 +10158,9 @@ async function canSeniorReviewExitPermit(
     return true;
   }
 
-  return !(await hasActiveChiefInEffectiveOffice(salida.solicitante_oficina_id));
+  return !(await hasActiveChiefInEffectiveOffice(
+    salida.solicitante_oficina_id,
+  ));
 }
 
 function resolveChildOfficeCodeUnderParent(
@@ -10773,7 +10183,9 @@ function resolveChildOfficeCodeUnderParent(
   return `${parentCode}.${remainingParts[0]}`;
 }
 
-async function hasActiveChiefInEffectiveOffice(officeId: number | null | undefined) {
+async function hasActiveChiefInEffectiveOffice(
+  officeId: number | null | undefined,
+) {
   if (officeId == null) {
     return false;
   }
@@ -10831,145 +10243,6 @@ async function hasActiveDirectorInEffectiveOfficeCode(
   return result.rows.length > 0;
 }
 
-async function loadNotificationTargets(input: SendNotificationInput) {
-  const clauses = [
-    `u."activo" = TRUE`,
-    `nt."platform" IN ('ANDROID', 'IOS')`,
-  ];
-  const params: unknown[] = [];
-
-  if (!input.sendToAll) {
-    if (input.cargoCodigos.length > 0) {
-      params.push(input.cargoCodigos);
-      clauses.push(
-        `COALESCE(u."subcargo_codigo", u."cargo_codigo") = ANY($${params.length}::text[])`,
-      );
-    }
-
-    if (input.oficinaIds.length > 0) {
-      params.push(input.oficinaIds);
-      clauses.push(
-        `COALESCE(u."oficina_comision_id", u."oficina_id") = ANY($${params.length}::int[])`,
-      );
-    }
-
-    if (input.cis.length > 0) {
-      params.push(input.cis);
-      clauses.push(
-        `UPPER(REPLACE(COALESCE(u."ci", ''), '-', '')) = ANY($${params.length}::text[])`,
-      );
-    }
-
-    if (input.tiposVinculo.length > 0) {
-      params.push(input.tiposVinculo);
-      clauses.push(
-        `UPPER(COALESCE(u."tipo_vinculo", '')) = ANY($${params.length}::text[])`,
-      );
-    }
-  }
-
-  const result = await pool.query<{ usuario_id: number; token: string }>(
-    `
-      SELECT DISTINCT nt."usuario_id", nt."token"
-      FROM "notificacion_tokens" nt
-      INNER JOIN "usuarios" u ON u."id" = nt."usuario_id"
-      WHERE ${clauses.join(" AND ")}
-    `,
-    params,
-  );
-
-  return {
-    userIds: [...new Set(result.rows.map((row) => row.usuario_id))],
-    tokens: result.rows.map((row) => row.token),
-  };
-}
-
-async function removeNotificationTokens(tokens: string[]) {
-  if (tokens.length === 0) {
-    return;
-  }
-
-  await pool.query(
-    `
-      DELETE FROM "notificacion_tokens"
-      WHERE "token" = ANY($1::text[])
-    `,
-    [tokens],
-  );
-}
-
-function getFirebaseMessagingClient() {
-  if (getApps().length === 0) {
-    const credential = readFirebaseServiceAccountCredential();
-
-    if (credential == null) {
-      initializeApp();
-    } else {
-      initializeApp({ credential });
-    }
-  }
-
-  return getMessaging();
-}
-
-function mapFirebaseMessagingError(error: unknown) {
-  const code = readErrorCode(error);
-
-  if (
-    code === "app/invalid-credential" ||
-    code === "app/invalid-app-options" ||
-    code === "messaging/authentication-error" ||
-    code === "messaging/invalid-credential" ||
-    getErrorMessage(error).includes("Could not load the default credentials")
-  ) {
-    return new HttpError(
-      503,
-      "Firebase no esta configurado correctamente en el servidor dev.",
-    );
-  }
-
-  return error;
-}
-
-function readErrorCode(error: unknown) {
-  if (typeof error !== "object" || error == null || !("code" in error)) {
-    return null;
-  }
-
-  const code = (error as { code?: unknown }).code;
-
-  return typeof code === "string" ? code : null;
-}
-
-function readFirebaseServiceAccountCredential() {
-  if (FIREBASE_SERVICE_ACCOUNT_JSON == null) {
-    return null;
-  }
-
-  try {
-    const jsonText = FIREBASE_SERVICE_ACCOUNT_JSON.trim().startsWith("{")
-      ? FIREBASE_SERVICE_ACCOUNT_JSON
-      : Buffer.from(FIREBASE_SERVICE_ACCOUNT_JSON, "base64").toString("utf8");
-
-    return cert(JSON.parse(jsonText));
-  } catch {
-    throw new HttpError(
-      500,
-      "FIREBASE_SERVICE_ACCOUNT_JSON no tiene un formato valido.",
-    );
-  }
-}
-
-function chunkArray<T>(values: T[], size: number) {
-  const chunks: T[][] = [];
-
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size));
-  }
-
-  return chunks;
-}
-
 async function loadSerializedEventSummaries(requester?: AuthenticatedUser) {
   const eventWhere = healthEventWhereForRequester(requester);
 
@@ -11012,7 +10285,9 @@ async function loadSerializedEventSummaries(requester?: AuthenticatedUser) {
   return serializedEvents;
 }
 
-async function loadSerializedAssignedEventSummaries(requester: AuthenticatedUser) {
+async function loadSerializedAssignedEventSummaries(
+  requester: AuthenticatedUser,
+) {
   const linkedPerson = await prisma.personas.findFirst({
     where: {
       OR: [
@@ -11064,7 +10339,10 @@ async function loadSerializedAssignedEventSummaries(requester: AuthenticatedUser
       continue;
     }
 
-    const requirement = await resolvePersonEventRequirement(linkedPerson, event);
+    const requirement = await resolvePersonEventRequirement(
+      linkedPerson,
+      event,
+    );
 
     if (requirement.obligatorio) {
       assignedEvents.push(event);
@@ -11080,7 +10358,9 @@ async function loadSerializedAssignedEventSummaries(requester: AuthenticatedUser
 }
 
 async function loadEventAttendanceCountMap(eventIds: number[]) {
-  const uniqueEventIds = [...new Set(eventIds.filter((eventId) => eventId > 0))];
+  const uniqueEventIds = [
+    ...new Set(eventIds.filter((eventId) => eventId > 0)),
+  ];
   const countMap = new Map<number, EventAttendanceCounts>();
 
   if (uniqueEventIds.length === 0) {
@@ -11195,11 +10475,12 @@ function serializeEventAttendanceLookup(attendance: any) {
     serializeAttendanceControlRecord,
   );
   const controlSummary = buildSerializedControlSummary(serializedControls);
-  const lateRegisteredAt = serializedControls
-    .filter((control: any) => control.retrasado === true)
-    .map((control: any) => control.registradoEn as string)
-    .sort()
-    .at(-1) ?? null;
+  const lateRegisteredAt =
+    serializedControls
+      .filter((control: any) => control.retrasado === true)
+      .map((control: any) => control.registradoEn as string)
+      .sort()
+      .at(-1) ?? null;
 
   return {
     estado: controlSummary.state,
@@ -11443,7 +10724,9 @@ async function loadEventAbsentees(event: any) {
   const registeredPersonIds = new Set<number>(
     (event.asistencias ?? [])
       .map((attendance: any) => attendance.persona_id)
-      .filter((personId: unknown): personId is number => typeof personId === "number"),
+      .filter(
+        (personId: unknown): personId is number => typeof personId === "number",
+      ),
   );
   const candidates = await prisma.personas.findMany({
     where: {
@@ -11471,7 +10754,10 @@ async function loadEventAbsentees(event: any) {
       continue;
     }
 
-    const requirementReason = await buildEventReportRequirementReason(person, event);
+    const requirementReason = await buildEventReportRequirementReason(
+      person,
+      event,
+    );
 
     if (requirementReason != null) {
       absentees.push(serializeEventAbsenteeRecord(person, requirementReason));
@@ -11487,8 +10773,7 @@ function isHiddenEventAbsenteePerson(person: any) {
   const numeroItem = normalizeOptionalText(linkedUser?.numero_item)?.trim();
 
   return (
-    ci === HIDDEN_EVENT_ABSENTEE_CI &&
-    numeroItem === HIDDEN_EVENT_ABSENTEE_ITEM
+    ci === HIDDEN_EVENT_ABSENTEE_CI && numeroItem === HIDDEN_EVENT_ABSENTEE_ITEM
   );
 }
 
@@ -11535,9 +10820,7 @@ async function buildEventReportRequirementReason(person: any, event: any) {
     (item: { oficina_id: number }) => item.oficina_id === userOfficeId,
   );
   const officeCargoCodes = new Set<string>(
-    officeCargoRows.map(
-      (item: { cargo_codigo: string }) => item.cargo_codigo,
-    ),
+    officeCargoRows.map((item: { cargo_codigo: string }) => item.cargo_codigo),
   );
   const officeCargoNames = new Set<string>(
     officeCargoRows
@@ -11557,11 +10840,7 @@ async function buildEventReportRequirementReason(person: any, event: any) {
   const matchesOfficeCargo =
     matchesOffice &&
     officeCargoRows.length > 0 &&
-    matchesCargoSelection(
-      userJobTitles,
-      officeCargoCodes,
-      officeCargoNames,
-    );
+    matchesCargoSelection(userJobTitles, officeCargoCodes, officeCargoNames);
   const officeAllowsAllJobTitles =
     matchesOffice && officeCargoRows.length === 0;
 
@@ -11590,10 +10869,12 @@ function resolveLinkedOffice(linkedUser: any) {
 
 function resolveLinkedOfficeId(linkedUser: any) {
   const linkedOffice = resolveLinkedOffice(linkedUser);
-  return linkedOffice?.id ??
+  return (
+    linkedOffice?.id ??
     linkedUser?.oficina_comision_id ??
     linkedUser?.oficina_id ??
-    null;
+    null
+  );
 }
 
 function resolveLinkedOfficeName(linkedUser: any) {
@@ -11684,8 +10965,12 @@ function parseSubmitFuncionarioRatingInput(
   payload: unknown,
 ): SubmitFuncionarioRatingInput {
   const body = expectRecord(payload);
-  const calificacion = readRequiredString(body, "calificacion", 5, 20)
-    .toLowerCase();
+  const calificacion = readRequiredString(
+    body,
+    "calificacion",
+    5,
+    20,
+  ).toLowerCase();
 
   if (
     calificacion !== "muy_malo" &&
@@ -11833,7 +11118,10 @@ async function deactivateFuncionarioRatingQr(funcionarioId: number) {
   );
 }
 
-async function loadFuncionarioForRatingAdmin(funcionarioId: number, requester: any) {
+async function loadFuncionarioForRatingAdmin(
+  funcionarioId: number,
+  requester: any,
+) {
   const funcionario = await prisma.usuarios.findUnique({
     where: { id: funcionarioId },
     include: userWithOfficeInclude,
@@ -11910,7 +11198,9 @@ function serializeRatingFuncionario(user: any) {
   };
 }
 
-async function normalizePublicPhotoSource(photoSource: string | null | undefined) {
+async function normalizePublicPhotoSource(
+  photoSource: string | null | undefined,
+) {
   const normalized = normalizeOptionalText(photoSource);
 
   if (normalized == null) {
@@ -11922,7 +11212,7 @@ async function normalizePublicPhotoSource(photoSource: string | null | undefined
   }
 
   if (/^https?:\/\//i.test(normalized)) {
-    return await inlineRemotePublicPhoto(normalized) ?? normalized;
+    return (await inlineRemotePublicPhoto(normalized)) ?? normalized;
   }
 
   if (normalized.startsWith("/")) {
@@ -11973,12 +11263,14 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
     funcionarioData.nombreCompleto.trim().slice(0, 1).toUpperCase() || "F",
   );
   const safePhoto = await normalizePublicPhotoSource(funcionarioData.fotoUrl);
-  const photoMarkup = safePhoto == null
-    ? `<div class="person-photo fallback">${safeInitial}</div>`
-    : `<img class="person-photo" src="${escapeHtml(safePhoto)}" alt="${safeName}">`;
-  const logoMarkup = PUBLIC_RATING_LOGO_SRC == null
-    ? ``
-    : `<img class="brand-logo" src="${PUBLIC_RATING_LOGO_SRC}" alt="Innova Funcionario">`;
+  const photoMarkup =
+    safePhoto == null
+      ? `<div class="person-photo fallback">${safeInitial}</div>`
+      : `<img class="person-photo" src="${escapeHtml(safePhoto)}" alt="${safeName}">`;
+  const logoMarkup =
+    PUBLIC_RATING_LOGO_SRC == null
+      ? ``
+      : `<img class="brand-logo" src="${PUBLIC_RATING_LOGO_SRC}" alt="Innova Funcionario">`;
 
   return `<!doctype html>
 <html lang="es">
@@ -12438,9 +11730,8 @@ async function submitFuncionarioRating({
   const deviceHash = sha256Hex(input.deviceId);
   const ipHash = sha256Hex(readClientIp(request));
   const funcionarioOficinaId = resolveLinkedOfficeId(funcionario);
-  const funcionarioOficina = resolveLinkedOfficeName(funcionario) ??
-    funcionario.unidad ??
-    null;
+  const funcionarioOficina =
+    resolveLinkedOfficeName(funcionario) ?? funcionario.unidad ?? null;
 
   try {
     const result = await pool.query(
@@ -12498,122 +11789,6 @@ async function submitFuncionarioRating({
 
     throw error;
   }
-}
-
-async function loadFuncionarioRatingsSummary(
-  requester: any,
-  fechaInicio: string | null,
-  fechaFin: string | null,
-  cargoCodigo: string | null,
-  oficinaId: number | null,
-  search: string | null,
-) {
-  const hasDateFilter = fechaInicio != null || fechaFin != null;
-  const start = fechaInicio == null
-    ? null
-    : readDateOnlyString(fechaInicio, "fechaInicio");
-  const end = fechaFin == null ? start : readDateOnlyString(fechaFin, "fechaFin");
-
-  if (start != null && end != null && start.getTime() > end.getTime()) {
-    throw new HttpError(400, "La fecha inicio no puede ser mayor a la fecha fin.");
-  }
-
-  const params: unknown[] = [];
-  const healthFilter = isHealthAdminUser(requester)
-    ? `AND (
-        principal.nivel = ${HEALTH_OFFICE_LEVEL}
-        OR comision.nivel = ${HEALTH_OFFICE_LEVEL}
-      )`
-    : "";
-  const filters: string[] = [];
-  const joinFilters: string[] = [];
-
-  if (hasDateFilter && fechaInicio != null && fechaFin != null) {
-    params.push(fechaInicio, fechaFin);
-    joinFilters.push(`AND c."fecha" BETWEEN $${params.length - 1}::date AND $${params.length}::date`);
-  }
-
-  if (cargoCodigo != null) {
-    params.push(cargoCodigo);
-    filters.push(
-      `AND (u."cargo_codigo" = $${params.length} OR u."subcargo_codigo" = $${params.length})`,
-    );
-  }
-
-  if (oficinaId != null) {
-    params.push(oficinaId);
-    filters.push(
-      `AND COALESCE(u."oficina_comision_id", u."oficina_id") = $${params.length}`,
-    );
-  }
-
-  if (search != null) {
-    const normalizedSearch = search.trim();
-    if (/^\d+$/.test(normalizedSearch)) {
-      params.push(normalizedSearch);
-      filters.push(`AND COALESCE(u."ci", '') = $${params.length}`);
-    } else {
-      params.push(`%${normalizedSearch}%`);
-      filters.push(`AND u."nombre_completo" ILIKE $${params.length}`);
-    }
-  }
-
-  const result = await pool.query(
-    `
-      SELECT
-        u."id" AS "funcionarioId",
-        u."nombre_completo" AS "nombreCompleto",
-        COALESCE(u."ci", '') AS "ci",
-        COALESCE(u."subcargo", u."cargo", '') AS "cargo",
-        COALESCE(comision."oficina", principal."oficina", u."unidad", '') AS "oficina",
-        COUNT(c."id")::int AS "total",
-        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_malo')::int AS "muyMalo",
-        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('malo', 'enojada'))::int AS "malo",
-        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('regular', 'neutral'))::int AS "regular",
-        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'feliz'))::int AS "bueno",
-        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_bueno')::int AS "muyBueno",
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'id', c."id",
-              'calificacion', c."calificacion",
-              'comentario', COALESCE(c."comentario", ''),
-              'calificadorNombre', COALESCE(c."calificador_nombre", ''),
-              'calificadorCelular', COALESCE(c."calificador_celular", ''),
-              'createdAt', c."created_at"
-            )
-            ORDER BY c."created_at" DESC
-          ) FILTER (WHERE c."id" IS NOT NULL),
-          '[]'::json
-        ) AS "comentarios"
-      FROM "usuarios" u
-      LEFT JOIN "oficinas" principal ON principal."id" = u."oficina_id"
-      LEFT JOIN "oficinas" comision ON comision."id" = u."oficina_comision_id"
-      INNER JOIN "calificacion_funcionario_qrs" q
-        ON q."funcionario_id" = u."id"
-        AND q."activo" = TRUE
-      LEFT JOIN "calificaciones_funcionario" c
-        ON c."funcionario_id" = u."id"
-        ${joinFilters.join("\n")}
-      WHERE u."activo" = TRUE
-        AND u."email" <> '${SEED_ADMIN_EMAIL.replace(/'/g, "''")}'
-        ${healthFilter}
-        ${filters.join("\n")}
-      GROUP BY
-        u."id",
-        u."nombre_completo",
-        u."ci",
-        u."subcargo",
-        u."cargo",
-        u."unidad",
-        comision."oficina",
-        principal."oficina"
-      ORDER BY u."nombre_completo" ASC
-    `,
-    params,
-  );
-
-  return result.rows;
 }
 
 async function loadActiveFuncionarioRatingQrs(requester: any) {
@@ -12722,22 +11897,27 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     celular: user.celular ?? "",
     tipoVinculo: user.tipo_vinculo ?? "ITEM",
     contratoNumero: user.contrato_numero ?? "",
-    contratoInicio: user.contrato_inicio == null
-      ? null
-      : toDateOnlyText(user.contrato_inicio),
-    contratoFin: user.contrato_fin == null ? null : toDateOnlyText(user.contrato_fin),
-    contratoAdenda: user.contrato_adenda == null
-      ? null
-      : toDateOnlyText(user.contrato_adenda),
+    contratoInicio:
+      user.contrato_inicio == null
+        ? null
+        : toDateOnlyText(user.contrato_inicio),
+    contratoFin:
+      user.contrato_fin == null ? null : toDateOnlyText(user.contrato_fin),
+    contratoAdenda:
+      user.contrato_adenda == null
+        ? null
+        : toDateOnlyText(user.contrato_adenda),
     unidad: officeName ?? user.unidad ?? "",
     oficinaId: resolveLinkedOfficeId(user),
     oficinaNombre: officeName,
     oficinaCodigo: resolveLinkedOfficeCode(user),
     oficinaPrincipalId: user.oficina_id ?? user.oficinas?.id ?? null,
     oficinaPrincipalNombre: primaryOfficeName,
-    oficinaComisionId: user.oficina_comision_id ?? user.oficina_comision?.id ?? null,
+    oficinaComisionId:
+      user.oficina_comision_id ?? user.oficina_comision?.id ?? null,
     oficinaComisionNombre: commissionOfficeName,
-    tieneComision: commissionOfficeName != null || user.oficina_comision_id != null,
+    tieneComision:
+      commissionOfficeName != null || user.oficina_comision_id != null,
     cargoCodigo: user.cargo_codigo ?? null,
     cargo: user.cargo ?? "",
     subcargoCodigo: user.subcargo_codigo ?? null,
@@ -12753,326 +11933,6 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     personaId: linkedPerson?.id ?? null,
     authToken,
   };
-}
-
-function serializeExitPermit(salida: any) {
-  const salidaRegistrador = salida.registrador_salida ?? null;
-  const llegadaRegistrador = salida.registrador_llegada ?? null;
-
-  return {
-    id: salida.id,
-    usuarioId: salida.usuario_id,
-    motivo: salida.motivo,
-    estado: salida.estado ?? estado_salida.PENDIENTE,
-    lugarDestino: salida.lugar_destino,
-    descripcion: salida.descripcion ?? "",
-    fechaPermiso: toDateOnlyText(salida.fecha_permiso),
-    horaInicio: salida.hora_inicio ?? "",
-    horaFinal: salida.hora_final ?? "",
-    horaLlegada: salida.hora_llegada ?? "",
-    salidaEn: salida.salida_en?.toISOString() ?? null,
-    llegadaEn: salida.llegada_en?.toISOString() ?? null,
-    registradoSalidaPorId: salida.registrado_salida_por_id ?? null,
-    registradoSalidaPorNombre:
-      salidaRegistrador == null ? "" : buildUserDisplayName(salidaRegistrador),
-    registradoLlegadaPorId: salida.registrado_llegada_por_id ?? null,
-    registradoLlegadaPorNombre:
-      llegadaRegistrador == null ? "" : buildUserDisplayName(llegadaRegistrador),
-    solicitanteNombreCompleto: salida.solicitante_nombre_completo,
-    solicitanteCi: salida.usuarios?.ci ?? "",
-    solicitanteNumeroItem: salida.solicitante_numero_item ?? "",
-    solicitanteCargo: salida.solicitante_cargo ?? "",
-    solicitanteOficinaId: salida.solicitante_oficina_id ?? null,
-    solicitanteOficina: salida.solicitante_oficina ?? "",
-    aprobadoPorId: salida.aprobado_por_id ?? null,
-    aprobadoPorNombre: salida.aprobado_por_nombre ?? "",
-    aprobadoEn: salida.aprobado_en?.toISOString() ?? null,
-    createdAt: salida.created_at.toISOString(),
-    updatedAt: salida.updated_at.toISOString(),
-  };
-}
-
-type CreateSwornDeclarationInput = {
-  gestion: number;
-  payload: JsonRecord;
-};
-
-type ReviewSwornDeclarationInput = {
-  estado: "APROBADO" | "RECHAZADO";
-  observacion: string | null;
-};
-
-async function listSwornDeclarations(input: {
-  userId: number;
-  onlyMine: boolean;
-  query: string | null;
-}) {
-  const conditions: string[] = [];
-  const values: unknown[] = [];
-
-  if (input.onlyMine) {
-    values.push(input.userId);
-    conditions.push(`"usuario_id" = $${values.length}`);
-  }
-
-  if (!input.onlyMine && input.query != null) {
-    values.push(`%${input.query}%`);
-    const parameter = `$${values.length}`;
-    conditions.push(
-      `(
-        "funcionario_nombre_completo" ILIKE ${parameter}
-        OR COALESCE("funcionario_ci", '') ILIKE ${parameter}
-        OR COALESCE("funcionario_numero_item", '') ILIKE ${parameter}
-        OR COALESCE("funcionario_oficina", '') ILIKE ${parameter}
-      )`,
-    );
-  }
-
-  const whereClause =
-    conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")}`;
-  const result = await pool.query(
-    `
-      SELECT *
-      FROM "declaraciones_juradas"
-      ${whereClause}
-      ORDER BY "created_at" DESC, "id" DESC
-      LIMIT 500
-    `,
-    values,
-  );
-
-  return result.rows;
-}
-
-function parseCreateSwornDeclarationInput(
-  payload: unknown,
-): CreateSwornDeclarationInput {
-  const body = expectRecord(payload);
-  const now = new Date();
-  const gestion = readOptionalIntInRange(body, "gestion", 2000, now.getFullYear() + 1)
-    ?? now.getFullYear();
-  const declarationPayload = readSwornDeclarationPayload(body);
-
-  validateSwornDeclarationPayload(declarationPayload);
-
-  return {
-    gestion,
-    payload: declarationPayload,
-  };
-}
-
-function parseReviewSwornDeclarationInput(
-  payload: unknown,
-): ReviewSwornDeclarationInput {
-  const body = expectRecord(payload);
-  const rawEstado = readRequiredString(body, "estado", 7, 9).toUpperCase();
-
-  if (rawEstado !== "APROBADO" && rawEstado !== "RECHAZADO") {
-    throw new HttpError(400, "El estado de revision no es valido.");
-  }
-
-  return {
-    estado: rawEstado,
-    observacion: readOptionalString(body, "observacion", 1, 1000),
-  };
-}
-
-function readSwornDeclarationPayload(source: JsonRecord): JsonRecord {
-  const value = source["payload"];
-
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new HttpError(400, "La declaracion jurada no tiene un formato valido.");
-  }
-
-  return value as JsonRecord;
-}
-
-function validateSwornDeclarationPayload(payload: JsonRecord) {
-  const relatives = readJsonArray(payload, "consanguinidadAfinidad");
-  const doublePerception = readJsonRecord(payload, "doblePercepcion");
-  const sentences = readJsonRecord(payload, "sentenciasProcesos");
-  const incompatibilities = readJsonRecord(payload, "otrasIncompatibilidades");
-  const address = readJsonRecord(payload, "datosDomiciliarios");
-  const cityHallRelatives = readJsonRecord(payload, "familiaresAlcaldia");
-
-  if (relatives.length === 0) {
-    throw new HttpError(
-      400,
-      "Debes registrar al menos un familiar en consanguinidad y afinidad.",
-    );
-  }
-
-  for (const relative of relatives) {
-    const record = expectRecord(relative);
-    readRequiredString(record, "parentesco", 2, 80);
-    readRequiredString(record, "nombres", 2, 150);
-    readRequiredString(record, "documentoIdentidad", 2, 40);
-  }
-
-  const perceivesDoubleIncome = readRequiredBoolean(
-    doublePerception,
-    "percibeDoblePercepcion",
-  );
-
-  if (perceivesDoubleIncome) {
-    readRequiredString(doublePerception, "institucion", 2, 180);
-    readRequiredString(doublePerception, "funcion", 2, 180);
-    readRequiredString(doublePerception, "montoPercibe", 1, 40);
-    readRequiredString(doublePerception, "remuneracionCargoActual", 1, 40);
-    readRequiredString(doublePerception, "montoTotalRemuneracion", 1, 40);
-  }
-
-  validateConditionalDescription(
-    sentences,
-    "tieneSentencias",
-    "detalleSentencias",
-    "Debes describir las sentencias declaradas.",
-  );
-  validateConditionalDescription(
-    sentences,
-    "tieneProcesos",
-    "detalleProcesos",
-    "Debes describir el estado del proceso declarado.",
-  );
-  validateConditionalDescription(
-    sentences,
-    "fueDestituido",
-    "detalleDestitucion",
-    "Debes indicar el motivo y anio de destitucion.",
-  );
-
-  validateConditionalDescription(
-    incompatibilities,
-    "recibeRenta",
-    "detalleRenta",
-    "Debes detallar la suspension temporal del beneficio.",
-  );
-  validateConditionalDescription(
-    incompatibilities,
-    "representaEmpresas",
-    "nombreEmpresa",
-    "Debes indicar el nombre de la empresa.",
-  );
-  readRequiredBoolean(incompatibilities, "compromisoMatrimonio");
-
-  readRequiredString(address, "calleAvenida", 2, 180);
-  readRequiredString(address, "barrioZona", 2, 120);
-  readRequiredString(address, "numeroDomicilio", 1, 40);
-  readRequiredString(address, "tipoVivienda", 2, 80);
-  readRequiredString(address, "telefonoCelular", 5, 40);
-  readRequiredString(address, "telefonoReferencia", 5, 40);
-  readRequiredFloat(address, "latitud", -90, 90);
-  readRequiredFloat(address, "longitud", -180, 180);
-
-  const hasCityHallRelatives = readRequiredBoolean(
-    cityHallRelatives,
-    "tieneFamiliares",
-  );
-  const cityHallRelativeRows = readJsonArray(cityHallRelatives, "familiares");
-
-  if (hasCityHallRelatives && cityHallRelativeRows.length === 0) {
-    throw new HttpError(
-      400,
-      "Debes registrar los datos de familiares que trabajan en la alcaldia.",
-    );
-  }
-
-  for (const relative of cityHallRelativeRows) {
-    const record = expectRecord(relative);
-    readRequiredString(record, "parentesco", 2, 80);
-    readRequiredString(record, "nombreCompleto", 2, 180);
-    readRequiredString(record, "cargo", 2, 150);
-    readRequiredString(record, "unidad", 2, 180);
-  }
-}
-
-function readJsonRecord(source: JsonRecord, key: string): JsonRecord {
-  const value = source[key];
-
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new HttpError(400, `La seccion ${key} es obligatoria.`);
-  }
-
-  return value as JsonRecord;
-}
-
-function readJsonArray(source: JsonRecord, key: string): unknown[] {
-  const value = source[key];
-
-  if (!Array.isArray(value)) {
-    throw new HttpError(400, `La seccion ${key} no tiene un formato valido.`);
-  }
-
-  return value;
-}
-
-function validateConditionalDescription(
-  source: JsonRecord,
-  conditionKey: string,
-  descriptionKey: string,
-  message: string,
-) {
-  const enabled = readRequiredBoolean(source, conditionKey);
-  const description = readRequiredString(source, descriptionKey, 2, 1000);
-
-  if (enabled && description.toUpperCase() === "NO APLICA") {
-    throw new HttpError(400, message);
-  }
-}
-
-function serializeSwornDeclaration(record: any) {
-  return {
-    id: record.id,
-    usuarioId: record.usuario_id,
-    gestion: record.gestion,
-    estado: record.estado,
-    funcionarioNombreCompleto: record.funcionario_nombre_completo,
-    funcionarioCi: record.funcionario_ci ?? "",
-    funcionarioNumeroItem: record.funcionario_numero_item ?? "",
-    funcionarioCargo: record.funcionario_cargo ?? "",
-    funcionarioOficinaId: record.funcionario_oficina_id ?? null,
-    funcionarioOficina: record.funcionario_oficina ?? "",
-    payload: record.payload ?? {},
-    observacionRevision: record.observacion_revision ?? "",
-    revisadoPorId: record.revisado_por_id ?? null,
-    revisadoPorNombre: record.revisado_por_nombre ?? "",
-    revisadoEn: record.revisado_en?.toISOString() ?? null,
-    createdAt: record.created_at.toISOString(),
-    updatedAt: record.updated_at.toISOString(),
-  };
-}
-
-async function loadSwornDeclarationForPdf(
-  declarationId: number,
-  authenticatedUser: AuthenticatedUser,
-) {
-  if (!Number.isInteger(declarationId) || declarationId <= 0) {
-    throw new HttpError(400, "Debes enviar una declaracion valida.");
-  }
-
-  const conditions = [`"id" = $1`];
-  const values: unknown[] = [declarationId];
-
-  if (!isAdminUser(authenticatedUser)) {
-    values.push(authenticatedUser.id);
-    conditions.push(`"usuario_id" = $${values.length}`);
-  }
-
-  const result = await pool.query(
-    `
-      SELECT *
-      FROM "declaraciones_juradas"
-      WHERE ${conditions.join(" AND ")}
-      LIMIT 1
-    `,
-    values,
-  );
-
-  if (result.rowCount === 0) {
-    throw new HttpError(404, "No se encontro la declaracion jurada.");
-  }
-
-  return result.rows[0];
 }
 
 async function buildSwornDeclarationPdf(record: any) {
@@ -13145,11 +12005,15 @@ async function buildSwornDeclarationPdf(record: any) {
       ],
       [
         "Compromiso de matrimonio",
-        incompatibilities.compromisoMatrimonio === true ? "Declara compromiso" : "No declara",
+        incompatibilities.compromisoMatrimonio === true
+          ? "Declara compromiso"
+          : "No declara",
       ],
       [
         "Representacion de empresas",
-        incompatibilities.representaEmpresas === true ? "Si representa" : "No representa",
+        incompatibilities.representaEmpresas === true
+          ? "Si representa"
+          : "No representa",
       ],
       [
         "Familiares en la Alcaldia",
@@ -13176,7 +12040,10 @@ async function buildSwornDeclarationPdf(record: any) {
     context,
     page,
     [
-      ["Percibe doble percepcion", doublePerception.percibeDoblePercepcion === true ? "SI" : "NO"],
+      [
+        "Percibe doble percepcion",
+        doublePerception.percibeDoblePercepcion === true ? "SI" : "NO",
+      ],
       ["Institucion", doublePerception.institucion],
       ["Funcion", doublePerception.funcion],
       ["Monto percibido", doublePerception.montoPercibe],
@@ -13206,10 +12073,19 @@ async function buildSwornDeclarationPdf(record: any) {
     context,
     page,
     [
-      ["Recibe renta o pension", incompatibilities.recibeRenta === true ? "SI" : "NO"],
+      [
+        "Recibe renta o pension",
+        incompatibilities.recibeRenta === true ? "SI" : "NO",
+      ],
       ["Detalle renta", incompatibilities.detalleRenta],
-      ["Compromiso matrimonio", incompatibilities.compromisoMatrimonio === true ? "SI" : "NO"],
-      ["Representa empresas", incompatibilities.representaEmpresas === true ? "SI" : "NO"],
+      [
+        "Compromiso matrimonio",
+        incompatibilities.compromisoMatrimonio === true ? "SI" : "NO",
+      ],
+      [
+        "Representa empresas",
+        incompatibilities.representaEmpresas === true ? "SI" : "NO",
+      ],
       ["Nombre de empresa", incompatibilities.nombreEmpresa],
     ],
     y,
@@ -13235,7 +12111,10 @@ async function buildSwornDeclarationPdf(record: any) {
     y,
   );
 
-  const mapImage = await embedSwornDeclarationMapImage(pdf, address.mapaImagenPngBase64);
+  const mapImage = await embedSwornDeclarationMapImage(
+    pdf,
+    address.mapaImagenPngBase64,
+  );
   if (mapImage != null) {
     y = drawSwornSectionTitle(context, page, "Ubicacion declarada", y - 8);
     const mapBoxWidth = 500;
@@ -13271,7 +12150,12 @@ async function buildSwornDeclarationPdf(record: any) {
       ({ page, y } = addSwornDeclarationPage(context));
     }
     y = drawSwornSectionTitle(context, page, "Familiares en la Alcaldia", y);
-    ({ page, y } = drawSwornCityHallRelativesTable(context, page, cityHallRelatives, y));
+    ({ page, y } = drawSwornCityHallRelativesTable(
+      context,
+      page,
+      cityHallRelatives,
+      y,
+    ));
   }
 
   if (y < 260) {
@@ -13388,7 +12272,14 @@ function drawSwornPageFrame(context: SwornDeclarationPdfContext, page: any) {
     font: boldFont,
     color: swornPdfColors.black,
   });
-  drawSwornBadge(page, code, swornPdfSize.width - 206, swornPdfSize.height - 196, 162, boldFont);
+  drawSwornBadge(
+    page,
+    code,
+    swornPdfSize.width - 206,
+    swornPdfSize.height - 196,
+    162,
+    boldFont,
+  );
 
   page.drawLine({
     start: { x: swornPdfMargin, y: 54 },
@@ -13403,14 +12294,12 @@ function drawSwornPageFrame(context: SwornDeclarationPdfContext, page: any) {
     height: 34,
     color: swornPdfColors.olive,
   });
-  page.drawSvgPath(
-    `M 0 0 L 56 0 L 28 34 L 0 34 Z`,
-    { color: swornPdfColors.taupe },
-  );
-  page.drawSvgPath(
-    `M 58 0 L 76 0 L 48 34 L 30 34 Z`,
-    { color: swornPdfColors.white },
-  );
+  page.drawSvgPath(`M 0 0 L 56 0 L 28 34 L 0 34 Z`, {
+    color: swornPdfColors.taupe,
+  });
+  page.drawSvgPath(`M 58 0 L 76 0 L 48 34 L 30 34 Z`, {
+    color: swornPdfColors.white,
+  });
   page.drawText(`Pagina ${pageNumber}`, {
     x: swornPdfSize.width - swornPdfMargin - 52,
     y: 42,
@@ -13461,7 +12350,10 @@ function drawSwornSectionTitle(
 ) {
   const titleWidth = Math.min(
     300,
-    Math.max(150, context.boldFont.widthOfTextAtSize(title.toUpperCase(), 11) + 24),
+    Math.max(
+      150,
+      context.boldFont.widthOfTextAtSize(title.toUpperCase(), 11) + 24,
+    ),
   );
   page.drawRectangle({
     x: swornPdfMargin,
@@ -13506,7 +12398,16 @@ function drawSwornInfoGrid(
       cursorY -= cellHeight + 8;
     }
 
-    drawSwornInfoCell(context, page, x, cursorY, cellWidth, cellHeight, row[0], row[1]);
+    drawSwornInfoCell(
+      context,
+      page,
+      x,
+      cursorY,
+      cellWidth,
+      cellHeight,
+      row[0],
+      row[1],
+    );
   });
 
   return cursorY - cellHeight - 10;
@@ -13597,16 +12498,18 @@ function drawSwornParagraph(
   y: number,
   size: number,
 ) {
-  return drawSwornWrappedText(
-    page,
-    text,
-    swornPdfMargin,
-    y,
-    swornPdfSize.width - swornPdfMargin * 2,
-    size,
-    context.font,
-    swornPdfColors.ink,
-  ) - 12;
+  return (
+    drawSwornWrappedText(
+      page,
+      text,
+      swornPdfMargin,
+      y,
+      swornPdfSize.width - swornPdfMargin * 2,
+      size,
+      context.font,
+      swornPdfColors.ink,
+    ) - 12
+  );
 }
 
 function drawSwornRelativesTable(
@@ -13625,7 +12528,13 @@ function drawSwornRelativesTable(
   ] as Array<[string, number]>;
 
   if (rows.length === 0) {
-    y = drawSwornParagraph(context, page, "No se registraron familiares en esta seccion.", y, 10);
+    y = drawSwornParagraph(
+      context,
+      page,
+      "No se registraron familiares en esta seccion.",
+      y,
+      10,
+    );
     return { page, y };
   }
 
@@ -13659,7 +12568,13 @@ function drawSwornCityHallRelativesTable(
   ] as Array<[string, number]>;
 
   if (rows.length === 0) {
-    y = drawSwornParagraph(context, page, "El funcionario marco que tiene familiares en la Alcaldia, pero no registro filas de detalle.", y, 10);
+    y = drawSwornParagraph(
+      context,
+      page,
+      "El funcionario marco que tiene familiares en la Alcaldia, pero no registro filas de detalle.",
+      y,
+      10,
+    );
     return { page, y };
   }
 
@@ -13761,15 +12676,32 @@ function drawSwornSignatureBlock(
   const leftX = (swornPdfSize.width - totalWidth) / 2;
   const rightX = leftX + lineWidth + gap;
 
-  drawSwornSignature(page, leftX, y, lineWidth, "FIRMA DEL DECLARANTE", context.boldFont);
-  drawSwornSignature(page, rightX, y, lineWidth, "ACLARACION DE FIRMA", context.boldFont);
-  page.drawText(`CI: ${normalizePdfValue(context.record.funcionario_ci) || "________________"}`, {
-    x: leftX,
-    y: y - 42,
-    size: 9,
-    font: context.font,
-    color: swornPdfColors.black,
-  });
+  drawSwornSignature(
+    page,
+    leftX,
+    y,
+    lineWidth,
+    "FIRMA DEL DECLARANTE",
+    context.boldFont,
+  );
+  drawSwornSignature(
+    page,
+    rightX,
+    y,
+    lineWidth,
+    "ACLARACION DE FIRMA",
+    context.boldFont,
+  );
+  page.drawText(
+    `CI: ${normalizePdfValue(context.record.funcionario_ci) || "________________"}`,
+    {
+      x: leftX,
+      y: y - 42,
+      size: 9,
+      font: context.font,
+      color: swornPdfColors.black,
+    },
+  );
 }
 
 function drawSwornSignature(
@@ -13831,10 +12763,7 @@ function wrapSwornPdfText(
   size: number,
   maxWidth: number,
 ) {
-  const cleanText = text
-    .replace(/\r\n/g, "\n")
-    .replace(/\s+/g, " ")
-    .trim();
+  const cleanText = text.replace(/\r\n/g, "\n").replace(/\s+/g, " ").trim();
 
   if (cleanText.length === 0) {
     return [""];
@@ -13910,7 +12839,13 @@ function drawSwornDeclarationPageOne(page: any, record: any, font: any) {
   drawRelativeRows(page, relatives, ["UNION LIBRE"], [441], font);
   drawRelativeRows(page, relatives, ["DIVORCIADO(A)"], [510], font);
   drawRelativeRows(page, relatives, ["SEPARADO(A)"], [579], font);
-  drawRelativeRows(page, relatives, ["PADRE O MADRE DE LOS HIJOS"], [649], font);
+  drawRelativeRows(
+    page,
+    relatives,
+    ["PADRE O MADRE DE LOS HIJOS"],
+    [649],
+    font,
+  );
   drawRelativeRows(page, relatives, ["PADRES"], [719, 741], font);
 }
 
@@ -13923,11 +12858,22 @@ function drawSwornDeclarationPageTwo(page: any, record: any, font: any) {
   drawRelativeRows(page, relatives, ["PRIMOS"], [470, 491], font);
   drawRelativeRows(page, relatives, ["SOBRINOS"], [555, 576], font);
   drawRelativeRows(page, relatives, ["SUEGROS"], [650], font);
-  drawRelativeRows(page, relatives, ["YERNOS - NUERAS", "YERNOS", "NUERAS"], [719], font);
+  drawRelativeRows(
+    page,
+    relatives,
+    ["YERNOS - NUERAS", "YERNOS", "NUERAS"],
+    [719],
+    font,
+  );
   drawRelativeRows(page, relatives, ["CUNADOS", "CUÑADOS"], [792], font);
 }
 
-function drawSwornDeclarationPageFour(page: any, record: any, font: any, boldFont: any) {
+function drawSwornDeclarationPageFour(
+  page: any,
+  record: any,
+  font: any,
+  boldFont: any,
+) {
   const payload = readSwornDeclarationPayloadRecord(record);
   const doublePerception = readPayloadRecord(payload.doblePercepcion);
   const sentences = readPayloadRecord(payload.sentenciasProcesos);
@@ -13944,7 +12890,14 @@ function drawSwornDeclarationPageFour(page: any, record: any, font: any, boldFon
     { font: boldFont, size: 7.2, width: 240 },
   );
   drawCellText(page, 303, 337, doublePerception.institucion, 130, font);
-  drawCellText(page, 303, 360, doublePerception.funcion ?? "NINGUNA", 130, font);
+  drawCellText(
+    page,
+    303,
+    360,
+    doublePerception.funcion ?? "NINGUNA",
+    130,
+    font,
+  );
   drawCellText(page, 303, 383, doublePerception.montoPercibe, 130, font);
   drawCenteredPdfText(page, 296, 480, hasSentences ? "SI" : "NO", {
     font: boldFont,
@@ -13972,7 +12925,12 @@ function drawSwornDeclarationPageFour(page: any, record: any, font: any, boldFon
   }
 }
 
-function drawSwornDeclarationPageFive(page: any, record: any, font: any, boldFont: any) {
+function drawSwornDeclarationPageFive(
+  page: any,
+  record: any,
+  font: any,
+  boldFont: any,
+) {
   const payload = readSwornDeclarationPayloadRecord(record);
   const incompatibilities = readPayloadRecord(payload.otrasIncompatibilidades);
   const receivesPension = incompatibilities.recibeRenta === true;
@@ -13998,7 +12956,15 @@ function drawSwornDeclarationPageFive(page: any, record: any, font: any, boldFon
     width: 160,
   });
   if (representsCompanies) {
-    drawCellText(page, 55, 377, incompatibilities.nombreEmpresa, 485, font, 5.8);
+    drawCellText(
+      page,
+      55,
+      377,
+      incompatibilities.nombreEmpresa,
+      485,
+      font,
+      5.8,
+    );
   }
 }
 
@@ -14011,7 +12977,10 @@ async function drawSwornDeclarationPageSix(
 ) {
   const payload = readSwornDeclarationPayloadRecord(record);
   const address = readPayloadRecord(payload.datosDomiciliarios);
-  const mapImage = await embedSwornDeclarationMapImage(pdf, address.mapaImagenPngBase64);
+  const mapImage = await embedSwornDeclarationMapImage(
+    pdf,
+    address.mapaImagenPngBase64,
+  );
 
   drawCellText(page, 170, 236, record.funcionario_nombre_completo, 360, font);
   drawCellText(page, 170, 259, record.funcionario_ci, 94, font);
@@ -14060,7 +13029,9 @@ function buildSwornDeclarationRelatives(record: any) {
         normalizeOptionalText(row.apellidoPaterno),
         normalizeOptionalText(row.apellidoMaterno),
         normalizeOptionalText(row.nombres),
-      ].filter(Boolean).join(" "),
+      ]
+        .filter(Boolean)
+        .join(" "),
       occupation: normalizeOptionalText(row.ocupacion),
       workplace: normalizeOptionalText(row.lugarTrabajo),
       document: normalizeOptionalText(row.documentoIdentidad),
@@ -14147,7 +13118,13 @@ function drawCenteredPdfText(
   });
 }
 
-function drawSignatureLine(page: any, x: number, topY: number, label: string, font: any) {
+function drawSignatureLine(
+  page: any,
+  x: number,
+  topY: number,
+  label: string,
+  font: any,
+) {
   const y = topToPdfY(page, topY);
 
   page.drawLine({
@@ -14220,8 +13197,10 @@ function buildSwornDeclarationCode(record: any) {
 
 function buildSwornDeclarationPdfFilename(record: any) {
   const safeCi =
-    normalizeOptionalText(record.funcionario_ci)
-      ?.replace(/[^A-Za-z0-9_-]+/g, "_") ?? String(record.id);
+    normalizeOptionalText(record.funcionario_ci)?.replace(
+      /[^A-Za-z0-9_-]+/g,
+      "_",
+    ) ?? String(record.id);
 
   return `DJ-${record.id}-${safeCi}.pdf`;
 }
@@ -14248,36 +13227,6 @@ function formatSwornDeclarationDate(value: unknown) {
   }
 
   return `${String(date.getDate()).padStart(2, "0")} ${months[date.getMonth()]} DE ${date.getFullYear()}`;
-}
-
-function serializeLunchRecord(record: any) {
-  const salidaRegistrador = record.registrador_salida ?? null;
-  const retornoRegistrador = record.registrador_retorno ?? null;
-
-  return {
-    id: record.id,
-    usuarioId: record.usuario_id,
-    fecha: toDateOnlyText(record.fecha),
-    horaSalida: record.hora_salida,
-    salidaEn: record.salida_en.toISOString(),
-    horaRetorno: record.hora_retorno ?? "",
-    retornoEn: record.retorno_en?.toISOString() ?? null,
-    estado: record.hora_retorno == null ? "ABIERTO" : "CERRADO",
-    funcionarioNombreCompleto: record.funcionario_nombre_completo,
-    funcionarioCi: record.funcionario_ci ?? "",
-    funcionarioNumeroItem: record.funcionario_numero_item ?? "",
-    funcionarioCargo: record.funcionario_cargo ?? "",
-    funcionarioOficinaId: record.funcionario_oficina_id ?? null,
-    funcionarioOficina: record.funcionario_oficina ?? "",
-    registradoSalidaPorId: record.registrado_salida_por_id ?? null,
-    registradoSalidaPorNombre:
-      salidaRegistrador == null ? "" : buildUserDisplayName(salidaRegistrador),
-    registradoRetornoPorId: record.registrado_retorno_por_id ?? null,
-    registradoRetornoPorNombre:
-      retornoRegistrador == null ? "" : buildUserDisplayName(retornoRegistrador),
-    createdAt: record.created_at.toISOString(),
-    updatedAt: record.updated_at.toISOString(),
-  };
 }
 
 function isNonRequiredEventAttendance(attendance: any) {
@@ -14324,14 +13273,14 @@ function serializeAttendanceRecord(attendance: any) {
     serializeAttendanceControlRecord,
   );
   const controlSummary = buildSerializedControlSummary(serializedControls);
-  const lateRegisteredAt = serializedControls
-    .filter((control: any) => control.retrasado === true)
-    .map((control: any) => control.registradoEn as string)
-    .sort()
-    .at(-1) ?? null;
-  const resolvedState = serializedControls.length > 0
-    ? controlSummary.state
-    : attendance.estado;
+  const lateRegisteredAt =
+    serializedControls
+      .filter((control: any) => control.retrasado === true)
+      .map((control: any) => control.registradoEn as string)
+      .sort()
+      .at(-1) ?? null;
+  const resolvedState =
+    serializedControls.length > 0 ? controlSummary.state : attendance.estado;
   const defaultNote =
     resolvedState === estado_asistencia.ASISTIO
       ? "Registro de asistencia confirmado."
@@ -14341,7 +13290,8 @@ function serializeAttendanceRecord(attendance: any) {
     id: attendance.id,
     personaId: attendance.persona_id,
     nombreCompleto:
-      attendance.nombre_snapshot ?? buildResolvedPersonDisplayName(attendance.personas),
+      attendance.nombre_snapshot ??
+      buildResolvedPersonDisplayName(attendance.personas),
     estado: resolvedState,
     observacion: attendance.observacion ?? defaultNote,
     qrLeido: attendance.qr_leido,
@@ -14368,71 +13318,6 @@ function serializeAttendanceRecord(attendance: any) {
     eventoId: attendance.evento_id,
     eventoNombre:
       "eventos" in attendance ? attendance.eventos.nombre : undefined,
-  };
-}
-
-function serializeAttendanceReportRecord(attendance: any, person: any) {
-  const linkedUser = person.usuario ?? null;
-  const officeName = resolveLinkedOfficeName(linkedUser);
-  const serializedControls = (attendance.asistencia_controles ?? []).map(
-    serializeAttendanceControlRecord,
-  );
-  const controlSummary = buildSerializedControlSummary(serializedControls);
-  const resolvedState = serializedControls.length > 0
-    ? controlSummary.state
-    : attendance.estado;
-
-  return {
-    id: attendance.id,
-    personaId: person.id,
-    ci: linkedUser?.ci ?? person.ci,
-    nombreCompleto: buildResolvedPersonDisplayName(person),
-    oficina: officeName,
-    oficinaId: resolveLinkedOfficeId(linkedUser),
-    oficinaCodigo: resolveLinkedOfficeCode(linkedUser),
-    estado: resolvedState,
-    observacion: attendance.observacion,
-    eventoId: attendance.eventos.id,
-    eventoNombre: attendance.eventos.nombre,
-    eventoFecha: serializeLocalEventDate(attendance.eventos.fecha_evento),
-    eventoDireccion: attendance.eventos.direccion ?? attendance.eventos.descripcion,
-    registradoEn: attendance.registrado_en.toISOString(),
-    controles: controlSummary.controls,
-    controlesRegistrados: controlSummary.registeredCount,
-    controlesAsistidos: controlSummary.attendedCount,
-    controlesObservados: controlSummary.observedCount,
-    controlesRetrasados: controlSummary.lateCount,
-  };
-}
-
-function serializeReportPerson(source: {
-  user: any | null;
-  person: any | null;
-}) {
-  const linkedUser = source.user ?? source.person?.usuario ?? null;
-  const linkedPerson = source.person ?? linkedUser?.persona ?? null;
-  const officeName = resolveLinkedOfficeName(linkedUser);
-
-  return {
-    id: linkedUser?.id ?? linkedPerson?.id ?? 0,
-    personaId: linkedPerson?.id ?? null,
-    usuarioId: linkedUser?.id ?? null,
-    ci: linkedUser?.ci ?? linkedPerson?.ci ?? "",
-    nombreCompleto: linkedUser
-      ? buildUserDisplayName(linkedUser)
-      : linkedPerson?.nombre_completo ?? "",
-    oficina: officeName,
-    oficinaId: resolveLinkedOfficeId(linkedUser),
-    oficinaCodigo: resolveLinkedOfficeCode(linkedUser),
-    unidad: officeName,
-    cargo: resolveEffectiveJobTitleName(linkedUser),
-    tipoVinculo: linkedUser?.tipo_vinculo ?? null,
-    numeroItem: linkedUser?.numero_item ?? null,
-    email: linkedUser?.email ?? null,
-    activo: linkedUser?.activo ?? linkedPerson?.activo ?? true,
-    fotoUrl: linkedUser?.foto_url ?? null,
-    codigoQr:
-      linkedPerson?.codigo_qr ?? (linkedUser ? buildUserQrCode(linkedUser) : null),
   };
 }
 
@@ -14521,7 +13406,9 @@ async function resolvePersonEventRequirement(
     (await resolveOfficeForUser(prisma, linkedUser))?.id ??
     null;
   const allowedOfficeIds = new Set<number>(
-    (event.evento_oficinas ?? []).map((item: { oficina_id: number }) => item.oficina_id),
+    (event.evento_oficinas ?? []).map(
+      (item: { oficina_id: number }) => item.oficina_id,
+    ),
   );
   const allowedOfficeCodes = new Set<string>(
     (event.evento_oficinas ?? [])
@@ -14550,20 +13437,35 @@ async function resolvePersonEventRequirement(
       .filter((cargoName: string | null) => cargoName != null),
   );
   const userJobTitles = resolveUserEventJobTitles(linkedUser);
-  const userOfficeCode = normalizeOfficeCode(resolveLinkedOfficeCode(linkedUser) ?? "");
-  const userOfficeName = normalizeLooseMatchText(resolveLinkedOfficeName(linkedUser));
+  const userOfficeCode = normalizeOfficeCode(
+    resolveLinkedOfficeCode(linkedUser) ?? "",
+  );
+  const userOfficeName = normalizeLooseMatchText(
+    resolveLinkedOfficeName(linkedUser),
+  );
   const matchingOfficeIds = new Set<number>(
     (event.evento_oficinas ?? [])
-      .filter((item: { oficina_id: number; oficinas?: { cod?: string | null; oficina?: string | null } }) => {
-        const eventOfficeCode = normalizeOfficeCode(item.oficinas?.cod ?? "");
-        const eventOfficeName = normalizeLooseMatchText(item.oficinas?.oficina);
+      .filter(
+        (item: {
+          oficina_id: number;
+          oficinas?: { cod?: string | null; oficina?: string | null };
+        }) => {
+          const eventOfficeCode = normalizeOfficeCode(item.oficinas?.cod ?? "");
+          const eventOfficeName = normalizeLooseMatchText(
+            item.oficinas?.oficina,
+          );
 
-        return (
-          (userOfficeId != null && item.oficina_id === userOfficeId) ||
-          (userOfficeCode.length > 0 && allowedOfficeCodes.has(userOfficeCode) && eventOfficeCode === userOfficeCode) ||
-          (userOfficeName != null && allowedOfficeNames.has(userOfficeName) && eventOfficeName === userOfficeName)
-        );
-      })
+          return (
+            (userOfficeId != null && item.oficina_id === userOfficeId) ||
+            (userOfficeCode.length > 0 &&
+              allowedOfficeCodes.has(userOfficeCode) &&
+              eventOfficeCode === userOfficeCode) ||
+            (userOfficeName != null &&
+              allowedOfficeNames.has(userOfficeName) &&
+              eventOfficeName === userOfficeName)
+          );
+        },
+      )
       .map((item: { oficina_id: number }) => item.oficina_id),
   );
   const matchesOffice =
