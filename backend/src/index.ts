@@ -12097,6 +12097,7 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
     }
     button.rating {
       min-height: 122px;
+      min-width: 0;
       border: 1.5px solid var(--line);
       border-radius: 22px;
       background: var(--surface-soft);
@@ -12105,6 +12106,11 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
       font-size: 15px;
       font-weight: 700;
       color: var(--ink);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
       transition: border-color .16s ease, background .16s ease, color .16s ease, transform .16s ease, box-shadow .16s ease;
     }
     button.rating:hover {
@@ -12242,20 +12248,27 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
       main {
         border-radius: 26px;
       }
+      .content {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
       .ratings {
-        gap: 6px;
+        width: calc(100% + 16px);
+        margin-left: -8px;
+        margin-right: -8px;
+        gap: 4px;
         grid-template-columns: repeat(5, minmax(0, 1fr));
       }
       button.rating {
-        min-height: 82px;
-        padding: 8px 2px;
-        border-radius: 14px;
-        font-size: 11px;
+        min-height: 74px;
+        padding: 7px 1px;
+        border-radius: 12px;
+        font-size: 10px;
         line-height: 1.15;
       }
       button.rating span {
-        font-size: 28px;
-        margin-bottom: 6px;
+        font-size: 24px;
+        margin-bottom: 5px;
       }
       .person-photo {
         width: 150px;
@@ -12268,18 +12281,21 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
     }
     @media (max-width: 360px) {
       .content {
-        padding-left: 16px;
-        padding-right: 16px;
+        padding-left: 14px;
+        padding-right: 14px;
       }
       .ratings {
-        gap: 4px;
+        width: calc(100% + 20px);
+        margin-left: -10px;
+        margin-right: -10px;
+        gap: 3px;
       }
       button.rating {
-        min-height: 76px;
-        font-size: 10px;
+        min-height: 70px;
+        font-size: 9px;
       }
       button.rating span {
-        font-size: 24px;
+        font-size: 22px;
       }
     }
   </style>
