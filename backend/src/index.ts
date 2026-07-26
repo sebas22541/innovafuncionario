@@ -5714,8 +5714,6 @@ async function loadFuncionarioRatingsByCis(
     regular: number;
     bueno: number;
     muyBueno: number;
-    buenas: number;
-    malas: number;
   }>(
     `
       SELECT
@@ -5724,9 +5722,7 @@ async function loadFuncionarioRatingsByCis(
         COUNT(c."id") FILTER (WHERE c."calificacion" IN ('malo', 'enojada'))::int AS "malo",
         COUNT(c."id") FILTER (WHERE c."calificacion" IN ('regular', 'neutral'))::int AS "regular",
         COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'feliz'))::int AS "bueno",
-        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_bueno')::int AS "muyBueno",
-        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'muy_bueno', 'feliz'))::int AS "buenas",
-        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('muy_malo', 'malo', 'enojada'))::int AS "malas"
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_bueno')::int AS "muyBueno"
       FROM "usuarios" u
       LEFT JOIN "calificaciones_funcionario" c
         ON c."funcionario_id" = u."id"
@@ -5746,8 +5742,6 @@ async function loadFuncionarioRatingsByCis(
         regular: row.regular,
         bueno: row.bueno,
         muyBueno: row.muyBueno,
-        buenas: row.buenas,
-        malas: row.malas,
       },
     ]),
   );
@@ -5766,8 +5760,6 @@ async function loadFuncionarioRatingsByCis(
       regular: 0,
       bueno: 0,
       muyBueno: 0,
-      buenas: 0,
-      malas: 0,
     };
   });
 }
@@ -5785,8 +5777,6 @@ async function loadFuncionarioRatingsByCi(
     regular: number;
     bueno: number;
     muyBueno: number;
-    buenas: number;
-    malas: number;
   }>(
     `
       SELECT
@@ -5795,9 +5785,7 @@ async function loadFuncionarioRatingsByCi(
         COUNT(c."id") FILTER (WHERE c."calificacion" IN ('malo', 'enojada'))::int AS "malo",
         COUNT(c."id") FILTER (WHERE c."calificacion" IN ('regular', 'neutral'))::int AS "regular",
         COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'feliz'))::int AS "bueno",
-        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_bueno')::int AS "muyBueno",
-        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'muy_bueno', 'feliz'))::int AS "buenas",
-        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('muy_malo', 'malo', 'enojada'))::int AS "malas"
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_bueno')::int AS "muyBueno"
       FROM "usuarios" u
       LEFT JOIN "calificaciones_funcionario" c
         ON c."funcionario_id" = u."id"
@@ -5820,8 +5808,6 @@ async function loadFuncionarioRatingsByCi(
     regular: row.regular,
     bueno: row.bueno,
     muyBueno: row.muyBueno,
-    buenas: row.buenas,
-    malas: row.malas,
   };
 }
 
@@ -5847,8 +5833,6 @@ async function loadFuncionarioRatingsByOffice(
     regular: number;
     bueno: number;
     muyBueno: number;
-    buenas: number;
-    malas: number;
   }>(
     `
       SELECT
@@ -5857,9 +5841,7 @@ async function loadFuncionarioRatingsByOffice(
         COUNT(c."id") FILTER (WHERE c."calificacion" IN ('malo', 'enojada'))::int AS "malo",
         COUNT(c."id") FILTER (WHERE c."calificacion" IN ('regular', 'neutral'))::int AS "regular",
         COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'feliz'))::int AS "bueno",
-        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_bueno')::int AS "muyBueno",
-        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('bueno', 'muy_bueno', 'feliz'))::int AS "buenas",
-        COUNT(c."id") FILTER (WHERE c."calificacion" IN ('muy_malo', 'malo', 'enojada'))::int AS "malas"
+        COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_bueno')::int AS "muyBueno"
       FROM "usuarios" u
       LEFT JOIN "calificaciones_funcionario" c
         ON c."funcionario_id" = u."id"
@@ -5880,8 +5862,6 @@ async function loadFuncionarioRatingsByOffice(
     regular: row.regular,
     bueno: row.bueno,
     muyBueno: row.muyBueno,
-    buenas: row.buenas,
-    malas: row.malas,
   }));
 }
 
@@ -12263,16 +12243,19 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
         border-radius: 26px;
       }
       .ratings {
-        gap: 10px;
-        grid-template-columns: repeat(2, 1fr);
+        gap: 6px;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
       }
       button.rating {
-        min-height: 112px;
-        border-radius: 20px;
-        font-size: 14px;
+        min-height: 82px;
+        padding: 8px 2px;
+        border-radius: 14px;
+        font-size: 11px;
+        line-height: 1.15;
       }
       button.rating span {
-        font-size: 36px;
+        font-size: 28px;
+        margin-bottom: 6px;
       }
       .person-photo {
         width: 150px;
@@ -12281,6 +12264,22 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
       }
       .optional-grid {
         grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 360px) {
+      .content {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+      .ratings {
+        gap: 4px;
+      }
+      button.rating {
+        min-height: 76px;
+        font-size: 10px;
+      }
+      button.rating span {
+        font-size: 24px;
       }
     }
   </style>
