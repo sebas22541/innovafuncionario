@@ -1,0 +1,6 @@
+{
+  "installCommand": "echo \"Skipping npm install\"",
+  "buildCommand": "cd frontend && bash scripts/vercel-build.sh",
+  "outputDirectory": "frontend/build/web",
+  "framework": null
+}
