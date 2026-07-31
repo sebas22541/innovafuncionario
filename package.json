@@ -1,0 +1,12 @@
+{
+  "name": "innovafuncionario-api",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "build": "cd backend && npx prisma generate && npm run check"
+  },
+  "engines": {
+    "node": "22.x"
+  }
+}
