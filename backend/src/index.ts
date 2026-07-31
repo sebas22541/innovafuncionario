@@ -417,7 +417,7 @@ await ensureRuntimeSchema();
 await ensureHiddenUserReaderAccount();
 await deactivateExpiredConsultantContracts();
 
-const server = http.createServer(async (request, response) => {
+export const server = http.createServer(async (request, response) => {
   const requestStartedAt = process.hrtime.bigint();
   const requestId = createRequestId();
   let requestPath = request.url ?? null;
@@ -480,7 +480,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/health") {
+    if (
+      request.method === "GET" &&
+      (url.pathname === "/health" || url.pathname === "/api/health")
+    ) {
       await prisma.$queryRaw`SELECT 1`;
       sendJson(response, 200, {
         status: "ok",
@@ -3168,29 +3171,31 @@ const server = http.createServer(async (request, response) => {
 server.keepAliveTimeout = 65_000;
 server.headersTimeout = 66_000;
 
-server.on("error", (error: NodeJS.ErrnoException) => {
-  if (error.code === "EADDRINUSE") {
-    logFatal(
-      `No se puede iniciar el backend: el puerto ${PORT} ya esta en uso.`,
-      error,
-    );
-    logFatal(
-      "Cierra el proceso anterior o define otro puerto con la variable PORT.",
-      error,
-    );
+if (process.env.VERCEL !== "1") {
+  server.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EADDRINUSE") {
+      logFatal(
+        `No se puede iniciar el backend: el puerto ${PORT} ya esta en uso.`,
+        error,
+      );
+      logFatal(
+        "Cierra el proceso anterior o define otro puerto con la variable PORT.",
+        error,
+      );
+      process.exit(1);
+    }
+
+    logFatal("No se pudo iniciar el backend.", error);
     process.exit(1);
-  }
-
-  logFatal("No se pudo iniciar el backend.", error);
-  process.exit(1);
-});
-
-server.listen(PORT, () => {
-  logInfo(`Backend escuchando en http://localhost:${PORT}`, {
-    port: PORT,
-    nodeEnv: process.env.NODE_ENV ?? "development",
   });
-});
+
+  server.listen(PORT, () => {
+    logInfo(`Backend escuchando en http://localhost:${PORT}`, {
+      port: PORT,
+      nodeEnv: process.env.NODE_ENV ?? "development",
+    });
+  });
+}
 
 process.on("uncaughtException", (error) => {
   logFatal("Excepcion no capturada. El proceso se cerrara.", error);
