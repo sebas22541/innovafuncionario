@@ -3,7 +3,6 @@
   "buildCommand": "cd backend && npx prisma generate && npm run check",
   "functions": {
     "api/**/*.ts": {
-      "runtime": "nodejs22.x",
       "maxDuration": 60
     }
   }
