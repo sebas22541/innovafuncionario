@@ -207,7 +207,9 @@ if (!DATABASE_URL) {
     "DATABASE_URL no esta definido en backend/.env.",
     new Error("DATABASE_URL no esta definido en backend/.env."),
   );
-  process.exit(1);
+  if (process.env.VERCEL !== "1") {
+    process.exit(1);
+  }
 }
 
 const pool = new Pool({
@@ -413,9 +415,22 @@ let dashboardSummaryCache: CacheEntry<{
 let eventSummaryCache: CacheEntry<any[]> | null = null;
 const eventAttendanceContextCache = new Map<number, CacheEntry<any>>();
 
-await ensureRuntimeSchema();
-await ensureHiddenUserReaderAccount();
-await deactivateExpiredConsultantContracts();
+let runtimeReadyPromise: Promise<void> | null = null;
+
+function ensureRuntimeReady() {
+  runtimeReadyPromise ??= initializeRuntime();
+  return runtimeReadyPromise;
+}
+
+async function initializeRuntime() {
+  if (!DATABASE_URL) {
+    throw new Error("DATABASE_URL no esta definido en variables de entorno.");
+  }
+
+  await ensureRuntimeSchema();
+  await ensureHiddenUserReaderAccount();
+  await deactivateExpiredConsultantContracts();
+}
 
 export const server = http.createServer(async (request, response) => {
   const requestStartedAt = process.hrtime.bigint();
@@ -471,6 +486,8 @@ export const server = http.createServer(async (request, response) => {
   }
 
   try {
+    await ensureRuntimeReady();
+
     const authenticatedUser = await authenticateRequestIfRequired(request, url);
 
     authenticatedUserForLog = authenticatedUser;
