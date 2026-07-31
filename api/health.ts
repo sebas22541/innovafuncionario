@@ -2,14 +2,14 @@ import { Pool } from "pg";
 
 export default async function handler(request: any, response: any) {
   if (request.method !== "GET") {
-    response.status(405).json({ error: "Metodo no permitido." });
+    sendJson(response, 405, { error: "Metodo no permitido." });
     return;
   }
 
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
-    response.status(500).json({
+    sendJson(response, 500, {
       status: "error",
       error: "DATABASE_URL no esta definido en Vercel.",
     });
@@ -25,13 +25,20 @@ export default async function handler(request: any, response: any) {
 
   try {
     await pool.query("SELECT 1");
-    response.status(200).json({ status: "ok" });
+    sendJson(response, 200, { status: "ok" });
   } catch (error) {
-    response.status(500).json({
+    sendJson(response, 500, {
       status: "error",
       error: error instanceof Error ? error.message : "Error desconocido.",
     });
   } finally {
     await pool.end();
   }
+}
+
+function sendJson(response: any, statusCode: number, payload: unknown) {
+  response.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+  });
+  response.end(JSON.stringify(payload));
 }

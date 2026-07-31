@@ -6,7 +6,7 @@ type LogLevel = "debug" | "info" | "warn" | "error" | "fatal";
 
 type LogFields = Record<string, unknown>;
 
-const LOG_DIR = resolve(process.env.LOG_DIR ?? "logs");
+const LOG_DIR = resolve(process.env.LOG_DIR ?? (process.env.VERCEL === "1" ? "/tmp/logs" : "logs"));
 const ACCESS_LOG_FILE = join(LOG_DIR, "backend-access.log");
 const ERROR_LOG_FILE = join(LOG_DIR, "backend-error.log");
 const APP_LOG_FILE = join(LOG_DIR, "backend-app.log");
@@ -52,7 +52,11 @@ function writeLog(
     ...sanitizeLogFields(fields),
   })}\n`;
 
-  appendFileSync(filePath, entry, "utf8");
+  try {
+    appendFileSync(filePath, entry, "utf8");
+  } catch {
+    // En entornos serverless el filesystem puede ser de solo lectura.
+  }
 
   if (level === "error" || level === "fatal") {
     process.stderr.write(entry);

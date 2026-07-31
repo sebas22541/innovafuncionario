@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "main": "index.ts",
+  "dependencies": {
+    "pg": "^8.20.0"
+  },
   "workspaces": [
     "backend"
   ],
