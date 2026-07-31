@@ -1,6 +1,6 @@
 {
-  "installCommand": "cd backend && npm ci",
-  "buildCommand": "cd backend && npx prisma generate && npm run check",
+  "installCommand": "npm ci",
+  "buildCommand": "npm run build",
   "functions": {
     "api/**/*.ts": {
       "maxDuration": 60
