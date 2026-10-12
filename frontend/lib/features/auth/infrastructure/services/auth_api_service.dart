@@ -58,6 +58,28 @@ class AuthApiService {
     await _apiClient.postJson('/api/auth/logout', {});
   }
 
+  Future<AppUser> signup({
+    required String names,
+    required String surname,
+    required String ci,
+    required String password,
+  }) async {
+    final payload = await _apiClient.postJson('/api/auth/signup', {
+      'nombreCompleto': names,
+      'primerApellido': surname,
+      'ci': ci,
+      'password': password,
+      'acceptedPrivacy': true,
+    });
+    return AppUser.fromJson(_readMap(payload['data'], 'usuario'));
+  }
+
+  Future<void> deleteAccount(String currentPassword) async {
+    await _apiClient.deleteJsonWithBody('/api/auth/account', {
+      'currentPassword': currentPassword,
+    });
+  }
+
   Future<AppUser> updateProfileNames({
     required String email,
     required String nombreCompleto,

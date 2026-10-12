@@ -4,6 +4,8 @@ class AppEnvironment {
   const AppEnvironment._();
 
   static const production = bool.fromEnvironment('dart.vm.product');
+  static const vercelBackendBaseUrl =
+      'https://innovafuncionario-jses.vercel.app';
   static const productionBackendBaseUrl =
       'https://innovafuncionarioapi.cochabamba.bo';
   static const payloadEncryptionKey = String.fromEnvironment(
@@ -18,7 +20,7 @@ class AppEnvironment {
     }
 
     if (production) {
-      return productionBackendBaseUrl;
+      return vercelBackendBaseUrl;
     }
 
     if (!kIsWeb) {

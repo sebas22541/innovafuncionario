@@ -63,7 +63,7 @@ model eventos {
   longitud              Float?                  @db.DoublePrecision
   oficina_ids_excluidos Int[]                   @default([])
   estado                estado_evento           @default(ACTIVO)
-  creado_por_id         Int
+  creado_por_id         Int?
   created_at            DateTime                @default(now()) @db.Timestamptz(6)
   updated_at            DateTime                @default(now()) @db.Timestamptz(6)
   asistencias           asistencias[]
@@ -73,7 +73,7 @@ model eventos {
   evento_oficinas       evento_oficinas[]
   evento_cargos         evento_cargos[]
   evento_oficina_cargos evento_oficina_cargos[]
-  usuarios              usuarios                @relation(fields: [creado_por_id], references: [id], onUpdate: NoAction)
+  usuarios              usuarios?               @relation(fields: [creado_por_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([fecha_evento], map: "idx_eventos_fecha_evento")
 }
@@ -222,6 +222,7 @@ model usuarios {
   foto_url             String?                @db.Text
   email                String                 @unique @db.VarChar(150)
   password_hash        String
+  default_ci_login_enabled Boolean             @default(true)
   rol                  rol_usuario            @default(OPERADOR)
   activo               Boolean                @default(true)
   session_version      Int                    @default(0)

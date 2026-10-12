@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'signup_screen.dart';
+import '../../../../shared/widgets/privacy_screen.dart';
 
 import '../../../../core/theme/app_palette.dart';
 import '../../../../injection_container.dart';
@@ -442,7 +444,16 @@ class _AuthScreenState extends State<AuthScreen> {
                       : 0.0;
                   final stageContent = switch (_stage) {
                     _AuthStage.welcome => _AuthWelcomeScreen(
-                      onRegister: () => _setStage(_AuthStage.register),
+                      onRegister: () async {
+                        final user = await Navigator.of(context).push<AppUser>(
+                          MaterialPageRoute(
+                            builder: (_) => const SignupScreen(),
+                          ),
+                        );
+                        if (mounted && user != null) {
+                          widget.onAuthenticated(user);
+                        }
+                      },
                       onLogin: () => _setStage(_AuthStage.login),
                     ),
                     _AuthStage.login || _AuthStage.register => _AuthFormCard(
@@ -562,18 +573,20 @@ class _AuthWelcomeScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 32),
-              /*
               _AuthPrimaryButton(
                 label: 'Registrarse',
                 color: AppPalette.night,
                 onTap: onRegister,
               ),
               const SizedBox(height: 12),
-              */
               _AuthPrimaryButton(
                 label: 'Ingresar',
                 color: AppPalette.night,
                 onTap: onLogin,
+              ),
+              TextButton(
+                onPressed: () => PrivacyScreen.open(context),
+                child: const Text('Política de privacidad'),
               ),
             ],
           ),
@@ -1150,9 +1163,7 @@ class _AuthField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fillColor = isLoginStyle
-        ? const Color(0xFFF0EDF7)
-        : Colors.white;
+    final fillColor = isLoginStyle ? const Color(0xFFF0EDF7) : Colors.white;
     final textColor = isLoginStyle
         ? const Color(0xFF7A679B)
         : const Color(0xFF585364);
@@ -1292,7 +1303,7 @@ class _SelectionField extends StatelessWidget {
                       vertical: 15,
                     ),
                     decoration: BoxDecoration(
-                    color: Colors.white,
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(18),
                       border: Border.all(
                         color: borderColor,

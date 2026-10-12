@@ -1,6 +1,6 @@
 import "dotenv/config";
+import { deleteAccountMedia } from "./cloudinary/delete-account-media.ts";
 import {
-  createCipheriv,
   createDecipheriv,
   createHash,
   createHmac,
@@ -154,9 +154,6 @@ const PAYLOAD_ENCRYPTION_KEY_BYTES =
   PAYLOAD_ENCRYPTION_KEY == null
     ? null
     : createHash("sha256").update(PAYLOAD_ENCRYPTION_KEY).digest();
-const PAYLOAD_RESPONSE_ENCRYPTION_ENABLED =
-  PAYLOAD_ENCRYPTION_KEY_BYTES != null &&
-  process.env.PAYLOAD_RESPONSE_ENCRYPTION !== "false";
 const REFERENCE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DASHBOARD_CACHE_TTL_MS = 30 * 1000;
 const EVENT_SUMMARY_CACHE_TTL_MS = 15 * 1000;
@@ -602,6 +599,67 @@ export const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/auth/signup") {
+      const body = expectRecord(await readJsonBody(request));
+      const ci = readRequiredString(body, "ci", 3, 30);
+      const email = normalizeEmailValue(normalizeCiValue(ci));
+      const nombres = readRequiredString(body, "nombreCompleto", 2, 150);
+      const apellido = readRequiredString(body, "primerApellido", 2, 80);
+      const password = readRequiredString(body, "password", 8, 200);
+      if (body.acceptedPrivacy !== true || isAdminEmail(email)) {
+        throw new HttpError(400, "Debes aceptar la politica de privacidad y usar un CI valido.");
+      }
+      if (await findUserByLoginOrCi(prisma, { login: email, ci })) {
+        throw new HttpError(409, "Ya existe una cuenta con ese CI. Inicia sesion con tu cuenta.");
+      }
+      // El registro publico nunca acepta roles, cargos, oficinas ni contratos.
+      const user = await prisma.usuarios.create({
+        data: {
+          email, ci, nombres, primer_apellido: apellido,
+          nombre_completo: `${nombres} ${apellido}`.slice(0, 150),
+          password_hash: hashPassword(password),
+          default_ci_login_enabled: false,
+          rol: rol_usuario.OPERADOR, activo: true,
+        },
+        include: userWithOfficeInclude,
+      });
+      const person = await ensurePersonIdentityForUser(prisma, user);
+      const authToken = await createAuthToken(user);
+      invalidateDashboardSummaryCache();
+      sendJson(response, 201, { data: serializeAppUser(user, person, authToken) });
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/api/auth/account") {
+      const body = expectRecord(await readJsonBody(request));
+      const password = readRequiredString(body, "currentPassword", 6, 200);
+      const user = await prisma.usuarios.findUnique({ where: { id: authenticatedUser.id } });
+      if (!user || !verifyPassword(password, user.password_hash)) {
+        throw new HttpError(403, "La contrasena actual es incorrecta.");
+      }
+      // Si falla el proveedor, no declarar la cuenta eliminada: permite reintentar.
+      await deleteAccountMedia(user);
+      await prisma.$transaction(async (tx) => {
+        const id = user.id;
+        await tx.asistencia_controles.updateMany({ where: { registrado_por_id: id }, data: { registrado_por_id: null } });
+        await tx.asistencias.updateMany({ where: { registrado_por_id: id }, data: { registrado_por_id: null } });
+        await tx.almuerzos.updateMany({ where: { registrado_salida_por_id: id }, data: { registrado_salida_por_id: null } });
+        await tx.almuerzos.updateMany({ where: { registrado_retorno_por_id: id }, data: { registrado_retorno_por_id: null } });
+        await tx.salidas.updateMany({ where: { registrado_salida_por_id: id }, data: { registrado_salida_por_id: null } });
+        await tx.salidas.updateMany({ where: { registrado_llegada_por_id: id }, data: { registrado_llegada_por_id: null } });
+        await tx.salidas.updateMany({ where: { aprobado_por_id: id }, data: { aprobado_por_id: null, aprobado_por_nombre: null } });
+        await tx.celulares_asistencia.updateMany({ where: { logout_requested_by_id: id }, data: { logout_requested_by_id: null } });
+        await tx.notificacion_envios.deleteMany({ where: { enviado_por_id: id } });
+        await tx.eventos.updateMany({ where: { creado_por_id: id }, data: { creado_por_id: null } });
+        // Eliminar persona tambien elimina sus asistencias y snapshots por cascada.
+        await tx.personas.deleteMany({ where: { usuario_id: id } });
+        await tx.usuarios.delete({ where: { id } });
+      });
+      invalidateDashboardSummaryCache();
+      sendJson(response, 200, { data: { deleted: true } });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/auth/register") {
       const requester = await assertAdminRequester(
         authenticatedUser.email,
@@ -746,7 +804,7 @@ export const server = http.createServer(async (request, response) => {
       const hasStoredPassword =
         user != null && verifyPassword(input.password, user.password_hash);
       const hasDefaultCiPassword =
-        user != null && verifyDefaultCiPassword(input.password, user);
+        user != null && user.default_ci_login_enabled && verifyDefaultCiPassword(input.password, user);
 
       if (!user || (!hasStoredPassword && !hasDefaultCiPassword)) {
         throw new HttpError(401, "Usuario o contrasena incorrectos.");
@@ -940,6 +998,7 @@ export const server = http.createServer(async (request, response) => {
         where: { email: authenticatedUser.email },
         data: {
           password_hash: hashPassword(input.newPassword),
+          default_ci_login_enabled: false,
           updated_at: new Date(),
         },
       });
@@ -3552,12 +3611,8 @@ function sendJson(
   statusCode: number,
   payload: unknown,
 ) {
-  const encryptedPayload = encryptJsonPayload(payload);
-
-  if (encryptedPayload != null) {
-    payload = encryptedPayload;
-  }
-
+  // JSON sobre HTTPS: las respuestas no dependen de una clave en la app.
+  response.setHeader("Content-Type", "application/json; charset=utf-8");
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("Pragma", "no-cache");
   response.writeHead(statusCode);
@@ -3816,6 +3871,9 @@ async function authenticateRequestIfRequired(
 }
 
 function isPublicRoute(request: IncomingMessage, url: URL) {
+  if (request.method === "POST" && url.pathname === "/api/auth/signup") {
+    return true;
+  }
   if (request.method === "GET" && url.pathname === "/") {
     return true;
   }
@@ -4846,32 +4904,9 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   return decryptJsonPayload(parsedBody);
 }
 
-function encryptJsonPayload(payload: unknown) {
-  if (
-    !PAYLOAD_RESPONSE_ENCRYPTION_ENABLED ||
-    PAYLOAD_ENCRYPTION_KEY_BYTES == null
-  ) {
-    return null;
-  }
-
-  const iv = randomBytes(12);
-  const cipher = createCipheriv(
-    "aes-256-gcm",
-    PAYLOAD_ENCRYPTION_KEY_BYTES,
-    iv,
-  );
-  const encrypted = Buffer.concat([
-    cipher.update(JSON.stringify(payload), "utf8"),
-    cipher.final(),
-  ]);
-  const tag = cipher.getAuthTag();
-
-  return {
-    d: Buffer.concat([iv, encrypted, tag]).toString("base64"),
-  };
-}
-
 function decryptJsonPayload(payload: unknown) {
+  // Compatibilidad de entrada para versiones anteriores ya instaladas.
+  // Las versiones nuevas envian JSON normal y no necesitan esta clave.
   if (isCompactEncryptedJsonEnvelope(payload)) {
     if (PAYLOAD_ENCRYPTION_KEY_BYTES == null) {
       throw new HttpError(400, "El cuerpo cifrado no esta habilitado.");
@@ -10592,9 +10627,9 @@ function buildSerializedEventBase(event: any) {
     createdAt: event.created_at.toISOString(),
     updatedAt: event.updated_at.toISOString(),
     creadoPor: {
-      id: event.usuarios.id,
-      nombreCompleto: buildUserDisplayName(event.usuarios),
-      email: event.usuarios.email,
+      id: event.usuarios?.id ?? 0,
+      nombreCompleto: event.usuarios ? buildUserDisplayName(event.usuarios) : "Cuenta eliminada",
+      email: event.usuarios?.email ?? "",
     },
     controles: controls,
     departamentos: departments,
@@ -10664,9 +10699,9 @@ function serializeEventSummary(
     createdAt: event.created_at.toISOString(),
     updatedAt: event.updated_at.toISOString(),
     creadoPor: {
-      id: event.usuarios.id,
-      nombreCompleto: buildUserDisplayName(event.usuarios),
-      email: event.usuarios.email,
+      id: event.usuarios?.id ?? 0,
+      nombreCompleto: event.usuarios ? buildUserDisplayName(event.usuarios) : "Cuenta eliminada",
+      email: event.usuarios?.email ?? "",
     },
     controles: controls,
     departamentos: [],

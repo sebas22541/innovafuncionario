@@ -16,6 +16,8 @@ import '../../../../shared/infrastructure/location_permission_settings.dart';
 import '../../../../shared/models/app_user.dart';
 import '../../../../shared/widgets/app_alert.dart';
 import '../../../../shared/widgets/base64_avatar.dart';
+import '../../../../shared/widgets/privacy_screen.dart';
+import '../../../../shared/infrastructure/session_store.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -40,6 +42,34 @@ class _SettingsScreenState extends State<SettingsScreen>
   bool _isSavingPhoto = false;
   bool _isDownloadingCredential = false;
   bool _isChangingPassword = false;
+  bool _isDeletingAccount = false;
+
+  Future<void> _deleteAccount() async {
+    if (_isDeletingAccount) return;
+    final password = await showDialog<String>(
+      context: context,
+      builder: (_) => const _DeleteAccountDialog(),
+    );
+    if (!mounted || password == null) return;
+    setState(() => _isDeletingAccount = true);
+    try {
+      await dependencies.authApiService.deleteAccount(password);
+      await SessionStore.clearSession();
+      if (mounted) widget.onLogout();
+    } on BackendApiException catch (error) {
+      if (mounted) AppAlert.showError(context, error.message);
+    } catch (_) {
+      if (mounted) {
+        AppAlert.showError(
+          context,
+          'No se pudo completar la eliminación. Intenta nuevamente.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isDeletingAccount = false);
+    }
+  }
+
   bool _isLoadingLocationPreference = true;
   bool _isUpdatingLocationPermission = false;
   bool _isLocationEnabled = false;
@@ -643,7 +673,7 @@ class _SettingsScreenState extends State<SettingsScreen>
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: widget.onLogout,
+              onPressed: _isDeletingAccount ? null : widget.onLogout,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppPalette.orange,
                 foregroundColor: Colors.white,
@@ -657,10 +687,83 @@ class _SettingsScreenState extends State<SettingsScreen>
               label: const Text('Cerrar sesion'),
             ),
           ),
+          TextButton.icon(
+            onPressed: () => PrivacyScreen.open(context),
+            icon: const Icon(Icons.privacy_tip_outlined),
+            label: const Text('Política de privacidad'),
+          ),
+          TextButton.icon(
+            onPressed: _isDeletingAccount ? null : _deleteAccount,
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            icon: const Icon(Icons.delete_forever_outlined),
+            label: Text(
+              _isDeletingAccount ? 'Eliminando cuenta…' : 'Eliminar mi cuenta',
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+class _DeleteAccountDialog extends StatefulWidget {
+  const _DeleteAccountDialog();
+
+  @override
+  State<_DeleteAccountDialog> createState() => _DeleteAccountDialogState();
+}
+
+class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
+  final _password = TextEditingController();
+  @override
+  void dispose() {
+    _password.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('¿Eliminar tu cuenta definitivamente?'),
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Se eliminarán tu cuenta, identidad QR, registros asociados, '
+            'fotos y credenciales. Perderás el acceso y esta acción no se puede '
+            'deshacer. Los documentos previamente exportados no se eliminan. '
+            'Introduce tu contraseña actual para confirmar.',
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _password,
+            obscureText: true,
+            autocorrect: false,
+            enableSuggestions: false,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(labelText: 'Contraseña actual'),
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancelar'),
+      ),
+      TextButton(
+        onPressed: _password.text.length < 6
+            ? null
+            : () => Navigator.pop(context, _password.text),
+        style: TextButton.styleFrom(
+          foregroundColor: Theme.of(context).colorScheme.error,
+        ),
+        child: const Text('Eliminar definitivamente'),
+      ),
+    ],
+  );
 }
 
 class _LocationSettingsCard extends StatelessWidget {

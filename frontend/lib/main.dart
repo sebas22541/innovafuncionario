@@ -108,7 +108,11 @@ class _QrWebAppState extends State<QrWebApp> {
   }
 
   void _handleLogout() async {
-    await FirebaseNotificationsService.unregisterCurrentDevice();
+    try {
+      await FirebaseNotificationsService.unregisterCurrentDevice();
+    } catch (_) {
+      // La cuenta puede haberse eliminado; el cierre local debe completarse.
+    }
 
     try {
       await dependencies.authApiService.logout();
