@@ -1,0 +1,12 @@
+UPDATE "oficinas"
+SET "cod" = CASE "id"
+  WHEN 2217 THEN '10.4.3'
+  WHEN 2216 THEN '10.4.4'
+  WHEN 2218 THEN '10.4.5'
+  WHEN 2215 THEN '10.4.6'
+  WHEN 2219 THEN '10.4.7'
+  WHEN 2214 THEN '10.4.8'
+  ELSE "cod"
+END
+WHERE "id" IN (2214, 2215, 2216, 2217, 2218, 2219)
+  AND "cod" IN ('10.2.2', '10.2.3', '10.2.4', '10.2.5', '10.2.6', '10.2.7');

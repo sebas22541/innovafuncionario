@@ -6,6 +6,9 @@ export function parseLunchScanInput(payload: unknown): LunchScanInput {
 
   return {
     qrValue: readRequiredString(body, "qrValue", 5, 2000),
+    latitud: readOptionalFloat(body, "latitud", -90, 90),
+    longitud: readOptionalFloat(body, "longitud", -180, 180),
+    accuracy: readOptionalFloat(body, "accuracy", 0, 10_000),
   };
 }
 
@@ -30,31 +33,55 @@ export function parseLunchReportQuery(
   }
 
   return {
-    fecha: readLunchQueryDate(url, options),
+    ...readLunchQueryDateRange(url, options),
     search: readLunchQuerySearch(url),
     status,
     scannerId: options.readOptionalQueryInt(url, "scannerId"),
+    userId: null,
     officeId: options.readOptionalQueryInt(url, "oficinaId"),
+    placeId: options.readOptionalQueryInt(url, "lugarId"),
+    jobTitle: readLunchQueryJobTitle(url),
+    linkType: readLunchQueryLinkType(url),
   };
 }
 
-function readLunchQueryDate(
+function readLunchQueryDateRange(
   url: URL,
   options: {
     readDateOnlyString: (value: string, key: string) => Date;
     formatDateInAppTimeZone: (date: Date) => string;
   },
 ) {
-  const rawValue = url.searchParams.get("fecha")?.trim();
+  const todayText = options.formatDateInAppTimeZone(new Date());
+  const rawDate = url.searchParams.get("fecha")?.trim();
+  const rawStart = url.searchParams.get("desde")?.trim() ?? rawDate;
+  const rawEnd = url.searchParams.get("hasta")?.trim() ?? rawDate;
+  const fechaDesde =
+    rawStart == null || rawStart.length === 0
+      ? options.readDateOnlyString(todayText, "desde")
+      : options.readDateOnlyString(rawStart, "desde");
+  const fechaHasta =
+    rawEnd == null || rawEnd.length === 0
+      ? fechaDesde
+      : options.readDateOnlyString(rawEnd, "hasta");
 
-  if (rawValue == null || rawValue.length === 0) {
-    return options.readDateOnlyString(
-      options.formatDateInAppTimeZone(new Date()),
-      "fecha",
+  if (fechaDesde.getTime() > fechaHasta.getTime()) {
+    throw new HttpError(
+      400,
+      "La fecha inicial no puede ser mayor a la fecha final.",
     );
   }
 
-  return options.readDateOnlyString(rawValue, "fecha");
+  const rangeDays =
+    Math.floor(
+      (fechaHasta.getTime() - fechaDesde.getTime()) / (24 * 60 * 60 * 1000),
+    ) + 1;
+
+  if (rangeDays > 366) {
+    throw new HttpError(400, "El rango de fechas no puede superar 366 dias.");
+  }
+
+  return { fechaDesde, fechaHasta };
 }
 
 function readLunchQuerySearch(url: URL) {
@@ -67,6 +94,43 @@ function readLunchQuerySearch(url: URL) {
 
   if (rawValue.length > 80) {
     throw new HttpError(400, "La busqueda no puede superar 80 caracteres.");
+  }
+
+  return rawValue;
+}
+
+function readLunchQueryJobTitle(url: URL) {
+  const rawValue =
+    url.searchParams.get("cargo")?.trim() ??
+    url.searchParams.get("cargoNombre")?.trim();
+
+  if (rawValue == null || rawValue.length === 0) {
+    return null;
+  }
+
+  if (rawValue.length > 120) {
+    throw new HttpError(400, "El cargo no puede superar 120 caracteres.");
+  }
+
+  return rawValue;
+}
+
+function readLunchQueryLinkType(url: URL) {
+  const rawValue =
+    url.searchParams.get("tipoVinculo")?.trim().toUpperCase() ??
+    url.searchParams.get("tipo")?.trim().toUpperCase();
+
+  if (rawValue == null || rawValue.length === 0) {
+    return null;
+  }
+
+  if (
+    rawValue !== "ITEM" &&
+    rawValue !== "EVENTUAL" &&
+    rawValue !== "CONSULTOR" &&
+    rawValue !== "SERVICIOS"
+  ) {
+    throw new HttpError(400, "El tipo de vinculo no es valido.");
   }
 
   return rawValue;
@@ -109,4 +173,34 @@ function readRequiredString(
   }
 
   return trimmed;
+}
+
+function readOptionalFloat(
+  source: Record<string, unknown>,
+  key: string,
+  min: number,
+  max: number,
+) {
+  const value = source[key];
+
+  if (value == null) {
+    return null;
+  }
+
+  const numericValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseFloat(value)
+        : Number.NaN;
+
+  if (
+    !Number.isFinite(numericValue) ||
+    numericValue < min ||
+    numericValue > max
+  ) {
+    throw new HttpError(400, `El campo ${key} no tiene un valor valido.`);
+  }
+
+  return numericValue;
 }

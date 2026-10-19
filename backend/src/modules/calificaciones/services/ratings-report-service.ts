@@ -36,6 +36,8 @@ export async function loadFuncionarioRatingsSummary({
     fechaInicio == null ? null : readDateOnlyString(fechaInicio, "fechaInicio");
   const end =
     fechaFin == null ? start : readDateOnlyString(fechaFin, "fechaFin");
+  const startText = start == null ? null : toDateOnlyText(start);
+  const endText = end == null ? startText : toDateOnlyText(end);
 
   if (start != null && end != null && start.getTime() > end.getTime()) {
     throw new HttpError(
@@ -54,24 +56,24 @@ export async function loadFuncionarioRatingsSummary({
   const filters: string[] = [];
   const joinFilters: string[] = [];
 
-  if (hasDateFilter && fechaInicio != null && fechaFin != null) {
-    params.push(fechaInicio, fechaFin);
+  if (hasDateFilter && startText != null && endText != null) {
+    params.push(startText, endText);
     joinFilters.push(
-      `AND c."fecha" BETWEEN $${params.length - 1}::date AND $${params.length}::date`,
+      `AND c."fecha" >= $${params.length - 1}::date AND c."fecha" <= $${params.length}::date`,
     );
   }
 
   if (cargoCodigo != null) {
     params.push(cargoCodigo);
     filters.push(
-      `AND (u."cargo_codigo" = $${params.length} OR u."subcargo_codigo" = $${params.length})`,
+      `AND COALESCE(c."funcionario_cargo_codigo", u."subcargo_codigo", u."cargo_codigo") = $${params.length}`,
     );
   }
 
   if (oficinaId != null) {
     params.push(oficinaId);
     filters.push(
-      `AND COALESCE(u."oficina_comision_id", u."oficina_id") = $${params.length}`,
+      `AND COALESCE(c."funcionario_oficina_id", u."oficina_comision_id", u."oficina_id") = $${params.length}`,
     );
   }
 
@@ -79,10 +81,14 @@ export async function loadFuncionarioRatingsSummary({
     const normalizedSearch = search.trim();
     if (/^\d+$/.test(normalizedSearch)) {
       params.push(normalizedSearch);
-      filters.push(`AND COALESCE(u."ci", '') = $${params.length}`);
+      filters.push(
+        `AND COALESCE(c."funcionario_ci", u."ci", '') = $${params.length}`,
+      );
     } else {
       params.push(`%${normalizedSearch}%`);
-      filters.push(`AND u."nombre_completo" ILIKE $${params.length}`);
+      filters.push(
+        `AND COALESCE(c."funcionario_nombre_completo", u."nombre_completo", '') ILIKE $${params.length}`,
+      );
     }
   }
 
@@ -90,10 +96,10 @@ export async function loadFuncionarioRatingsSummary({
     `
       SELECT
         u."id" AS "funcionarioId",
-        u."nombre_completo" AS "nombreCompleto",
-        COALESCE(u."ci", '') AS "ci",
-        COALESCE(u."subcargo", u."cargo", '') AS "cargo",
-        COALESCE(comision."oficina", principal."oficina", u."unidad", '') AS "oficina",
+        COALESCE((ARRAY_AGG(c."funcionario_nombre_completo" ORDER BY c."created_at" DESC, c."id" DESC) FILTER (WHERE c."id" IS NOT NULL))[1], u."nombre_completo") AS "nombreCompleto",
+        COALESCE((ARRAY_AGG(c."funcionario_ci" ORDER BY c."created_at" DESC, c."id" DESC) FILTER (WHERE c."id" IS NOT NULL))[1], u."ci", '') AS "ci",
+        COALESCE((ARRAY_AGG(c."funcionario_cargo" ORDER BY c."created_at" DESC, c."id" DESC) FILTER (WHERE c."id" IS NOT NULL))[1], u."subcargo", u."cargo", '') AS "cargo",
+        COALESCE((ARRAY_AGG(c."funcionario_oficina" ORDER BY c."created_at" DESC, c."id" DESC) FILTER (WHERE c."id" IS NOT NULL))[1], comision."oficina", principal."oficina", u."unidad", '') AS "oficina",
         COUNT(c."id")::int AS "total",
         COUNT(c."id") FILTER (WHERE c."calificacion" = 'muy_malo')::int AS "muyMalo",
         COUNT(c."id") FILTER (WHERE c."calificacion" IN ('malo', 'enojada'))::int AS "malo",
@@ -158,6 +164,10 @@ function readDateOnlyString(value: string, key: string) {
   }
 
   return date;
+}
+
+function toDateOnlyText(date: Date) {
+  return date.toISOString().slice(0, 10);
 }
 
 function isHealthAdminUser(

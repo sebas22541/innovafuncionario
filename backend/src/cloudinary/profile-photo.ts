@@ -17,7 +17,7 @@ export async function storeUserProfilePhoto(
     console.error("Error al subir foto de perfil a Cloudinary:", error);
     throw new HttpError(
       500,
-      "No fue posible guardar la foto de perfil en Cloudinary.",
+      "Servicio temporalmente no disponible. Intenta nuevamente.",
     );
   }
 }

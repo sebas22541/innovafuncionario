@@ -32,6 +32,7 @@
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "cloudinary": "^2.10.0",
+    "date-fns-tz": "^3.2.0",
     "dotenv": "^17.4.2",
     "firebase-admin": "^14.0.0",
     "pdf-lib": "^1.17.1",

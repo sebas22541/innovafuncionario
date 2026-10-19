@@ -30,6 +30,7 @@ type CredentialUser = {
   tercer_apellido?: string | null;
   ci?: string | null;
   cargo?: string | null;
+  tipo_vinculo?: string | null;
   unidad?: string | null;
   foto_url?: string | null;
   oficinas?: {
@@ -287,7 +288,7 @@ function drawFrontPageData(page: any, input: {
     lineGap: 1,
     maxLines: 1,
   });
-  drawWrappedText(page, normalizeText(input.user.cargo) || "No registrado", {
+  drawWrappedText(page, formatCredentialJobTitle(input.user), {
     x: fieldX,
     y: cargoY,
     maxWidth: fieldWidth,
@@ -325,7 +326,15 @@ function drawFramedPhoto(
     clip(),
     endPath(),
   );
-  page.drawImage(image, frame);
+  const scale = Math.max(frame.width / image.width, frame.height / image.height);
+  const imageWidth = image.width * scale;
+  const imageHeight = image.height * scale;
+  page.drawImage(image, {
+    x: frame.x + (frame.width - imageWidth) / 2,
+    y: frame.y + (frame.height - imageHeight) / 2,
+    width: imageWidth,
+    height: imageHeight,
+  });
   page.pushOperators(popGraphicsState());
   page.drawSvgPath(path, {
     borderColor,
@@ -541,7 +550,7 @@ function buildFrontCredentialSvg(input: {
 }) {
   const name = escapeXml(buildDisplayName(input.user));
   const ci = escapeXml(normalizeText(input.user.ci) || "No registrado");
-  const cargo = escapeXml(normalizeText(input.user.cargo) || "No registrado");
+  const cargo = escapeXml(formatCredentialJobTitle(input.user));
   const oficina = escapeXml(resolveOfficeName(input.user) || "No registrada");
   const code = escapeXml(normalizeText(input.person?.codigo_qr) || `USR-${input.user.id}`);
   const initial = escapeXml(name.trim().charAt(0).toUpperCase() || "U");
@@ -667,6 +676,13 @@ function splitFallbackName(value: string | null | undefined) {
 
 function resolveOfficeName(user: CredentialUser) {
   return normalizeText(user.oficinas?.oficina) ?? normalizeText(user.unidad);
+}
+
+function formatCredentialJobTitle(user: CredentialUser) {
+  const cargo = normalizeText(user.cargo) || "No registrado";
+  const tipoVinculo = normalizeText(user.tipo_vinculo)?.toUpperCase();
+
+  return tipoVinculo === "CONSULTOR" ? `Consultor: ${cargo}` : cargo;
 }
 
 function normalizePublicToken(value: string | null | undefined) {

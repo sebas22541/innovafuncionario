@@ -1,19 +1,33 @@
+import { matchesCargoSelection, type EventJobTitleCandidate } from "./event-job-titles.ts";
+import { previousScannerReferences, scannerDisplayName } from "./modules/reportes/services/previous-scanner.ts";
 import "dotenv/config";
-import { deleteAccountMedia } from "./cloudinary/delete-account-media.ts";
+import { verifySessionJwt } from "./session-jwt.ts";
+import { issueRefreshSession, rotateRefreshSession, refreshSessionSchemaSql, type RefreshIdentity } from "./refresh-sessions.ts";
+import { applicationDeviceSchemaSql } from './application-device-schema.ts';
+import { assertApplicationAdminRole, bindApplicationDevice, assertApplicationDevice, authorizeDeviceTransfer, enrollBiometric, resolveBiometricUser } from './application-devices.ts';
+import { buildControlRoleAssignment, normalizeControlPeriod } from "./control-role.ts";
+import { eventAllowsUserLinkType, eventLinkTypeRestrictionMessage, isUserLinkType, readEventLinkTypes, USER_LINK_TYPES, type UserLinkType } from "./event-link-types.ts";
 import {
+  createCipheriv,
   createDecipheriv,
   createHash,
   createHmac,
+  createPrivateKey,
+  createPublicKey,
+  createSign,
   randomBytes,
   scryptSync,
   timingSafeEqual,
+  verify as verifyCryptoSignature,
 } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { Pool } from "pg";
+import { controlPeriodUtcSchemaSql } from "./control-period-schema.ts";
+import { createDatabasePool } from "./database-pool.ts";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { formatInTimeZone } from "date-fns-tz";
 
 import {
   CLOUDINARY,
@@ -21,7 +35,7 @@ import {
   generateUserCredentialPdf,
   storeUserProfilePhoto,
 } from "./cloudinary/index.ts";
-import { PrismaClient, type Prisma } from "./generated/prisma/client.ts";
+import { Prisma, PrismaClient } from "./generated/prisma/client.ts";
 import {
   estado_asistencia,
   estado_salida,
@@ -55,12 +69,34 @@ import {
 import {
   buildLunchReportWhere,
   configureLunchService,
+  filterLunchRecordsByExclusionHistory,
   serializeLunchRecord,
 } from "./modules/almuerzos/services/lunch-service.ts";
+import { LUGARES_ROUTES } from "./modules/lugares/cRoutes.ts";
+import {
+  assertRegistrationLocationInsidePlace,
+  configurePlaceService,
+  createPlace,
+  deletePlace,
+  loadPlaceFloorName,
+  loadPlaceName,
+  loadSerializedPlaces,
+  setPlaceActive,
+  updatePlace,
+} from "./modules/lugares/services/place-service.ts";
+import {
+  parsePlaceActiveInput,
+  parsePlaceInput,
+  readPlaceIdFromPathMatch,
+} from "./modules/lugares/validators/place-validator.ts";
 import {
   parseLunchReportQuery,
   parseLunchScanInput,
 } from "./modules/almuerzos/validators/lunch-validator.ts";
+import type {
+  LunchReportQuery,
+  LunchScanInput,
+} from "./modules/almuerzos/types/lunch-types.ts";
 import {
   configureExitPermitService,
   serializeExitPermit,
@@ -91,6 +127,7 @@ import {
 import {
   configureDeviceService,
   loadManagedDevices,
+  markUserDeviceOffline,
   markUserDevicesOffline,
   registerDeviceHeartbeat,
   requestDeviceLogin,
@@ -103,6 +140,9 @@ import {
 import { loadFuncionarioRatingsSummary } from "./modules/calificaciones/services/ratings-report-service.ts";
 
 const DEFAULT_PORT = 3000;
+const MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
+const LOGIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 10;
 const DATABASE_URL = process.env.DATABASE_URL;
 const PORT = parsePort(process.env.PORT);
 const DB_POOL_MAX = clampInt(process.env.DB_POOL_MAX ?? null, 25, 5, 100);
@@ -134,15 +174,24 @@ const DYNAMIC_QR_VERSION = "DQR1";
 const DYNAMIC_QR_SIGNATURE_LENGTH = 16;
 const STATIC_DYNAMIC_QR_EXPIRES_AT = new Date("2099-12-31T23:59:59.000Z");
 const APP_TIME_ZONE = process.env.APP_TIME_ZONE ?? "America/La_Paz";
+const LUNCH_TIME_ZONE = "America/La_Paz";
+const RATING_START_MINUTES = 8 * 60;
+const RATING_END_MINUTES = 16 * 60 + 30;
+const RATING_SCHEDULE_LABEL = "08:00 a 16:30";
+const LUNCH_TEST_MODE = process.env.LUNCH_TEST_MODE === "true";
+const MINIMUM_LUNCH_RETURN_WINDOW_MS = 15 * 60 * 1000;
 const JWT_TTL_SECONDS = clampInt(
   process.env.JWT_TTL_SECONDS ?? null,
-  31_536_000,
-  2_592_000,
-  31_536_000,
+  900,
+  60,
+  86400,
 );
 const JWT_SECRET =
   process.env.JWT_SECRET ??
   createHash("sha256").update(`${DATABASE_URL}:jwt`).digest("hex");
+const AUTH_COOKIE_SECURE =
+  process.env.AUTH_COOKIE_SECURE === "true" ||
+  process.env.NODE_ENV === "production";
 const ALLOWED_CORS_ORIGINS = parseAllowedCorsOrigins(
   process.env.CORS_ALLOWED_ORIGINS,
 );
@@ -154,6 +203,9 @@ const PAYLOAD_ENCRYPTION_KEY_BYTES =
   PAYLOAD_ENCRYPTION_KEY == null
     ? null
     : createHash("sha256").update(PAYLOAD_ENCRYPTION_KEY).digest();
+const PAYLOAD_RESPONSE_ENCRYPTION_ENABLED =
+  PAYLOAD_ENCRYPTION_KEY_BYTES != null &&
+  process.env.PAYLOAD_RESPONSE_ENCRYPTION !== "false";
 const REFERENCE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DASHBOARD_CACHE_TTL_MS = 30 * 1000;
 const EVENT_SUMMARY_CACHE_TTL_MS = 15 * 1000;
@@ -177,6 +229,29 @@ const PUBLIC_RATING_BASE_URL = (
   normalizeOptionalEnvValue(process.env.PUBLIC_RATING_BASE_URL) ??
   "https://innovafuncionario.cochabamba.bo/calificar"
 ).replace(/\/+$/, "");
+const APP_MIN_ANDROID_VERSION_CODE = clampInt(
+  process.env.APP_MIN_ANDROID_VERSION_CODE ?? null,
+  0,
+  0,
+  1_000_000,
+);
+const APP_LATEST_ANDROID_VERSION_CODE = clampInt(
+  process.env.APP_LATEST_ANDROID_VERSION_CODE ?? null,
+  APP_MIN_ANDROID_VERSION_CODE,
+  0,
+  1_000_000,
+);
+const APPLE_BUNDLE_ID =
+  normalizeOptionalEnvValue(process.env.APPLE_BUNDLE_ID) ??
+  "com.innovafuncionario.gamc.bo";
+const APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys";
+const APPLE_TOKEN_URL = "https://appleid.apple.com/auth/token";
+const APPLE_REVOKE_URL = "https://appleid.apple.com/auth/revoke";
+const APPLE_TEAM_ID = normalizeOptionalEnvValue(process.env.APPLE_TEAM_ID);
+const APPLE_KEY_ID = normalizeOptionalEnvValue(process.env.APPLE_KEY_ID);
+const APPLE_PRIVATE_KEY = normalizeOptionalEnvValue(
+  process.env.APPLE_PRIVATE_KEY,
+)?.replace(/\\n/g, "\n");
 const CALIFICACION_QR_SECRET =
   process.env.CALIFICACION_QR_SECRET ??
   createHash("sha256").update(`${DATABASE_URL}:calificaciones`).digest("hex");
@@ -193,10 +268,17 @@ const PUBLIC_RATING_LOGO_SRC = readAssetDataUri(
 const FUNCIONARIO_CI_SERVICE_TOKEN_SHA256 = normalizeOptionalEnvValue(
   process.env.FUNCIONARIO_CI_SERVICE_TOKEN_SHA256,
 );
+const FUNCIONARIO_CI_SERVICE_BULK_LOOKUP_ENABLED =
+  process.env.NODE_ENV !== "production" &&
+  process.env.FUNCIONARIO_CI_SERVICE_BULK_LOOKUP_ENABLED === "true";
+const FUNCIONARIO_ALERTA_DEV_SERVICE_ENABLED =
+  process.env.NODE_ENV !== "production" &&
+  process.env.FUNCIONARIO_ALERTA_DEV_SERVICE_ENABLED === "true";
 const FUNCIONARIO_CI_SERVICE_PATH =
   "/api/integraciones/funcionarios/verificar-ci";
 const FUNCIONARIO_CALIFICACIONES_SERVICE_PATH =
   "/api/integraciones/funcionarios/calificaciones";
+const FUNCIONARIO_ALERTA_DEV_SERVICE_PATH = "/api/funcionarios/enviar-alerta";
 // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
 
 if (!DATABASE_URL) {
@@ -204,12 +286,18 @@ if (!DATABASE_URL) {
     "DATABASE_URL no esta definido en backend/.env.",
     new Error("DATABASE_URL no esta definido en backend/.env."),
   );
-  if (process.env.VERCEL !== "1") {
-    process.exit(1);
-  }
+  process.exit(1);
 }
 
-const pool = new Pool({
+if (process.env.NODE_ENV === "production" && process.env.JWT_SECRET == null) {
+  logFatal(
+    "JWT_SECRET no esta definido en produccion.",
+    new Error("JWT_SECRET no esta definido en produccion."),
+  );
+  process.exit(1);
+}
+
+const pool = createDatabasePool({
   connectionString: DATABASE_URL,
   max: DB_POOL_MAX,
   idleTimeoutMillis: DB_POOL_IDLE_TIMEOUT_MS,
@@ -221,7 +309,12 @@ configureNotificationService({
 });
 configureLunchService({
   buildUserDisplayName,
+  isUserExcludedFromLunchOnDate,
   toDateOnlyText,
+});
+configurePlaceService({
+  pool,
+  referenceCacheTtlMs: REFERENCE_CACHE_TTL_MS,
 });
 configureExitPermitService({
   buildUserDisplayName,
@@ -253,12 +346,6 @@ const CONSULTANT_LINK_TYPE = "CONSULTOR";
 const SERVICES_LINK_TYPE = "SERVICIOS";
 const TEMPORARY_LINK_TYPE = "EVENTUAL";
 const CONTRACT_LINK_TYPES = new Set([CONSULTANT_LINK_TYPE, SERVICES_LINK_TYPE]);
-const USER_LINK_TYPES = [
-  "ITEM",
-  TEMPORARY_LINK_TYPE,
-  CONSULTANT_LINK_TYPE,
-  SERVICES_LINK_TYPE,
-] as const;
 const DEVICE_ONLINE_THRESHOLD_MS = clampInt(
   process.env.DEVICE_ONLINE_THRESHOLD_MS ?? null,
   30_000,
@@ -273,6 +360,20 @@ configureDeviceService({
 const LUNCH_REGISTRATION_QR_PAYLOAD = "INNOVA_FUNCIONARIO:ALMUERZO:REGISTRO:1";
 const EXIT_PERMIT_REGISTRATION_QR_PAYLOAD =
   "INNOVA_FUNCIONARIO:SALIDAS:REGISTRO:1";
+const LUNCH_REGISTRATION_QR_TYPE = "INNOVA_FUNCIONARIO:ALMUERZO:REGISTRO";
+const EXIT_PERMIT_REGISTRATION_QR_TYPE = "INNOVA_FUNCIONARIO:SALIDAS:REGISTRO";
+const SECURE_REGISTRATION_QR_VERSION = "IFQR1";
+const SECURE_LUNCH_REGISTRATION_KIND = "A";
+const SECURE_EXIT_PERMIT_REGISTRATION_KIND = "S";
+const REGISTRATION_QR_FALLBACK_SECRET = "innovafuncionario-registration-qr-v1";
+const REGISTRATION_QR_FALLBACK_SECRET_BYTES = createHash("sha256")
+  .update(REGISTRATION_QR_FALLBACK_SECRET)
+  .digest();
+const REGISTRATION_QR_SECRET_BYTES = createHash("sha256")
+  .update(PAYLOAD_ENCRYPTION_KEY ?? REGISTRATION_QR_FALLBACK_SECRET)
+  .digest();
+const REGISTRATION_QR_NONCE_LENGTH = 12;
+const REGISTRATION_QR_TAG_LENGTH = 16;
 
 type AuthenticatedUser = {
   id: number;
@@ -280,6 +381,7 @@ type AuthenticatedUser = {
   ci: string | null;
   rol: (typeof rol_usuario)[keyof typeof rol_usuario];
   activo: boolean;
+  deviceId: string | null;
 };
 
 type EventAttendanceRequirement = {
@@ -359,6 +461,16 @@ const eventInclude = {
       asistencia_controles: {
         include: {
           evento_controles: true,
+          usuarios: {
+            select: {
+              email: true,
+              nombre_completo: true,
+              nombres: true,
+              primer_apellido: true,
+              segundo_apellido: true,
+              tercer_apellido: true,
+            },
+          },
         },
         orderBy: {
           control_id: "asc",
@@ -411,22 +523,29 @@ let dashboardSummaryCache: CacheEntry<{
 }> | null = null;
 let eventSummaryCache: CacheEntry<any[]> | null = null;
 const eventAttendanceContextCache = new Map<number, CacheEntry<any>>();
+let appleJwksCache: CacheEntry<JsonRecord[]> | null = null;
 
+let controlRoleBoundaryTimer: ReturnType<typeof setTimeout> | undefined;
 let runtimeReadyPromise: Promise<void> | null = null;
 
 function ensureRuntimeReady() {
-  runtimeReadyPromise ??= initializeRuntime();
+  runtimeReadyPromise ??= initializeRuntime().catch((error) => {
+    runtimeReadyPromise = null;
+    throw error;
+  });
   return runtimeReadyPromise;
 }
 
 async function initializeRuntime() {
-  if (!DATABASE_URL) {
-    throw new Error("DATABASE_URL no esta definido en variables de entorno.");
-  }
-
   await ensureRuntimeSchema();
+  await refreshTemporaryControlRoles();
   await ensureHiddenUserReaderAccount();
   await deactivateExpiredConsultantContracts();
+  if (process.env.VERCEL !== "1") {
+    setInterval(() => {
+      void refreshTemporaryControlRoles().catch((error) => logError("No se pudo actualizar el rol temporal de control", error));
+    }, 30000).unref();
+  }
 }
 
 export const server = http.createServer(async (request, response) => {
@@ -484,7 +603,6 @@ export const server = http.createServer(async (request, response) => {
 
   try {
     await ensureRuntimeReady();
-
     const authenticatedUser = await authenticateRequestIfRequired(request, url);
 
     authenticatedUserForLog = authenticatedUser;
@@ -494,13 +612,24 @@ export const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (
-      request.method === "GET" &&
-      (url.pathname === "/health" || url.pathname === "/api/health")
-    ) {
+    if (request.method === "GET" && url.pathname === "/health") {
       await prisma.$queryRaw`SELECT 1`;
       sendJson(response, 200, {
         status: "ok",
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/app/version") {
+      sendPlainJson(response, 200, {
+        data: {
+          android: {
+            minVersionCode: APP_MIN_ANDROID_VERSION_CODE,
+            latestVersionCode: APP_LATEST_ANDROID_VERSION_CODE,
+            updateUrl:
+              "https://play.google.com/store/apps/details?id=com.innova.funcionario.cochabamba.bo",
+          },
+        },
       });
       return;
     }
@@ -509,8 +638,13 @@ export const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && publicRatingPageMatch) {
       const token = decodeURIComponent(publicRatingPageMatch[1] ?? "");
       const funcionario = await resolveRatingTokenFuncionario(token);
+      const ratingUser = await readOptionalAuthenticatedRatingUser(request);
 
-      sendHtml(response, 200, await buildPublicRatingPage(token, funcionario));
+      sendHtml(
+        response,
+        200,
+        await buildPublicRatingPage(token, funcionario, ratingUser),
+      );
       return;
     }
 
@@ -521,6 +655,45 @@ export const server = http.createServer(async (request, response) => {
     ) {
       assertFuncionarioCiServiceToken(request);
       const input = parseFuncionarioCiLookupInput(await readJsonBody(request));
+
+      if (input.type === "list") {
+        if (!FUNCIONARIO_CI_SERVICE_BULK_LOOKUP_ENABLED) {
+          throw new HttpError(400, "Debes enviar el campo ci.");
+        }
+
+        const result = await pool.query<{ ci: string }>(
+          `
+            SELECT DISTINCT TRIM("ci") AS "ci"
+            FROM "usuarios"
+            WHERE "activo" = TRUE
+              AND REGEXP_REPLACE(UPPER(COALESCE("ci", '')), '[^A-Z0-9]', '', 'g') = ANY($1::text[])
+          `,
+          [input.cis],
+        );
+        const foundCis = result.rows
+          .map((row) => row.ci)
+          .filter((ci) => ci.length > 0);
+        const foundCiSet = new Set(foundCis.map(normalizeCiLookupValue));
+        const funcionarios = input.cis.map((ci) => ({
+          ci,
+          esFuncionario: foundCiSet.has(normalizeCiLookupValue(ci)),
+        }));
+
+        sendPlainJson(response, 200, {
+          success: foundCis.length > 0,
+          data: {
+            funcionarios,
+            encontrados: foundCis,
+            noEncontrados: input.cis.filter(
+              (ci) => !foundCiSet.has(normalizeCiLookupValue(ci)),
+            ),
+            total: input.cis.length,
+            encontradosTotal: foundCis.length,
+          },
+        });
+        return;
+      }
+
       const funcionario = await prisma.usuarios.findFirst({
         where: { ci: input.ci },
         select: { id: true },
@@ -530,6 +703,58 @@ export const server = http.createServer(async (request, response) => {
         data: {
           ci: input.ci,
           esFuncionario: funcionario != null,
+        },
+      });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === FUNCIONARIO_ALERTA_DEV_SERVICE_PATH &&
+      FUNCIONARIO_ALERTA_DEV_SERVICE_ENABLED
+    ) {
+      assertFuncionarioCiServiceToken(request);
+      const input = parseFuncionarioAlertDevInput(await readJsonBody(request));
+      const targets = await loadFuncionarioAlertDevTargets(input.cis);
+
+      if (targets.userIds.length === 0) {
+        sendPlainJson(response, 444, {
+          success: false,
+          message: "No se encontraron funcionarios con los CIs proporcionados.",
+        });
+        return;
+      }
+
+      await createReceivedNotifications(targets.userIds, {
+        type: input.data.tipo ?? "ALERTA",
+        title: input.titulo,
+        body: JSON.stringify({
+          message: input.mensaje,
+          body: input.mensaje,
+          ...input.data,
+        }),
+        targetSection: input.data.screen ?? "Notice",
+        salidaId: null,
+      });
+
+      const result = await sendFirebaseMulticastNotification(targets.tokens, {
+        title: input.titulo,
+        body: input.mensaje,
+        data: input.data,
+      });
+
+      sendPlainJson(response, result.sent > 0 ? 200 : 444, {
+        success: result.sent > 0,
+        message:
+          result.sent > 0
+            ? "Alerta enviada correctamente."
+            : "No hay token push registrado para los funcionarios encontrados.",
+        resumen: {
+          totalCisEnviados: input.cis.length,
+          funcionariosEncontrados: targets.userIds.length,
+          dispositivos: targets.tokens.length,
+          pushesExitosos: result.sent,
+          pushesFallidos: result.failed,
         },
       });
       return;
@@ -572,10 +797,13 @@ export const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && publicRatingMatch) {
       const token = decodeURIComponent(publicRatingMatch[1] ?? "");
       const funcionario = await resolveRatingTokenFuncionario(token);
+      const ratingUser = await readOptionalAuthenticatedRatingUser(request);
 
       sendJson(response, 200, {
         data: {
           funcionario: serializeRatingFuncionario(funcionario),
+          calificador:
+            ratingUser == null ? null : serializeRatingCalificador(ratingUser),
         },
       });
       return;
@@ -584,6 +812,7 @@ export const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && publicRatingMatch) {
       const token = decodeURIComponent(publicRatingMatch[1] ?? "");
       const funcionario = await resolveRatingTokenFuncionario(token);
+      const ratingUser = await readOptionalAuthenticatedRatingUser(request);
       const input = parseSubmitFuncionarioRatingInput(
         await readJsonBody(request),
       );
@@ -591,6 +820,7 @@ export const server = http.createServer(async (request, response) => {
         funcionario,
         input,
         request,
+        ratingUser,
       });
 
       sendJson(response, 201, {
@@ -599,64 +829,40 @@ export const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/api/auth/signup") {
-      const body = expectRecord(await readJsonBody(request));
-      const ci = readRequiredString(body, "ci", 3, 30);
-      const email = normalizeEmailValue(normalizeCiValue(ci));
-      const nombres = readRequiredString(body, "nombreCompleto", 2, 150);
-      const apellido = readRequiredString(body, "primerApellido", 2, 80);
-      const password = readRequiredString(body, "password", 8, 200);
-      if (body.acceptedPrivacy !== true || isAdminEmail(email)) {
-        throw new HttpError(400, "Debes aceptar la politica de privacidad y usar un CI valido.");
-      }
-      if (await findUserByLoginOrCi(prisma, { login: email, ci })) {
-        throw new HttpError(409, "Ya existe una cuenta con ese CI. Inicia sesion con tu cuenta.");
-      }
-      // El registro publico nunca acepta roles, cargos, oficinas ni contratos.
-      const user = await prisma.usuarios.create({
-        data: {
-          email, ci, nombres, primer_apellido: apellido,
-          nombre_completo: `${nombres} ${apellido}`.slice(0, 150),
-          password_hash: hashPassword(password),
-          default_ci_login_enabled: false,
-          rol: rol_usuario.OPERADOR, activo: true,
-        },
-        include: userWithOfficeInclude,
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/ios/auth/register"
+    ) {
+      const input = parseRegisterUserInput(await readJsonBody(request));
+      const { user, person } = await createIosRegisteredUser(input);
+      // TEMPORAL: vinculacion unica desactivada; conservar para reactivar.
+      // const deviceId = await bindApplicationDevice(pool, user.id, request);
+      const deviceId = readOptionalString(expectRecord({ deviceId: request.headers["x-device-id"] }), "deviceId", 8, 120);
+      await registerUserDeviceSession(user.id, deviceId);
+      const authToken = await createAuthToken(user, deviceId);
+      const refreshToken = await createRefreshToken(user.id, deviceId, authToken);
+
+      setAuthCookie(response, authToken);
+      sendJson(response, 201, {
+        data: await serializeAppUserWithExitPermitFlag(user, person, authToken, refreshToken),
       });
-      const person = await ensurePersonIdentityForUser(prisma, user);
-      const authToken = await createAuthToken(user);
-      invalidateDashboardSummaryCache();
-      sendJson(response, 201, { data: serializeAppUser(user, person, authToken) });
       return;
     }
 
-    if (request.method === "DELETE" && url.pathname === "/api/auth/account") {
-      const body = expectRecord(await readJsonBody(request));
-      const password = readRequiredString(body, "currentPassword", 6, 200);
-      const user = await prisma.usuarios.findUnique({ where: { id: authenticatedUser.id } });
-      if (!user || !verifyPassword(password, user.password_hash)) {
-        throw new HttpError(403, "La contrasena actual es incorrecta.");
-      }
-      // Si falla el proveedor, no declarar la cuenta eliminada: permite reintentar.
-      await deleteAccountMedia(user);
-      await prisma.$transaction(async (tx) => {
-        const id = user.id;
-        await tx.asistencia_controles.updateMany({ where: { registrado_por_id: id }, data: { registrado_por_id: null } });
-        await tx.asistencias.updateMany({ where: { registrado_por_id: id }, data: { registrado_por_id: null } });
-        await tx.almuerzos.updateMany({ where: { registrado_salida_por_id: id }, data: { registrado_salida_por_id: null } });
-        await tx.almuerzos.updateMany({ where: { registrado_retorno_por_id: id }, data: { registrado_retorno_por_id: null } });
-        await tx.salidas.updateMany({ where: { registrado_salida_por_id: id }, data: { registrado_salida_por_id: null } });
-        await tx.salidas.updateMany({ where: { registrado_llegada_por_id: id }, data: { registrado_llegada_por_id: null } });
-        await tx.salidas.updateMany({ where: { aprobado_por_id: id }, data: { aprobado_por_id: null, aprobado_por_nombre: null } });
-        await tx.celulares_asistencia.updateMany({ where: { logout_requested_by_id: id }, data: { logout_requested_by_id: null } });
-        await tx.notificacion_envios.deleteMany({ where: { enviado_por_id: id } });
-        await tx.eventos.updateMany({ where: { creado_por_id: id }, data: { creado_por_id: null } });
-        // Eliminar persona tambien elimina sus asistencias y snapshots por cascada.
-        await tx.personas.deleteMany({ where: { usuario_id: id } });
-        await tx.usuarios.delete({ where: { id } });
+    if (request.method === "POST" && url.pathname === "/api/ios/auth/apple") {
+      const appleBody = expectRecord(await readJsonBody(request));
+      const input = parseAppleSignInInput(appleBody);
+      const { user, person } = await signInWithAppleForIos(input);
+      // TEMPORAL: vinculacion unica desactivada; conservar para reactivar.
+      // const deviceId = await bindApplicationDevice(pool, user.id, request, appleBody.deviceChangeCode);
+      const deviceId = input.deviceId;
+      await registerUserDeviceSession(user.id, deviceId);
+      const authToken = await createAuthToken(user, deviceId);
+      const refreshToken = await createRefreshToken(user.id, deviceId, authToken);
+      setAuthCookie(response, authToken);
+      sendJson(response, 200, {
+        data: await serializeAppUserWithExitPermitFlag(user, person, authToken, refreshToken),
       });
-      invalidateDashboardSummaryCache();
-      sendJson(response, 200, { data: { deleted: true } });
       return;
     }
 
@@ -788,61 +994,181 @@ export const server = http.createServer(async (request, response) => {
         include: userWithOfficeInclude,
       });
       const person = await ensurePersonIdentityForUser(prisma, user);
-      const authToken = await createAuthToken(user);
       invalidateDashboardSummaryCache();
 
       sendJson(response, 201, {
-        data: serializeAppUser(user, person, authToken),
+        data: await serializeAppUserWithExitPermitFlag(user, person),
       });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/auth/refresh") {
+      const body = expectRecord(await readJsonBody(request));
+      const deviceId = readOptionalString(expectRecord({ deviceId: request.headers["x-device-id"] }), "deviceId", 8, 120);
+      await deactivateExpiredConsultantContracts();
+      let identity: RefreshIdentity;
+      let refreshToken: string;
+      if (body.refreshToken != null) {
+        const result = await rotateRefreshSession(pool, body.refreshToken, deviceId, JWT_SECRET, authorizeRefreshIdentity);
+        identity = result.identity;
+        refreshToken = result.refreshToken;
+      } else {
+        // Upgrade already installed, signed legacy sessions, even after their old
+        // expiry. Never accept unsigned payloads or exchange a new access token.
+        const payload = verifySessionJwt(readBearerToken(request), JWT_SECRET, undefined, false, true);
+        if (!payload.legacy || (payload.did != null && payload.did !== deviceId)) {
+          throw new HttpError(401, "Se requiere un refresh token valido.");
+        }
+        identity = { user_id: payload.sub, device_id: payload.did, session_version: payload.sv };
+        await authorizeRefreshIdentity(identity);
+        refreshToken = await issueRefreshSession(pool, identity);
+      }
+      const user = await authorizeRefreshIdentity(identity);
+      const authToken = await createAuthToken(user, identity.device_id, identity.session_version);
+      setAuthCookie(response, authToken);
+      sendJson(response, 200, { data: { authToken, refreshToken } });
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/login") {
       await deactivateExpiredConsultantContracts();
-      const input = parseLoginInput(await readJsonBody(request));
+      const loginBody = expectRecord(await readJsonBody(request));
+      const input = parseLoginInput(loginBody);
+      assertLoginRateLimit(request, input.email);
       const user = await findUserForLogin(input.email);
-      const hasStoredPassword =
-        user != null && verifyPassword(input.password, user.password_hash);
-      const hasDefaultCiPassword =
-        user != null && user.default_ci_login_enabled && verifyDefaultCiPassword(input.password, user);
+      const matchedPassword =
+        user == null ? null : resolveLoginPassword(input.password, user);
 
-      if (!user || (!hasStoredPassword && !hasDefaultCiPassword)) {
+      if (!user || matchedPassword == null) {
+        recordFailedLoginAttempt(request, input.email);
         throw new HttpError(401, "Usuario o contrasena incorrectos.");
       }
 
       if (user.activo !== true) {
+        recordFailedLoginAttempt(request, input.email);
         throw new HttpError(
           403,
           "Tu usuario se encuentra inactivo. Solicita su activacion.",
         );
       }
 
-      if (!hasStoredPassword && hasDefaultCiPassword) {
-        await prisma.usuarios.update({
-          where: { id: user.id },
+      if (shouldUpgradePasswordHash(user.password_hash)) {
+        await prisma.usuarios.updateMany({
+          // No sobrescribir una contrasena cambiada durante este inicio de sesion.
+          where: { id: user.id, password_hash: user.password_hash },
           data: {
-            password_hash: hashPassword(input.password),
+            password_hash: hashPassword(matchedPassword),
             updated_at: new Date(),
           },
         });
       }
 
       const person = await ensurePersonIdentityForUser(prisma, user);
-      await revokeUserSessions(user.id);
-      const authToken = await createAuthToken(user);
+      // TEMPORAL: vinculacion unica desactivada; conservar para reactivar.
+      // const deviceId = await bindApplicationDevice(pool, user.id, request, loginBody.deviceChangeCode);
+      const deviceId = input.deviceId;
+      await registerUserDeviceSession(user.id, deviceId);
+      const authToken = await createAuthToken(user, deviceId);
+      const refreshToken = await createRefreshToken(user.id, deviceId, authToken);
+      clearLoginRateLimit(request, input.email);
 
+      setAuthCookie(response, authToken);
       sendJson(response, 200, {
-        data: serializeAppUser(user, person, authToken),
+        data: await serializeAppUserWithExitPermitFlag(user, person, authToken, refreshToken),
       });
       return;
     }
 
+    if (request.method === 'POST' && url.pathname === '/api/auth/biometric/login') {
+      const body = expectRecord(await readJsonBody(request));
+      assertLoginRateLimit(request, 'biometric');
+      let identity;
+      try { identity = await resolveBiometricUser(pool, request, body.secret); }
+      catch (error) { recordFailedLoginAttempt(request, 'biometric'); throw error; }
+      const user = await prisma.usuarios.findUnique({ where: { id: identity.userId }, include: userWithOfficeInclude });
+      if (!user || !user.activo) throw new HttpError(401, 'Cuenta inactiva.');
+      await registerUserDeviceSession(user.id, identity.deviceId);
+      const authToken = await createAuthToken(user, identity.deviceId);
+      const refreshToken = await createRefreshToken(user.id, identity.deviceId, authToken);
+      const person = await ensurePersonIdentityForUser(prisma, user);
+      setAuthCookie(response, authToken);
+      clearLoginRateLimit(request, 'biometric');
+      sendJson(response, 200, { data: await serializeAppUserWithExitPermitFlag(user, person, authToken, refreshToken) });
+      return;
+    }
+    if (url.pathname === '/api/auth/biometric' && request.method === 'POST') {
+      const body = expectRecord(await readJsonBody(request));
+      const user = await prisma.usuarios.findUniqueOrThrow({ where: { id: authenticatedUser.id } });
+      assertLoginRateLimit(request, user.email);
+      if (typeof body.password !== 'string' || resolveLoginPassword(body.password, user) == null) {
+        recordFailedLoginAttempt(request, user.email);
+        throw new HttpError(401, 'Contrasena incorrecta.');
+      }
+      const secret = await enrollBiometric(pool, user.id, authenticatedUser.deviceId!, user.password_hash);
+      sendJson(response, 200, { data: { secret } });
+      return;
+    }
+    if (url.pathname === '/api/auth/biometric' && request.method === 'DELETE') {
+      await pool.query('UPDATE aplicacion_dispositivos SET biometric_hash=NULL,biometric_expira=NULL WHERE usuario_id=$1', [authenticatedUser.id]);
+      sendJson(response, 200, { data: { disabled: true } });
+      return;
+    }
+    // TEMPORAL: administracion de vinculacion unica desactivada.
+//     if (url.pathname === '/api/aplicacion' && request.method === 'GET') {
+//       const admin = await assertAdminRequester(authenticatedUser.email);
+//       assertApplicationAdminRole(admin.rol);
+//       const query = (url.searchParams.get('q') ?? '').trim().slice(0, 150);
+//       const result = await pool.query(`SELECT u.id, u.nombre_completo AS nombre, u.primer_apellido AS apellido,
+//         u.segundo_apellido AS "segundoApellido", u.ci, u.cargo, u.tipo_vinculo AS tipo,
+//         o.oficina, d.plataforma, d.vinculado_en AS "vinculadoEn", d.device_id AS "deviceId",
+//         d.cambio_expira AS "cambioExpira", d.biometric_hash IS NOT NULL AND d.biometric_expira>NOW() AS biometria
+//         FROM usuarios u LEFT JOIN oficinas o ON o.id=u.oficina_id LEFT JOIN aplicacion_dispositivos d ON d.usuario_id=u.id
+//         WHERE $1='' OR concat_ws(' ',u.nombre_completo,u.primer_apellido,u.segundo_apellido,u.tercer_apellido,u.ci,u.email,o.oficina,u.cargo,u.tipo_vinculo) ILIKE '%' || $1 || '%'
+//         ORDER BY u.nombre_completo,u.id LIMIT 100`, [query]);
+//       sendJson(response, 200, { data: result.rows });
+//       return;
+//     }
+//     const transferMatch = /^\/api\/aplicacion\/(\d+)\/cambio$/.exec(url.pathname);
+//     if (transferMatch && request.method === 'POST') {
+//       const admin = await assertAdminRequester(authenticatedUser.email);
+//       assertApplicationAdminRole(admin.rol);
+//       const body = expectRecord(await readJsonBody(request));
+//       const reason = readRequiredString(body, 'motivo', 5, 500);
+//       const result = await authorizeDeviceTransfer(pool, Number(transferMatch[1]), authenticatedUser.id, reason);
+//       sendJson(response, 200, { data: result });
+//       return;
+//     }
+//
     if (request.method === "POST" && url.pathname === "/api/auth/logout") {
-      await markUserDevicesOffline(authenticatedUser.id);
-      await revokeUserSessions(authenticatedUser.id);
+      if (authenticatedUser.deviceId == null) {
+        await markUserDevicesOffline(authenticatedUser.id);
+        await revokeUserSessions(authenticatedUser.id);
+      } else {
+        await markUserDeviceOffline(
+          authenticatedUser.id,
+          authenticatedUser.deviceId,
+        );
+        await revokeUserDeviceSession(
+          authenticatedUser.id,
+          authenticatedUser.deviceId,
+        );
+      }
 
+      clearAuthCookie(response);
       sendJson(response, 200, {
         data: { revoked: true },
+      });
+      return;
+    }
+
+    if (
+      request.method === "DELETE" &&
+      url.pathname === "/api/ios/auth/account"
+    ) {
+      await permanentlyDeleteOwnIosAccount(authenticatedUser.id);
+      clearAuthCookie(response);
+      sendJson(response, 200, {
+        data: { deleted: true },
       });
       return;
     }
@@ -913,6 +1239,22 @@ export const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/auth/access") {
+      // Authentication has already applied temporary role boundaries.
+      const user = await prisma.usuarios.findUniqueOrThrow({
+        where: { id: authenticatedUser.id },
+        select: { id: true, rol: true, activo: true, control_inicio: true,
+          control_fin: true, control_rol_anterior: true },
+      });
+      sendJson(response, 200, { data: {
+        id: user.id, rol: user.rol, activo: user.activo,
+        controlInicio: user.control_inicio?.toISOString() ?? null,
+        controlFin: user.control_fin?.toISOString() ?? null,
+        controlRolAnterior: user.control_rol_anterior,
+      } });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/auth/me") {
       const user = await prisma.usuarios.findUnique({
         where: { id: authenticatedUser.id },
@@ -926,7 +1268,7 @@ export const server = http.createServer(async (request, response) => {
       const person = await ensurePersonIdentityForUser(prisma, user);
 
       sendJson(response, 200, {
-        data: serializeAppUser(user, person),
+        data: await serializeAppUserWithExitPermitFlag(user, person),
       });
       return;
     }
@@ -998,11 +1340,11 @@ export const server = http.createServer(async (request, response) => {
         where: { email: authenticatedUser.email },
         data: {
           password_hash: hashPassword(input.newPassword),
-          default_ci_login_enabled: false,
           updated_at: new Date(),
         },
       });
 
+      await revokeUserSessions(existingUser.id);
       sendJson(response, 200, {
         data: { updated: true },
       });
@@ -1140,41 +1482,127 @@ export const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/almuerzos/exclusiones") {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede consultar exclusiones de almuerzo.",
+      );
+      const rawDate = url.searchParams.get("fecha")?.trim();
+      const date = readDateOnlyString(
+        rawDate == null || rawDate.length === 0
+          ? formatDateInAppTimeZone(new Date())
+          : rawDate,
+        "fecha",
+      );
+
+      sendJson(response, 200, {
+        data: {
+          usuarioIdsExcluidos: await loadActiveLunchExcludedUserIds(date),
+        },
+      });
+      return;
+    }
+
+    if (request.method === "PUT" && url.pathname === "/api/almuerzos/exclusiones") {
+      const requester = await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede modificar exclusiones de almuerzo.",
+      );
+      const input = parseLunchUserExclusionsInput(await readJsonBody(request));
+      const usuarioIdsExcluidos = await replaceActiveLunchUserExclusions(
+        input.usuarioIdsExcluidos,
+        requester.id,
+      );
+
+      sendJson(response, 200, {
+        data: {
+          usuarioIdsExcluidos,
+        },
+      });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/almuerzos") {
-      assertLunchReportRequester(authenticatedUser);
+      const personalHistory = url.searchParams.get("personal") === "true";
+      if (!(personalHistory && isScopedUserAdminRole(authenticatedUser.rol))) {
+        assertLunchReportRequester(authenticatedUser);
+      }
       const query = parseLunchReportQuery(url, {
         readOptionalQueryInt,
         readDateOnlyString,
         formatDateInAppTimeZone,
       });
+      if (personalHistory) {
+        query.userId = authenticatedUser.id;
+      }
+      if (!isAdminRole(authenticatedUser.rol)) {
+        assertEmployeeLunchHistoryQuery(authenticatedUser, query);
+        query.userId = authenticatedUser.id;
+        query.search = null;
+        query.status = null;
+        query.scannerId = null;
+        query.officeId = null;
+        query.placeId = null;
+        query.jobTitle = null;
+        query.linkType = null;
+      }
       const records = await prisma.almuerzos.findMany({
         where: buildLunchReportWhere(query),
         include: lunchRecordInclude,
         orderBy: [{ fecha: "desc" }, { salida_en: "desc" }, { id: "desc" }],
-        take: 500,
+        take: 5000,
       });
+      const visibleRecords = await filterLunchRecordsByExclusionHistory(records);
 
       sendJson(response, 200, {
-        data: records.map(serializeLunchRecord),
+        data: visibleRecords.map(serializeLunchRecord),
       });
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/api/almuerzos/scan") {
       const input = parseLunchScanInput(await readJsonBody(request));
-      if (isLunchRegistrationQrPayload(input.qrValue)) {
-        assertSelfRegistrationQrRequester(authenticatedUser);
-      } else {
-        assertLunchScannerRequester(authenticatedUser);
-      }
-      const result = await registerLunchScan(
-        input.qrValue,
-        authenticatedUser.id,
-      );
-
-      sendJson(response, 201, {
-        data: result,
+      const logFields = buildLunchScanLogFields(input, authenticatedUser.id, {
+        requestId,
+        path: url.pathname,
+        userEmail: authenticatedUser.email,
       });
+
+      try {
+        logInfo("Intento de registro de almuerzo por QR.", logFields);
+
+        if (isLunchRegistrationQrPayload(input.qrValue)) {
+          assertSelfRegistrationQrRequester(authenticatedUser);
+        } else {
+          assertLunchScannerRequester(authenticatedUser);
+        }
+        const result = await registerLunchScan(input, authenticatedUser.id);
+
+        logInfo(
+          "Registro de almuerzo por QR completado.",
+          buildLunchScanLogFields(input, authenticatedUser.id, {
+            requestId,
+            action: result.accion,
+            lunchRecordId: result.registro.id,
+            employeeUserId: result.registro.usuarioId,
+            lunchDate: result.registro.fecha,
+            departureTime: result.registro.horaSalida,
+            returnTime: result.registro.horaRetorno,
+            status: result.registro.estado,
+          }),
+        );
+
+        sendJson(response, 201, {
+          data: result,
+        });
+      } catch (error) {
+        logLunchScanError(error, input, authenticatedUser.id, {
+          requestId,
+          path: url.pathname,
+          userEmail: authenticatedUser.email,
+        });
+        throw error;
+      }
       return;
     }
 
@@ -1185,10 +1613,7 @@ export const server = http.createServer(async (request, response) => {
       } else {
         assertExitPermitScannerRequester(authenticatedUser);
       }
-      const result = await registerExitPermitScan(
-        input.qrValue,
-        authenticatedUser.id,
-      );
+      const result = await registerExitPermitScan(input, authenticatedUser.id);
 
       sendJson(response, 201, {
         data: result,
@@ -1229,6 +1654,7 @@ export const server = http.createServer(async (request, response) => {
           descripcion: input.descripcion,
           fecha_permiso: input.fechaPermiso,
           solicitante_nombre_completo: buildUserDisplayName(user),
+          solicitante_ci: normalizeOptionalText(user.ci),
           solicitante_numero_item: normalizeOptionalText(user.numero_item),
           solicitante_cargo: resolveEffectiveJobTitleName(user),
           solicitante_oficina_id: resolveLinkedOfficeId(user),
@@ -1265,7 +1691,7 @@ export const server = http.createServer(async (request, response) => {
         throw new HttpError(403, "Solo un jefe puede revisar salidas.");
       }
 
-      assertExitPermitApprover(approver);
+      await assertExitPermitApprover(approver);
       const salidas = await prisma.salidas.findMany({
         where: {
           estado: estado_salida.PENDIENTE,
@@ -1290,6 +1716,80 @@ export const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/salidas/aprobadores"
+    ) {
+      const manager = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+        include: userWithOfficeInclude,
+      });
+
+      if (!manager) {
+        throw new HttpError(403, "No puedes gestionar aprobadores.");
+      }
+
+      const data = await loadExitPermitApprovalDelegationPanel(manager);
+
+      sendJson(response, 200, {
+        data,
+      });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/salidas/aprobadores"
+    ) {
+      const input = readExitPermitDelegationInput(
+        (await readJsonBody(request)) as JsonRecord,
+      );
+      const manager = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+        include: userWithOfficeInclude,
+      });
+
+      if (!manager) {
+        throw new HttpError(403, "No puedes gestionar aprobadores.");
+      }
+
+      const delegation = await createExitPermitApproverDelegation(
+        manager,
+        input.delegateUserId,
+        input.ownerUserId,
+      );
+
+      sendJson(response, 201, {
+        data: delegation,
+      });
+      return;
+    }
+
+    const salidaApproverDelegationMatch =
+      /^\/api\/salidas\/aprobadores\/(\d+)$/.exec(url.pathname);
+
+    if (request.method === "DELETE" && salidaApproverDelegationMatch != null) {
+      const delegationId = Number.parseInt(
+        salidaApproverDelegationMatch[1] ?? "",
+        10,
+      );
+      const manager = await prisma.usuarios.findUnique({
+        where: { id: authenticatedUser.id },
+        include: userWithOfficeInclude,
+      });
+
+      if (!Number.isInteger(delegationId) || delegationId <= 0 || !manager) {
+        throw new HttpError(403, "No puedes quitar esta delegacion.");
+      }
+
+      await revokeExitPermitApproverDelegation(manager, delegationId);
+
+      sendJson(response, 200, {
+        data: { revoked: true },
+      });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/salidas") {
       assertAuthenticatedRequester(authenticatedUser);
       const searchText = readExitPermitQuerySearch(url);
@@ -1302,13 +1802,14 @@ export const server = http.createServer(async (request, response) => {
         !onlyOwnExitPermits &&
         ((isAdminUser(authenticatedUser) && searchText != null) ||
           (requester != null &&
-            isExitPermitApproverUser(requester) &&
+            (await canUserApproveExitPermits(requester)) &&
             !url.searchParams.has("fecha")))
           ? null
           : readExitPermitQueryDate(url, readDateOnlyString, toDateOnlyText);
       const where = buildExitPermitListWhere(
         authenticatedUser,
         requester,
+        requester == null ? false : await canUserApproveExitPermits(requester),
         fechaPermiso,
         searchText,
         onlyOwnExitPermits,
@@ -1327,7 +1828,7 @@ export const server = http.createServer(async (request, response) => {
       });
       const visibleSalidas =
         requester != null &&
-        isExitPermitApproverUser(requester) &&
+        (await canUserApproveExitPermits(requester)) &&
         !isAdminUser(authenticatedUser) &&
         !onlyOwnExitPermits
           ? await filterReviewableExitPermits(requester, salidas)
@@ -1595,11 +2096,14 @@ export const server = http.createServer(async (request, response) => {
         );
       }
 
+      const arrivalRegisteredAt = new Date();
       const updatedSalida = await prisma.salidas.update({
         where: { id: salida.id },
         data: {
           hora_llegada: input.horaLlegada,
-          updated_at: new Date(),
+          llegada_en: arrivalRegisteredAt,
+          registrado_llegada_por_id: authenticatedUser.id,
+          updated_at: arrivalRegisteredAt,
         },
         include: exitPermitRecordInclude,
       });
@@ -1628,7 +2132,7 @@ export const server = http.createServer(async (request, response) => {
         throw new HttpError(403, "Solo un jefe puede revisar salidas.");
       }
 
-      assertExitPermitApprover(approver);
+      await assertExitPermitApprover(approver);
 
       const salida = await prisma.salidas.findUnique({
         where: { id: salidaId },
@@ -1680,6 +2184,107 @@ export const server = http.createServer(async (request, response) => {
 
       sendJson(response, 200, {
         data: await loadSerializedOffices(authenticatedUser),
+      });
+      return;
+    }
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/oficinas/funcionarios"
+    ) {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede consultar funcionarios por oficina.",
+      );
+
+      sendJson(response, 200, {
+        data: await loadSerializedOfficeUsers(),
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === LUGARES_ROUTES.list) {
+      assertAuthenticatedRequester(authenticatedUser);
+
+      sendJson(response, 200, {
+        data: await loadSerializedPlaces(),
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === LUGARES_ROUTES.list) {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede crear lugares.",
+      );
+      const input = parsePlaceInput(await readJsonBody(request));
+      const place = await createPlace(input);
+
+      sendJson(response, 201, {
+        data: place,
+      });
+      return;
+    }
+
+    const placeMatch = /^\/api\/lugares\/(\d+)$/.exec(url.pathname);
+    const placeActiveMatch = /^\/api\/lugares\/(\d+)\/activo$/.exec(
+      url.pathname,
+    );
+
+    if (request.method === "PUT" && placeActiveMatch != null) {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede activar o desactivar lugares.",
+      );
+      const placeId = readPlaceIdFromPathMatch(placeActiveMatch);
+      const input = parsePlaceActiveInput(await readJsonBody(request));
+      const place = await setPlaceActive(placeId, input.activo);
+
+      sendJson(response, 200, {
+        data: place,
+      });
+      return;
+    }
+
+    if (request.method === "PUT" && placeMatch != null) {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede editar lugares.",
+      );
+      const placeId = readPlaceIdFromPathMatch(placeMatch);
+      const input = parsePlaceInput(await readJsonBody(request));
+      const place = await updatePlace(placeId, input);
+
+      sendJson(response, 200, {
+        data: place,
+      });
+      return;
+    }
+
+    if (request.method === "DELETE" && placeMatch != null) {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede eliminar lugares.",
+      );
+      const placeId = readPlaceIdFromPathMatch(placeMatch);
+      const place = await deletePlace(placeId);
+
+      sendJson(response, 200, {
+        data: place,
+      });
+      return;
+    }
+
+    const officeJobTitlesMatch = /^\/api\/oficinas\/(\d+)\/cargos$/.exec(
+      url.pathname,
+    );
+
+    if (request.method === "GET" && officeJobTitlesMatch != null) {
+      assertAuthenticatedRequester(authenticatedUser);
+      const officeId = Number.parseInt(officeJobTitlesMatch[1] ?? "", 10);
+
+      sendJson(response, 200, {
+        data: await loadSerializedJobTitlesForOffice(officeId),
       });
       return;
     }
@@ -1816,11 +2421,9 @@ export const server = http.createServer(async (request, response) => {
                 not: SEED_ADMIN_EMAIL,
               },
             },
-            {
-              rol: {
-                not: rol_usuario.LECTOR_USUARIOS,
-              },
-            },
+            ...(requester.rol === rol_usuario.ADMIN_EVENTUALES
+              ? []
+              : [{ rol: { not: rol_usuario.LECTOR_USUARIOS } }]),
             ...healthWhereArray(userDirectoryWhereForRequester(requester)),
           ],
         },
@@ -1878,6 +2481,88 @@ export const server = http.createServer(async (request, response) => {
           q: search,
           funcionarios: rows,
         },
+      });
+      return;
+    }
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/calificaciones/control"
+    ) {
+      const requester = await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede consultar el control de calificaciones.",
+      );
+      const fechaInicio =
+        readOptionalQueryDateOnly(url, "fechaInicio") ??
+        readOptionalQueryDateOnly(url, "fecha");
+      const fechaFin =
+        readOptionalQueryDateOnly(url, "fechaFin") ?? fechaInicio;
+      const cargoCodigo = normalizeOptionalText(
+        url.searchParams.get("cargoCodigo"),
+      );
+      const oficinaId = readOptionalQueryInt(url, "oficinaId");
+      const search = normalizeOptionalText(url.searchParams.get("q"));
+      const rows = await loadFuncionarioRatingControl({
+        requester,
+        fechaInicio,
+        fechaFin,
+        cargoCodigo,
+        oficinaId,
+        search,
+      });
+
+      sendJson(response, 200, {
+        data: {
+          fechaInicio,
+          fechaFin: fechaFin ?? null,
+          cargoCodigo,
+          oficinaId,
+          q: search,
+          registros: rows,
+        },
+      });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/calificaciones/control/bloquear"
+    ) {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede bloquear IDs de calificacion.",
+      );
+      const input = parseBlockRatingDeviceInput(await readJsonBody(request));
+      const result = await blockRatingDevice({
+        deviceIdPublic: input.deviceId,
+        deviceHash: input.deviceHash,
+        blockedById: authenticatedUser.id,
+        reason: input.motivo,
+      });
+
+      sendJson(response, 200, {
+        data: result,
+      });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/calificaciones/control/activar"
+    ) {
+      await assertAdminRequester(
+        authenticatedUser.email,
+        "Solo un administrador puede activar IDs de calificacion.",
+      );
+      const input = parseBlockRatingDeviceInput(await readJsonBody(request));
+      const result = await unblockRatingDevice({
+        deviceIdPublic: input.deviceId,
+        deviceHash: input.deviceHash,
+      });
+
+      sendJson(response, 200, {
+        data: result,
       });
       return;
     }
@@ -2110,13 +2795,14 @@ export const server = http.createServer(async (request, response) => {
           foto_url: storedProfilePhoto,
           email: input.email,
           password_hash: passwordHash,
-          rol: input.rol,
+          ...buildControlRoleAssignment(input),
           activo: resolveActiveForContract(input),
         },
         include: userWithOfficeInclude,
       });
       const person = await ensurePersonIdentityForUser(prisma, user);
       invalidateDashboardSummaryCache();
+      await refreshTemporaryControlRoles();
 
       sendJson(response, 201, {
         data: serializeAppUser(user, person),
@@ -2244,11 +2930,6 @@ export const server = http.createServer(async (request, response) => {
                   ci: managedInput.ci,
                   userId,
                 });
-          const nextPasswordHash =
-            managedInput.password == null
-              ? existingUser.password_hash
-              : hashPassword(managedInput.password);
-
           const nextUser = await tx.usuarios.update({
             where: { id: userId },
             data: {
@@ -2275,8 +2956,11 @@ export const server = http.createServer(async (request, response) => {
               numero_item: managedInput.numeroItem,
               foto_url: nextPhotoSource,
               email: managedInput.email,
-              password_hash: nextPasswordHash,
-              rol: managedInput.rol,
+              // Editar el perfil no debe reescribir la contrasena leida previamente.
+              ...(managedInput.password == null
+                ? {}
+                : { password_hash: hashPassword(managedInput.password) }),
+              ...buildControlRoleAssignment(managedInput, existingUser),
               activo: resolveActiveForContract(managedInput),
               updated_at: new Date(),
             },
@@ -2318,7 +3002,11 @@ export const server = http.createServer(async (request, response) => {
 
         return nextUser;
       });
+      if (("password" in input && input.password != null) || !updatedUser.activo) {
+        await revokeUserSessions(updatedUser.id);
+      }
       const person = await ensurePersonIdentityForUser(prisma, updatedUser);
+      await refreshTemporaryControlRoles();
 
       sendJson(response, 200, {
         data: serializeAppUser(updatedUser, person),
@@ -2335,16 +3023,21 @@ export const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/eventos") {
       const view = parseEventListView(url);
+      const eventKind =
+        view === "assigned" ? "EVENTO" : parseEventKindQuery(url);
 
       sendJson(response, 200, {
         data:
           view === "summary"
-            ? await loadSerializedEventSummaries(authenticatedUser)
+            ? await loadSerializedEventSummaries(authenticatedUser, eventKind)
             : view === "assigned"
               ? await loadSerializedAssignedEventSummaries(authenticatedUser)
               : (
                   await prisma.eventos.findMany({
-                    where: healthEventWhereForRequester(authenticatedUser),
+                    where: buildEventKindWhere(
+                      eventKind,
+                      healthEventWhereForRequester(authenticatedUser),
+                    ),
                     orderBy: [{ fecha_evento: "desc" }, { id: "desc" }],
                     include: eventInclude,
                   })
@@ -2356,8 +3049,9 @@ export const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/eventos") {
       const input = parseCreateEventInput(await readJsonBody(request));
 
-      const operador = await assertAdminRequester(
+      const operador = await assertEventManagerRequester(
         authenticatedUser.email,
+        input.tipoEvento,
         "Solo un administrador puede crear eventos.",
       );
 
@@ -2370,6 +3064,9 @@ export const server = http.createServer(async (request, response) => {
             direccion: input.direccion,
             latitud: input.latitud,
             longitud: input.longitud,
+            tipo: input.tipoEvento,
+            inspeccion_activa: input.inspeccionActiva,
+            tipos_vinculo: input.tiposVinculo,
             creado_por_id: operador.id,
           },
         });
@@ -2427,6 +3124,159 @@ export const server = http.createServer(async (request, response) => {
       return;
     }
 
+    const inspectionActiveMatch =
+      /^\/api\/eventos\/(\d+)\/inspeccion-activa$/.exec(url.pathname);
+
+    if (request.method === "PUT" && inspectionActiveMatch != null) {
+      const eventId = Number.parseInt(inspectionActiveMatch[1], 10);
+      const body = expectRecord(await readJsonBody(request));
+      const inspeccionActiva = readRequiredBoolean(body, "inspeccionActiva");
+      const operador = await assertEventManagerRequester(
+        authenticatedUser.email,
+        "INSPECCION",
+        "Solo un administrador puede cambiar el estado de inspecciones.",
+      );
+      const existingEvent = await prisma.eventos.findUnique({
+        where: { id: eventId },
+        include: {
+          evento_oficinas: {
+            include: { oficinas: true },
+          },
+        },
+      });
+
+      if (!existingEvent) {
+        throw new HttpError(404, "No se encontro la inspeccion seleccionada.");
+      }
+
+      if (existingEvent.tipo !== "INSPECCION") {
+        throw new HttpError(
+          400,
+          "Solo las inspecciones pueden cambiar de estado.",
+        );
+      }
+
+      assertHealthAdminCanManageEvent(operador, existingEvent);
+
+      const evento = await prisma.eventos.update({
+        where: { id: eventId },
+        data: {
+          inspeccion_activa: inspeccionActiva,
+          updated_at: new Date(),
+        },
+        include: eventInclude,
+      });
+      invalidateEventSummaryCache();
+      invalidateEventAttendanceContextCache(eventId);
+
+      sendJson(response, 200, {
+        data: serializeEvent(evento),
+      });
+      return;
+    }
+
+    const inspectionAbsenceReasonMatch =
+      /^\/api\/eventos\/(\d+)\/faltantes\/(\d+)\/motivo$/.exec(url.pathname);
+
+    if (request.method === "PUT" && inspectionAbsenceReasonMatch != null) {
+      const eventId = Number.parseInt(inspectionAbsenceReasonMatch[1], 10);
+      const personId = Number.parseInt(inspectionAbsenceReasonMatch[2], 10);
+      const body = expectRecord(await readJsonBody(request));
+      const motivo = normalizeOptionalText(
+        readOptionalString(body, "motivo", 0, 1000),
+      );
+      const operador = await assertEventManagerRequester(
+        authenticatedUser.email,
+        "INSPECCION",
+        "Solo un administrador o usuario de control puede registrar motivos de faltas.",
+      );
+      const existingEvent = await prisma.eventos.findUnique({
+        where: { id: eventId },
+        include: eventInclude,
+      });
+
+      if (!existingEvent) {
+        throw new HttpError(404, "No se encontro la inspeccion seleccionada.");
+      }
+
+      assertCanManageEventRecord(operador, existingEvent);
+
+      if (existingEvent.tipo !== "INSPECCION") {
+        throw new HttpError(
+          400,
+          "Solo se pueden registrar motivos en inspecciones.",
+        );
+      }
+
+      if (existingEvent.inspeccion_activa !== true) {
+        throw new HttpError(
+          400,
+          "La inspeccion ya fue finalizada. No se pueden editar motivos.",
+        );
+      }
+
+      const existingPerson = await prisma.personas.findUnique({
+        where: { id: personId },
+      });
+
+      if (!existingPerson) {
+        throw new HttpError(404, "No se encontro el funcionario seleccionado.");
+      }
+
+      const alreadyRegistered = (existingEvent.asistencias ?? []).some(
+        (attendance: any) => attendance.persona_id === personId,
+      );
+      const rosterRows = await ensureEventRosterSnapshot(existingEvent);
+      const isValidAbsentee =
+        !alreadyRegistered &&
+        rosterRows.some((row) => row.personaId === personId);
+
+      if (!isValidAbsentee) {
+        throw new HttpError(
+          400,
+          "Solo se puede registrar motivo para funcionarios faltantes de la inspeccion.",
+        );
+      }
+
+      if (motivo == null) {
+        await pool.query(
+          `
+            DELETE FROM "inspeccion_falta_motivos"
+            WHERE "evento_id" = $1 AND "persona_id" = $2
+          `,
+          [eventId, personId],
+        );
+      } else {
+        await pool.query(
+          `
+            INSERT INTO "inspeccion_falta_motivos" (
+              "evento_id",
+              "persona_id",
+              "motivo",
+              "registrado_por_id",
+              "updated_at"
+            )
+            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+            ON CONFLICT ("evento_id", "persona_id")
+            DO UPDATE SET
+              "motivo" = EXCLUDED."motivo",
+              "registrado_por_id" = EXCLUDED."registrado_por_id",
+              "updated_at" = CURRENT_TIMESTAMP
+          `,
+          [eventId, personId, motivo, operador.id],
+        );
+      }
+
+      sendJson(response, 200, {
+        data: {
+          eventoId: eventId,
+          personaId: personId,
+          motivoAusencia: motivo,
+        },
+      });
+      return;
+    }
+
     const eventId = readResourceId(url.pathname, "/api/eventos/");
 
     if (request.method === "GET" && eventId != null) {
@@ -2448,8 +3298,9 @@ export const server = http.createServer(async (request, response) => {
 
     if (request.method === "PUT" && eventId != null) {
       const input = parseUpdateEventInput(await readJsonBody(request));
-      const operador = await assertAdminRequester(
+      const operador = await assertEventManagerRequester(
         authenticatedUser.email,
+        input.tipoEvento,
         "Solo un administrador puede editar eventos.",
       );
 
@@ -2466,6 +3317,7 @@ export const server = http.createServer(async (request, response) => {
         if (!existingEvent) {
           throw new HttpError(404, "No se encontro el evento seleccionado.");
         }
+        assertCanManageEventRecord(operador, existingEvent);
         assertHealthAdminCanManageEvent(operador, existingEvent);
 
         await tx.eventos.update({
@@ -2477,6 +3329,9 @@ export const server = http.createServer(async (request, response) => {
             direccion: input.direccion,
             latitud: input.latitud,
             longitud: input.longitud,
+            tipo: input.tipoEvento,
+            inspeccion_activa: input.inspeccionActiva,
+            tipos_vinculo: input.tiposVinculo,
             updated_at: new Date(),
           },
         });
@@ -2518,6 +3373,10 @@ export const server = http.createServer(async (request, response) => {
           resolvedOfficeSelection.expandedOffices.map((office) => office.id),
         );
 
+        await tx.evento_personas_snapshot.deleteMany({
+          where: { evento_id: eventId },
+        });
+
         await tx.eventos.update({
           where: { id: eventId },
           data: {
@@ -2542,8 +3401,9 @@ export const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "DELETE" && eventId != null) {
-      const operador = await assertAdminRequester(
+      const operador = await assertEventManagerRequester(
         authenticatedUser.email,
+        "INSPECCION",
         "Solo un administrador puede borrar eventos.",
       );
 
@@ -2559,6 +3419,7 @@ export const server = http.createServer(async (request, response) => {
       if (!existingEvent) {
         throw new HttpError(404, "No se encontro el evento seleccionado.");
       }
+      assertCanManageEventRecord(operador, existingEvent);
       assertHealthAdminCanManageEvent(operador, existingEvent);
 
       await prisma.eventos.delete({
@@ -2582,6 +3443,9 @@ export const server = http.createServer(async (request, response) => {
     ) {
       const reportQuery = parseAttendanceReportQuery(url);
       assertAttendanceReportRequester(authenticatedUser, reportQuery.ci);
+      const attendanceWhere: Prisma.asistenciasWhereInput = {
+        ...(reportQuery.estado == null ? {} : { estado: reportQuery.estado }),
+      };
       const user = await prisma.usuarios.findFirst({
         where: {
           ci: reportQuery.ci,
@@ -2595,17 +3459,22 @@ export const server = http.createServer(async (request, response) => {
         include: {
           ...personIdentityInclude,
           asistencias: {
-            where:
-              reportQuery.estado == null
-                ? undefined
-                : {
-                    estado: reportQuery.estado,
-                  },
+            where: attendanceWhere,
             include: {
               eventos: true,
               asistencia_controles: {
                 include: {
                   evento_controles: true,
+                  usuarios: {
+                    select: {
+                      email: true,
+                      nombre_completo: true,
+                      nombres: true,
+                      primer_apellido: true,
+                      segundo_apellido: true,
+                      tercer_apellido: true,
+                    },
+                  },
                 },
                 orderBy: {
                   control_id: "asc",
@@ -2657,6 +3526,24 @@ export const server = http.createServer(async (request, response) => {
             estado: reportQuery.estado ?? "TODOS",
           },
           records,
+        },
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/reportes/personal") {
+      const requester = await assertUserDirectoryRequester(
+        authenticatedUser.email,
+        "Solo un administrador o usuario autorizado puede consultar reportes de personal.",
+      );
+      const reportDate = readPersonnelReportSnapshotDate(url);
+
+      await ensurePersonnelReportSnapshot(reportDate, authenticatedUser.id);
+
+      sendJson(response, 200, {
+        data: {
+          fecha: reportDate,
+          users: await loadPersonnelReportSnapshotUsers(reportDate, requester),
         },
       });
       return;
@@ -2779,6 +3666,16 @@ export const server = http.createServer(async (request, response) => {
                 },
                 include: {
                   evento_controles: true,
+                  usuarios: {
+                    select: {
+                      email: true,
+                      nombre_completo: true,
+                      nombres: true,
+                      primer_apellido: true,
+                      segundo_apellido: true,
+                      tercer_apellido: true,
+                    },
+                  },
                   asistencias: {
                     include: {
                       eventos: true,
@@ -2880,6 +3777,13 @@ export const server = http.createServer(async (request, response) => {
         throw new HttpError(404, "No se encontro el evento seleccionado.");
       }
 
+      if (evento.tipo === "INSPECCION" && evento.inspeccion_activa !== true) {
+        throw new HttpError(
+          400,
+          "La inspeccion ya fue finalizada. No se pueden registrar mas asistencias.",
+        );
+      }
+
       const selectedControl = (evento.evento_controles ?? []).find(
         (control: { id: number }) => control.id === input.controlId,
       );
@@ -2906,6 +3810,11 @@ export const server = http.createServer(async (request, response) => {
         throw new HttpError(404, "No se encontro una persona con ese CI.");
       }
 
+      const linkTypeRestriction = eventLinkTypeRestrictionMessage(evento, persona.usuario);
+      if (linkTypeRestriction != null) {
+        throw new HttpError(403, linkTypeRestriction);
+      }
+
       const eventRequirement = await resolvePersonEventRequirement(
         persona,
         evento,
@@ -2913,6 +3822,7 @@ export const server = http.createServer(async (request, response) => {
 
       const operador = await assertEventOperator(authenticatedUser.id);
       const resolvedObservation = buildAttendanceObservation(input);
+      const identitySnapshot = buildAttendanceIdentitySnapshot(persona);
       const qrSnapshot = buildAttendanceQrSnapshot(
         persona,
         scannedValue,
@@ -2937,7 +3847,12 @@ export const server = http.createServer(async (request, response) => {
           create: {
             evento_id: evento.id,
             persona_id: persona.id,
-            nombre_snapshot: buildResolvedPersonDisplayName(persona),
+            nombre_snapshot: identitySnapshot.nombre,
+            ci_snapshot: identitySnapshot.ci,
+            cargo_snapshot: identitySnapshot.cargo,
+            oficina_id_snapshot: identitySnapshot.oficinaId,
+            oficina_snapshot: identitySnapshot.oficina,
+            oficina_cod_snapshot: identitySnapshot.oficinaCodigo,
             estado: input.estado,
             qr_leido: scannedValue,
             datos_qr_snapshot: qrSnapshot,
@@ -2946,7 +3861,6 @@ export const server = http.createServer(async (request, response) => {
             registrado_en: registeredAt,
           },
           update: {
-            nombre_snapshot: buildResolvedPersonDisplayName(persona),
             qr_leido: scannedValue,
             datos_qr_snapshot: qrSnapshot,
             observacion: resolvedObservation,
@@ -2967,6 +3881,8 @@ export const server = http.createServer(async (request, response) => {
             control_id: input.controlId,
             estado: input.estado,
             retrasado: registrationTiming.isLate,
+            no_es_persona: input.noEsPersona,
+            fuente_registro: input.registrationSource,
             observacion: resolvedObservation,
             registrado_por_id: operador.id,
             registrado_en: registeredAt,
@@ -2977,6 +3893,8 @@ export const server = http.createServer(async (request, response) => {
           update: {
             estado: input.estado,
             retrasado: registrationTiming.isLate,
+            no_es_persona: input.noEsPersona,
+            fuente_registro: input.registrationSource,
             observacion: resolvedObservation,
             registrado_por_id: operador.id,
             registrado_en: registeredAt,
@@ -3006,7 +3924,6 @@ export const server = http.createServer(async (request, response) => {
         const updatedAttendance = await tx.asistencias.update({
           where: { id: baseAttendance.id },
           data: {
-            nombre_snapshot: buildResolvedPersonDisplayName(persona),
             estado: resolvedAttendanceState,
             qr_leido: scannedValue,
             datos_qr_snapshot: qrSnapshot,
@@ -3036,6 +3953,7 @@ export const server = http.createServer(async (request, response) => {
             controlOrden: selectedControl.orden,
             estado: controlAttendance.estado,
             retrasado: controlAttendance.retrasado,
+            noEsPersona: controlAttendance.no_es_persona,
             observacion: controlAttendance.observacion,
             registradoEn: controlAttendance.registrado_en.toISOString(),
           },
@@ -3112,6 +4030,16 @@ export const server = http.createServer(async (request, response) => {
             asistencia_controles: {
               include: {
                 evento_controles: true,
+                usuarios: {
+                  select: {
+                    email: true,
+                    nombre_completo: true,
+                    nombres: true,
+                    primer_apellido: true,
+                    segundo_apellido: true,
+                    tercer_apellido: true,
+                  },
+                },
               },
               orderBy: {
                 control_id: "asc",
@@ -3180,6 +4108,16 @@ export const server = http.createServer(async (request, response) => {
             asistencia_controles: {
               include: {
                 evento_controles: true,
+                usuarios: {
+                  select: {
+                    email: true,
+                    nombre_completo: true,
+                    nombres: true,
+                    primer_apellido: true,
+                    segundo_apellido: true,
+                    tercer_apellido: true,
+                  },
+                },
               },
               orderBy: {
                 control_id: "asc",
@@ -3238,8 +4176,7 @@ export const server = http.createServer(async (request, response) => {
       }),
     );
     sendJson(response, 500, {
-      error: "Error interno del servidor.",
-      details: getErrorMessage(error),
+      error: "Servicio temporalmente no disponible. Intenta nuevamente.",
     });
   }
 });
@@ -3247,31 +4184,29 @@ export const server = http.createServer(async (request, response) => {
 server.keepAliveTimeout = 65_000;
 server.headersTimeout = 66_000;
 
-if (process.env.VERCEL !== "1") {
-  server.on("error", (error: NodeJS.ErrnoException) => {
-    if (error.code === "EADDRINUSE") {
-      logFatal(
-        `No se puede iniciar el backend: el puerto ${PORT} ya esta en uso.`,
-        error,
-      );
-      logFatal(
-        "Cierra el proceso anterior o define otro puerto con la variable PORT.",
-        error,
-      );
-      process.exit(1);
-    }
-
-    logFatal("No se pudo iniciar el backend.", error);
+server.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EADDRINUSE") {
+    logFatal(
+      `No se puede iniciar el backend: el puerto ${PORT} ya esta en uso.`,
+      error,
+    );
+    logFatal(
+      "Cierra el proceso anterior o define otro puerto con la variable PORT.",
+      error,
+    );
     process.exit(1);
-  });
+  }
 
-  server.listen(PORT, () => {
-    logInfo(`Backend escuchando en http://localhost:${PORT}`, {
-      port: PORT,
-      nodeEnv: process.env.NODE_ENV ?? "development",
-    });
+  logFatal("No se pudo iniciar el backend.", error);
+  process.exit(1);
+});
+
+if (process.env.VERCEL !== "1") server.listen(PORT, () => {
+  logInfo(`Backend escuchando en http://localhost:${PORT}`, {
+    port: PORT,
+    nodeEnv: process.env.NODE_ENV ?? "development",
   });
-}
+});
 
 process.on("uncaughtException", (error) => {
   logFatal("Excepcion no capturada. El proceso se cerrara.", error);
@@ -3305,13 +4240,16 @@ type CreateEventInput = {
   nombre: string;
   fechaEvento: Date;
   direccion: string;
-  latitud: number;
-  longitud: number;
+  latitud: number | null;
+  longitud: number | null;
+  tipoEvento: EventKind;
+  inspeccionActiva: boolean;
   oficinaIds: number[];
   oficinaIdsFinales: number[];
   oficinaIdsExcluidos: number[];
   cargoCodigos: string[];
   cargoCodigosPorOficina: EventOfficeJobTitleInput[];
+  tiposVinculo: UserLinkType[];
   controles: EventControlInput[];
   creatorEmail: string;
   creatorFullName: string;
@@ -3321,18 +4259,24 @@ type UpdateEventInput = {
   nombre: string;
   fechaEvento: Date;
   direccion: string;
-  latitud: number;
-  longitud: number;
+  latitud: number | null;
+  longitud: number | null;
+  tipoEvento: EventKind;
+  inspeccionActiva: boolean;
   oficinaIds: number[];
   oficinaIdsFinales: number[];
   oficinaIdsExcluidos: number[];
   cargoCodigos: string[];
   cargoCodigosPorOficina: EventOfficeJobTitleInput[];
+  tiposVinculo: UserLinkType[];
   controles: EventControlInput[];
   requesterEmail: string;
 };
 
+type EventKind = "EVENTO" | "INSPECCION";
+
 type RegisterAttendanceInput = {
+  noEsPersona: boolean;
   eventId: number;
   controlId: number;
   qrValue: string | null;
@@ -3351,8 +4295,8 @@ type EventControlInput = {
   id: number | null;
   nombre: string;
   orden: number;
-  horaInicio: string;
-  horaFin: string;
+  horaInicio: string | null;
+  horaFin: string | null;
 };
 
 type ExpandedEventOffice = {
@@ -3378,6 +4322,7 @@ type EventOfficeNode = {
 type LoginInput = {
   email: string;
   password: string;
+  deviceId: string | null;
 };
 
 type UpdateProfileInput = {
@@ -3432,7 +4377,19 @@ type RegisterUserInput = {
   fotoData: string;
 };
 
+type AppleSignInInput = {
+  identityToken: string;
+  authorizationCode: string | null;
+  email: string | null;
+  givenName: string | null;
+  familyName: string | null;
+  deviceId: string | null;
+};
+
 type ManagedUserInput = RegisterUserInput & {
+  controlTemporal: boolean | null;
+  controlInicio: Date | null;
+  controlFin: Date | null;
   rol: (typeof rol_usuario)[keyof typeof rol_usuario];
   requesterEmail: string;
 };
@@ -3446,6 +4403,9 @@ type UpdateManagedUserInput = Omit<
   RegisterUserInput,
   "password" | "fotoData"
 > & {
+  controlTemporal: boolean | null;
+  controlInicio: Date | null;
+  controlFin: Date | null;
   requesterEmail: string;
   rol: (typeof rol_usuario)[keyof typeof rol_usuario];
   password: string | null;
@@ -3515,7 +4475,7 @@ function applyCors(request: IncomingMessage, response: ServerResponse) {
   );
   response.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, x-service",
+    "Content-Type, Authorization, x-service, X-Device-Id, X-Device-Secret, X-Device-Platform",
   );
   response.setHeader("Access-Control-Max-Age", "86400");
   response.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -3611,8 +4571,13 @@ function sendJson(
   statusCode: number,
   payload: unknown,
 ) {
-  // JSON sobre HTTPS: las respuestas no dependen de una clave en la app.
-  response.setHeader("Content-Type", "application/json; charset=utf-8");
+  const encryptedPayload = encryptJsonPayload(payload);
+
+  if (encryptedPayload != null) {
+    payload = encryptedPayload;
+  }
+
+  setSecurityHeaders(response);
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("Pragma", "no-cache");
   response.writeHead(statusCode);
@@ -3624,6 +4589,7 @@ function sendPlainJson(
   statusCode: number,
   payload: unknown,
 ) {
+  setSecurityHeaders(response);
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("Pragma", "no-cache");
   response.writeHead(statusCode);
@@ -3632,11 +4598,9 @@ function sendPlainJson(
 
 function sendHtml(response: ServerResponse, statusCode: number, html: string) {
   response.setHeader("Content-Type", "text/html; charset=utf-8");
+  setSecurityHeaders(response);
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("Pragma", "no-cache");
-  response.setHeader("X-Frame-Options", "DENY");
-  response.setHeader("X-Content-Type-Options", "nosniff");
-  response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader(
     "Content-Security-Policy",
     "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
@@ -3663,6 +4627,7 @@ function sendPdf(
   payload: Buffer,
   filename: string,
 ) {
+  setSecurityHeaders(response);
   response.setHeader("Content-Type", "application/pdf");
   response.setHeader("Content-Length", payload.length);
   response.setHeader(
@@ -3671,6 +4636,13 @@ function sendPdf(
   );
   response.writeHead(statusCode);
   response.end(payload);
+}
+
+function setSecurityHeaders(response: ServerResponse) {
+  response.setHeader("X-Frame-Options", "DENY");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
 }
 
 function buildCredentialPdfFilename(user: {
@@ -3749,6 +4721,7 @@ function invalidateEventAttendanceContextCache(eventId?: number) {
 function parseAllowedCorsOrigins(value: string | undefined) {
   const defaultOrigins = [
     "https://innovafuncionario.cochabamba.bo",
+    "https://soygamc.cochabamba.bo",
     "https://innovafuncionariodev.cochabamba.bo",
     "http://localhost:3000",
     "http://localhost:4016",
@@ -3844,6 +4817,7 @@ async function authenticateRequestIfRequired(
       ci: null,
       rol: rol_usuario.OPERADOR,
       activo: true,
+      deviceId: null,
     };
   }
 
@@ -3851,6 +4825,7 @@ async function authenticateRequestIfRequired(
 
   const token = readBearerToken(request);
   const payload = verifyAuthToken(token);
+  await refreshTemporaryControlRoles();
   const user = await prisma.usuarios.findUnique({
     where: { id: payload.sub },
   });
@@ -3859,7 +4834,14 @@ async function authenticateRequestIfRequired(
     throw new HttpError(401, "Sesion invalida o expirada.");
   }
 
-  await assertTokenSessionIsCurrent(user.id, payload.sv);
+  // TEMPORAL: vinculacion unica desactivada.
+  // await assertApplicationDevice(pool, user.id, payload.did, request);
+  await assertTokenSessionIsCurrent(
+    user.id,
+    user.rol,
+    payload.sv,
+    payload.did,
+  );
 
   return {
     id: user.id,
@@ -3867,18 +4849,22 @@ async function authenticateRequestIfRequired(
     ci: user.ci,
     rol: user.rol,
     activo: user.activo,
+    deviceId: payload.did,
   };
 }
 
 function isPublicRoute(request: IncomingMessage, url: URL) {
-  if (request.method === "POST" && url.pathname === "/api/auth/signup") {
-    return true;
-  }
+  if (request.method === "POST" && url.pathname === "/api/auth/refresh") return true;
+  if (request.method === 'POST' && url.pathname === '/api/auth/biometric/login') return true;
   if (request.method === "GET" && url.pathname === "/") {
     return true;
   }
 
   if (request.method === "GET" && url.pathname === "/health") {
+    return true;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/app/version") {
     return true;
   }
 
@@ -3896,6 +4882,14 @@ function isPublicRoute(request: IncomingMessage, url: URL) {
   // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
 
   if (request.method === "POST" && url.pathname === "/api/auth/login") {
+    return true;
+  }
+
+  if (
+    request.method === "POST" &&
+    (url.pathname === "/api/ios/auth/register" ||
+      url.pathname === "/api/ios/auth/apple")
+  ) {
     return true;
   }
 
@@ -3923,11 +4917,144 @@ function readOptionalBearerToken(request: IncomingMessage) {
   const authorization = request.headers.authorization ?? "";
   const match = authorization.match(/^Bearer\s+(.+)$/i);
 
-  if (!match) {
+  if (match) {
+    return match[1].trim();
+  }
+
+  return readAuthCookieToken(request);
+}
+
+function setAuthCookie(response: ServerResponse, token: string) {
+  const secureAttribute = AUTH_COOKIE_SECURE ? "; Secure" : "";
+
+  response.setHeader(
+    "Set-Cookie",
+    `innova_auth=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secureAttribute}; Max-Age=${60 * 60 * 24 * 30}`,
+  );
+}
+
+function clearAuthCookie(response: ServerResponse) {
+  const secureAttribute = AUTH_COOKIE_SECURE ? "; Secure" : "";
+
+  response.setHeader(
+    "Set-Cookie",
+    `innova_auth=; Path=/; HttpOnly; SameSite=Lax${secureAttribute}; Max-Age=0`,
+  );
+}
+
+function readAuthCookieToken(request: IncomingMessage) {
+  const cookieHeader = readSingleHeader(request.headers.cookie);
+
+  if (cookieHeader == null || cookieHeader.trim().length === 0) {
     return null;
   }
 
-  return match[1].trim();
+  for (const cookie of cookieHeader.split(";")) {
+    const [rawName, ...rawValueParts] = cookie.split("=");
+    const name = rawName?.trim();
+
+    if (name !== "innova_auth") {
+      continue;
+    }
+
+    const rawValue = rawValueParts.join("=").trim();
+
+    if (rawValue.length === 0) {
+      return null;
+    }
+
+    try {
+      return decodeURIComponent(rawValue);
+    } catch {
+      return rawValue;
+    }
+  }
+
+  return null;
+}
+
+const loginAttempts = new Map<
+  string,
+  { count: number; firstAttemptAt: number; blockedUntil: number | null }
+>();
+
+function assertLoginRateLimit(request: IncomingMessage, login: string) {
+  const key = buildLoginRateLimitKey(request, login);
+  const entry = loginAttempts.get(key);
+  const now = Date.now();
+
+  if (entry == null) {
+    return;
+  }
+
+  if (entry.blockedUntil != null && entry.blockedUntil > now) {
+    throw new HttpError(
+      429,
+      "Demasiados intentos de inicio de sesion. Intenta nuevamente en unos minutos.",
+    );
+  }
+
+  if (now - entry.firstAttemptAt > LOGIN_RATE_LIMIT_WINDOW_MS) {
+    loginAttempts.delete(key);
+  }
+}
+
+function recordFailedLoginAttempt(request: IncomingMessage, login: string) {
+  const key = buildLoginRateLimitKey(request, login);
+  const now = Date.now();
+  const current = loginAttempts.get(key);
+  const entry =
+    current == null || now - current.firstAttemptAt > LOGIN_RATE_LIMIT_WINDOW_MS
+      ? { count: 0, firstAttemptAt: now, blockedUntil: null }
+      : current;
+
+  entry.count++;
+
+  if (entry.count >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS) {
+    entry.blockedUntil = now + LOGIN_RATE_LIMIT_WINDOW_MS;
+  }
+
+  loginAttempts.set(key, entry);
+}
+
+function clearLoginRateLimit(request: IncomingMessage, login: string) {
+  loginAttempts.delete(buildLoginRateLimitKey(request, login));
+}
+
+function buildLoginRateLimitKey(request: IncomingMessage, login: string) {
+  return `${readClientIp(request)}:${normalizeEmailValue(login)}`;
+}
+
+async function readOptionalAuthenticatedRatingUser(request: IncomingMessage) {
+  const token = readOptionalBearerToken(request);
+
+  if (token == null) {
+    return null;
+  }
+
+  try {
+    const payload = verifyAuthToken(token);
+    const user = await prisma.usuarios.findUnique({
+      where: { id: payload.sub },
+      include: userWithOfficeInclude,
+    });
+
+    if (!user || user.activo !== true) {
+      return null;
+    }
+
+    // TEMPORAL: vinculacion unica desactivada.
+  // await assertApplicationDevice(pool, user.id, payload.did, request);
+    await assertTokenSessionIsCurrent(
+      user.id,
+      user.rol,
+      payload.sv,
+      payload.did,
+    );
+    return user;
+  } catch (_) {
+    return null;
+  }
 }
 
 // INICIO SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
@@ -3984,13 +5111,28 @@ type AuthTokenPayload = {
   exp: number;
   iat: number;
   sv: number;
+  did: string | null;
 };
+
+async function createRefreshToken(userId: number, deviceId: string | null, authToken: string) {
+  return issueRefreshSession(pool, {
+    user_id: userId, device_id: deviceId,
+    session_version: verifyAuthToken(authToken).sv,
+  });
+}
+
+async function authorizeRefreshIdentity(identity: RefreshIdentity) {
+  const user = await prisma.usuarios.findUnique({ where: { id: identity.user_id } });
+  if (!user || !user.activo) throw new HttpError(401, "Cuenta inactiva o inexistente.");
+  await assertTokenSessionIsCurrent(user.id, user.rol, identity.session_version, identity.device_id);
+  return user;
+}
 
 async function createAuthToken(user: {
   id: number;
   email: string;
   rol?: string | null;
-}) {
+}, deviceId: string | null = null, sessionVersion?: number) {
   const issuedAt = Math.floor(Date.now() / 1000);
   const header = base64UrlEncodeJson({ alg: "HS256", typ: "JWT" });
   const payload = base64UrlEncodeJson({
@@ -3999,7 +5141,9 @@ async function createAuthToken(user: {
     rol: user.rol ?? rol_usuario.OPERADOR,
     iat: issuedAt,
     exp: issuedAt + JWT_TTL_SECONDS,
-    sv: await readUserSessionVersion(user.id),
+    token_use: "access",
+    sv: sessionVersion ?? await readUserSessionVersion(user.id),
+    did: deviceId,
   });
   const unsignedToken = `${header}.${payload}`;
   const signature = signJwt(unsignedToken);
@@ -4008,56 +5152,23 @@ async function createAuthToken(user: {
 }
 
 function verifyAuthToken(token: string): AuthTokenPayload {
-  const parts = token.split(".");
-
-  if (parts.length !== 3) {
-    throw new HttpError(401, "Token de sesion invalido.");
-  }
-
-  const [header, payload, signature] = parts;
-  const unsignedToken = `${header}.${payload}`;
-  const expectedSignature = signJwt(unsignedToken);
-
-  if (!safeEqualText(signature, expectedSignature)) {
-    throw new HttpError(401, "Token de sesion invalido.");
-  }
-
-  const parsedPayload = parseBase64UrlJson(payload);
-  const sub = readFiniteNumber(parsedPayload.sub);
-  const exp = readFiniteNumber(parsedPayload.exp);
-  const iat = readFiniteNumber(parsedPayload.iat) ?? 0;
-  const sv = readFiniteNumber(parsedPayload.sv) ?? 0;
-  const email =
-    typeof parsedPayload.email === "string"
-      ? normalizeEmailValue(parsedPayload.email)
-      : "";
-
-  if (sub == null || exp == null) {
-    throw new HttpError(401, "Token de sesion invalido.");
-  }
-
-  if (exp <= Math.floor(Date.now() / 1000)) {
-    throw new HttpError(401, "Sesion expirada. Inicia sesion nuevamente.");
-  }
-
-  return {
-    sub,
-    email,
-    rol: typeof parsedPayload.rol === "string" ? parsedPayload.rol : "",
-    exp,
-    iat,
-    sv,
-  };
+  return verifySessionJwt(token, JWT_SECRET, undefined, false);
 }
 
 async function assertTokenSessionIsCurrent(
   userId: number,
+  role: (typeof rol_usuario)[keyof typeof rol_usuario],
   tokenSessionVersion: number,
+  deviceId: string | null,
 ) {
   const currentSessionVersion = await readUserSessionVersion(userId);
 
   if (currentSessionVersion !== tokenSessionVersion) {
     throw new HttpError(401, "Sesion cerrada. Inicia sesion nuevamente.");
+  }
+
+  if (deviceId != null) {
+    await assertUserDeviceSessionIsActive(userId, deviceId);
   }
 }
 
@@ -4073,13 +5184,108 @@ async function readUserSessionVersion(userId: number) {
   return Number.isInteger(version) && version >= 0 ? version : 0;
 }
 
+async function registerUserDeviceSession(
+  userId: number,
+  deviceId: string | null,
+) {
+  if (deviceId == null) {
+    return;
+  }
+
+  // TEMPORAL: permitir sesiones simultaneas, como antes.
+  // await pool.query('UPDATE usuarios SET session_version=session_version+1 WHERE id=$1', [userId]);
+  await pool.query(
+    `
+      INSERT INTO "usuario_sesiones_dispositivo" (
+        "usuario_id",
+        "device_id",
+        "last_login_at",
+        "revoked_at",
+        "updated_at"
+      )
+      VALUES ($1, $2, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP)
+      ON CONFLICT ("usuario_id", "device_id") DO UPDATE SET
+        "last_login_at" = CURRENT_TIMESTAMP,
+        "revoked_at" = NULL,
+        "updated_at" = CURRENT_TIMESTAMP
+    `,
+    [userId, deviceId],
+  );
+
+  await pool.query(
+    `
+      WITH ranked_sessions AS (
+        SELECT
+          "id",
+          ROW_NUMBER() OVER (
+            PARTITION BY "usuario_id"
+            ORDER BY "last_login_at" DESC, "id" DESC
+          ) AS "position"
+        FROM "usuario_sesiones_dispositivo"
+        WHERE "usuario_id" = $1
+          AND "revoked_at" IS NULL
+      )
+      UPDATE "usuario_sesiones_dispositivo" s
+      SET "revoked_at" = CURRENT_TIMESTAMP,
+          "updated_at" = CURRENT_TIMESTAMP
+      FROM ranked_sessions r
+      WHERE s."id" = r."id"
+        AND r."position" > 5
+    `,
+    [userId],
+  );
+}
+
+async function assertUserDeviceSessionIsActive(userId: number, deviceId: string) {
+  const result = await pool.query<{ active: boolean }>(
+    `
+      SELECT "revoked_at" IS NULL AS "active"
+      FROM "usuario_sesiones_dispositivo"
+      WHERE "usuario_id" = $1
+        AND "device_id" = $2
+    `,
+    [userId, deviceId],
+  );
+
+  if (result.rows[0]?.active !== true) {
+    throw new HttpError(401, "Sesion cerrada en este dispositivo.");
+  }
+}
+
+async function revokeUserDeviceSession(userId: number, deviceId: string) {
+  await pool.query("DELETE FROM auth_refresh_sessions WHERE user_id=$1 AND device_id=$2", [userId, deviceId]);
+  await pool.query(
+    `
+      UPDATE "usuario_sesiones_dispositivo"
+      SET "revoked_at" = CURRENT_TIMESTAMP,
+          "updated_at" = CURRENT_TIMESTAMP
+      WHERE "usuario_id" = $1
+        AND "device_id" = $2
+    `,
+    [userId, deviceId],
+  );
+}
+
 async function revokeUserSessions(userId: number) {
+  await pool.query("DELETE FROM auth_refresh_sessions WHERE user_id=$1", [userId]);
+  await pool.query('UPDATE aplicacion_dispositivos SET biometric_hash=NULL,biometric_expira=NULL WHERE usuario_id=$1', [userId]);
   await pool.query(
     `
       UPDATE "usuarios"
       SET "session_version" = COALESCE("session_version", 0) + 1,
           "updated_at" = NOW()
       WHERE "id" = $1
+    `,
+    [userId],
+  );
+
+  await pool.query(
+    `
+      UPDATE "usuario_sesiones_dispositivo"
+      SET "revoked_at" = CURRENT_TIMESTAMP,
+          "updated_at" = CURRENT_TIMESTAMP
+      WHERE "usuario_id" = $1
+        AND "revoked_at" IS NULL
     `,
     [userId],
   );
@@ -4115,6 +5321,301 @@ function parseBase64UrlJson(value: string) {
   }
 }
 
+async function verifyAppleIdentityToken(identityToken: string) {
+  const parts = identityToken.split(".");
+
+  if (parts.length !== 3) {
+    throw new HttpError(401, "Token de Apple invalido.");
+  }
+
+  const [encodedHeader, encodedPayload, encodedSignature] = parts;
+  const header = parseBase64UrlJsonWithMessage(
+    encodedHeader,
+    "Token de Apple invalido.",
+  );
+  const payload = parseBase64UrlJsonWithMessage(
+    encodedPayload,
+    "Token de Apple invalido.",
+  );
+  const kid = readRequiredAppleString(header.kid, "kid");
+  const alg = readRequiredAppleString(header.alg, "alg");
+
+  if (alg !== "RS256") {
+    throw new HttpError(401, "Token de Apple invalido.");
+  }
+
+  const keys = await loadAppleJwks();
+  const key = keys.find((item) => item.kid === kid);
+
+  if (key == null) {
+    throw new HttpError(401, "Token de Apple invalido.");
+  }
+
+  const publicKey = createPublicKey({ key, format: "jwk" });
+  const hasValidSignature = verifyCryptoSignature(
+    "RSA-SHA256",
+    Buffer.from(`${encodedHeader}.${encodedPayload}`),
+    publicKey,
+    Buffer.from(encodedSignature, "base64url"),
+  );
+
+  if (!hasValidSignature) {
+    throw new HttpError(401, "Token de Apple invalido.");
+  }
+
+  const issuer = readRequiredAppleString(payload.iss, "iss");
+  const audience = readRequiredAppleString(payload.aud, "aud");
+  const expiresAt = readFiniteNumber(payload.exp);
+
+  if (issuer !== "https://appleid.apple.com") {
+    throw new HttpError(401, "Token de Apple invalido.");
+  }
+
+  if (audience !== APPLE_BUNDLE_ID) {
+    throw new HttpError(401, "Token de Apple no corresponde a esta app.");
+  }
+
+  if (expiresAt == null || expiresAt <= Math.floor(Date.now() / 1000)) {
+    throw new HttpError(401, "Token de Apple expirado.");
+  }
+
+  return payload;
+}
+
+function parseBase64UrlJsonWithMessage(value: string, message: string) {
+  try {
+    const parsedValue = JSON.parse(
+      Buffer.from(value, "base64url").toString("utf8"),
+    );
+
+    if (
+      !parsedValue ||
+      typeof parsedValue !== "object" ||
+      Array.isArray(parsedValue)
+    ) {
+      throw new Error("Invalid payload");
+    }
+
+    return parsedValue as JsonRecord;
+  } catch {
+    throw new HttpError(401, message);
+  }
+}
+
+async function loadAppleJwks() {
+  if (
+    appleJwksCache != null &&
+    appleJwksCache.expiresAt > Date.now() &&
+    appleJwksCache.value.length > 0
+  ) {
+    return appleJwksCache.value;
+  }
+
+  const response = await fetch(APPLE_JWKS_URL);
+
+  if (!response.ok) {
+    throw new HttpError(503, "No se pudo validar Apple ID en este momento.");
+  }
+
+  const body = (await response.json()) as unknown;
+  const record = expectRecord(body);
+  const rawKeys = record.keys;
+
+  if (!Array.isArray(rawKeys)) {
+    throw new HttpError(503, "No se pudo validar Apple ID en este momento.");
+  }
+
+  const keys = rawKeys
+    .filter((item): item is JsonRecord => {
+      return item != null && typeof item === "object" && !Array.isArray(item);
+    })
+    .map((item) => item as JsonRecord);
+  appleJwksCache = {
+    value: keys,
+    expiresAt: Date.now() + 60 * 60 * 1000,
+  };
+
+  return keys;
+}
+
+async function exchangeAppleAuthorizationCode(authorizationCode: string | null) {
+  if (authorizationCode == null) {
+    return null;
+  }
+
+  const clientSecret = buildAppleClientSecret();
+
+  if (clientSecret == null) {
+    logWarning(
+      "APPLE_TEAM_ID, APPLE_KEY_ID o APPLE_PRIVATE_KEY no estan configurados; no se pudo obtener refresh token de Apple.",
+    );
+    return null;
+  }
+
+  const response = await fetch(APPLE_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: APPLE_BUNDLE_ID,
+      client_secret: clientSecret,
+      code: authorizationCode,
+      grant_type: "authorization_code",
+    }),
+  });
+
+  if (!response.ok) {
+    logWarning("Apple no devolvio refresh token para Sign in with Apple.", {
+      statusCode: response.status,
+    });
+    return null;
+  }
+
+  const body = (await response.json()) as unknown;
+  const tokenBody = expectRecord(body);
+
+  return normalizeOptionalText(tokenBody.refresh_token);
+}
+
+async function revokeAppleRefreshToken(refreshToken: string | null) {
+  if (refreshToken == null) {
+    return;
+  }
+
+  const clientSecret = buildAppleClientSecret();
+
+  if (clientSecret == null) {
+    logWarning(
+      "APPLE_TEAM_ID, APPLE_KEY_ID o APPLE_PRIVATE_KEY no estan configurados; no se pudo revocar token de Apple.",
+    );
+    return;
+  }
+
+  const response = await fetch(APPLE_REVOKE_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: APPLE_BUNDLE_ID,
+      client_secret: clientSecret,
+      token: refreshToken,
+      token_type_hint: "refresh_token",
+    }),
+  });
+
+  if (!response.ok) {
+    logWarning("Apple no pudo revocar el refresh token.", {
+      statusCode: response.status,
+    });
+  }
+}
+
+function buildAppleClientSecret() {
+  if (
+    APPLE_TEAM_ID == null ||
+    APPLE_KEY_ID == null ||
+    APPLE_PRIVATE_KEY == null
+  ) {
+    return null;
+  }
+
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const header = base64UrlEncodeJson({ alg: "ES256", kid: APPLE_KEY_ID });
+  const payload = base64UrlEncodeJson({
+    iss: APPLE_TEAM_ID,
+    iat: issuedAt,
+    exp: issuedAt + 60 * 60 * 24 * 180,
+    aud: "https://appleid.apple.com",
+    sub: APPLE_BUNDLE_ID,
+  });
+  const unsignedToken = `${header}.${payload}`;
+  const signer = createSign("SHA256");
+
+  signer.update(unsignedToken);
+  signer.end();
+
+  const derSignature = signer.sign(createPrivateKey(APPLE_PRIVATE_KEY));
+  const signature = convertEcdsaDerToJose(derSignature, 32);
+
+  return `${unsignedToken}.${signature.toString("base64url")}`;
+}
+
+function convertEcdsaDerToJose(signature: Buffer, size: number) {
+  let offset = 0;
+
+  if (signature[offset++] !== 0x30) {
+    throw new HttpError(500, "Firma Apple invalida.");
+  }
+
+  offset = readDerLength(signature, offset).offset;
+
+  if (signature[offset++] !== 0x02) {
+    throw new HttpError(500, "Firma Apple invalida.");
+  }
+
+  const rLength = readDerLength(signature, offset);
+  offset = rLength.offset;
+  const r = signature.subarray(offset, offset + rLength.length);
+  offset += rLength.length;
+
+  if (signature[offset++] !== 0x02) {
+    throw new HttpError(500, "Firma Apple invalida.");
+  }
+
+  const sLength = readDerLength(signature, offset);
+  offset = sLength.offset;
+  const s = signature.subarray(offset, offset + sLength.length);
+
+  return Buffer.concat([
+    normalizeEcdsaInteger(r, size),
+    normalizeEcdsaInteger(s, size),
+  ]);
+}
+
+function readDerLength(signature: Buffer, offset: number) {
+  const first = signature[offset++];
+
+  if (first == null) {
+    throw new HttpError(500, "Firma Apple invalida.");
+  }
+
+  if (first < 0x80) {
+    return { length: first, offset };
+  }
+
+  const bytes = first & 0x7f;
+  let length = 0;
+
+  for (let index = 0; index < bytes; index += 1) {
+    const value = signature[offset++];
+
+    if (value == null) {
+      throw new HttpError(500, "Firma Apple invalida.");
+    }
+
+    length = (length << 8) | value;
+  }
+
+  return { length, offset };
+}
+
+function normalizeEcdsaInteger(value: Buffer, size: number) {
+  const trimmed =
+    value.length > size ? value.subarray(value.length - size) : value;
+
+  if (trimmed.length === size) {
+    return trimmed;
+  }
+
+  return Buffer.concat([Buffer.alloc(size - trimmed.length), trimmed]);
+}
+
+function readRequiredAppleString(value: unknown, fieldName: string) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new HttpError(401, `Token de Apple sin ${fieldName}.`);
+  }
+
+  return value.trim();
+}
+
 function safeEqualText(left: string, right: string) {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
@@ -4126,6 +5627,41 @@ function safeEqualText(left: string, right: string) {
 }
 
 async function ensureRuntimeSchema() {
+  await pool.query(refreshSessionSchemaSql);
+  await pool.query(applicationDeviceSchemaSql);
+  await pool.query(`ALTER TABLE "usuarios"
+    ADD COLUMN IF NOT EXISTS "control_rol_anterior" "rol_usuario",
+    ADD COLUMN IF NOT EXISTS "control_inicio" TIMESTAMP(6),
+    ADD COLUMN IF NOT EXISTS "control_fin" TIMESTAMP(6)`);
+  await pool.query(controlPeriodUtcSchemaSql);
+  await pool.query(`
+    ALTER TABLE "usuarios"
+      ADD COLUMN IF NOT EXISTS "apple_sub" VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS "apple_refresh_token" TEXT,
+      ADD COLUMN IF NOT EXISTS "account_deleted_at" TIMESTAMPTZ(6)
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "usuarios_apple_sub_key"
+      ON "usuarios"("apple_sub")
+      WHERE "apple_sub" IS NOT NULL
+  `);
+  await pool.query(`
+    ALTER TABLE "eventos"
+      ADD COLUMN IF NOT EXISTS "tipo" VARCHAR(20) NOT NULL DEFAULT 'EVENTO',
+      ADD COLUMN IF NOT EXISTS "inspeccion_activa" BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS "tipos_vinculo" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_eventos_tipo_inspeccion_activa"
+      ON "eventos" ("tipo", "inspeccion_activa")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_eventos_tipos_vinculo"
+      ON "eventos" USING GIN ("tipos_vinculo")
+  `);
+
   await pool.query(`
     ALTER TABLE "evento_controles"
       ADD COLUMN IF NOT EXISTS "hora_inicio" VARCHAR(5),
@@ -4134,12 +5670,48 @@ async function ensureRuntimeSchema() {
 
   await pool.query(`
     ALTER TABLE "asistencia_controles"
-      ADD COLUMN IF NOT EXISTS "retrasado" BOOLEAN NOT NULL DEFAULT FALSE
+      ADD COLUMN IF NOT EXISTS "retrasado" BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS "no_es_persona" BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS "fuente_registro" VARCHAR(2)
   `);
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_asistencia_controles_retrasado"
       ON "asistencia_controles" ("retrasado")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "inspeccion_falta_motivos" (
+      "evento_id" INTEGER NOT NULL,
+      "persona_id" INTEGER NOT NULL,
+      "motivo" TEXT,
+      "registrado_por_id" INTEGER,
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "inspeccion_falta_motivos_pkey" PRIMARY KEY ("evento_id", "persona_id"),
+      CONSTRAINT "inspeccion_falta_motivos_evento_id_fkey"
+        FOREIGN KEY ("evento_id") REFERENCES "eventos" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "inspeccion_falta_motivos_persona_id_fkey"
+        FOREIGN KEY ("persona_id") REFERENCES "personas" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "inspeccion_falta_motivos_registrado_por_id_fkey"
+        FOREIGN KEY ("registrado_por_id") REFERENCES "usuarios" ("id")
+        ON DELETE SET NULL
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_inspeccion_falta_motivos_persona_id"
+      ON "inspeccion_falta_motivos" ("persona_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_inspeccion_falta_motivos_registrado_por_id"
+      ON "inspeccion_falta_motivos" ("registrado_por_id")
   `);
 
   await pool.query(`
@@ -4150,6 +5722,141 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     ALTER TABLE "usuarios"
     ADD COLUMN IF NOT EXISTS "lugar" VARCHAR(120)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "lugares" (
+      "id" SERIAL PRIMARY KEY,
+      "oficina_id" INTEGER,
+      "nombre" VARCHAR(150) NOT NULL,
+      "latitud" DOUBLE PRECISION,
+      "longitud" DOUBLE PRECISION,
+      "radio_metros" INTEGER,
+      "activo" BOOLEAN NOT NULL DEFAULT TRUE,
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_lugares_activo"
+      ON "lugares" ("activo")
+  `);
+
+  await pool.query(`
+    ALTER TABLE "lugares"
+      ADD COLUMN IF NOT EXISTS "oficina_id" INTEGER,
+      ADD COLUMN IF NOT EXISTS "latitud" DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS "longitud" DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS "radio_metros" INTEGER
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'lugares_oficina_id_fkey'
+      ) THEN
+        ALTER TABLE "lugares"
+          ADD CONSTRAINT "lugares_oficina_id_fkey"
+          FOREIGN KEY ("oficina_id")
+          REFERENCES "oficinas" ("id")
+          ON DELETE CASCADE
+          ON UPDATE NO ACTION;
+      END IF;
+    END $$
+  `);
+
+  await pool.query(`DROP INDEX IF EXISTS "lugares_oficina_id_key"`);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_lugares_oficina_id"
+      ON "lugares" ("oficina_id")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "lugar_oficinas" (
+      "lugar_id" INTEGER NOT NULL,
+      "oficina_id" INTEGER NOT NULL,
+      CONSTRAINT "lugar_oficinas_pkey" PRIMARY KEY ("lugar_id", "oficina_id"),
+      CONSTRAINT "lugar_oficinas_lugar_id_fkey"
+        FOREIGN KEY ("lugar_id") REFERENCES "lugares" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "lugar_oficinas_oficina_id_fkey"
+        FOREIGN KEY ("oficina_id") REFERENCES "oficinas" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_lugar_oficinas_oficina_id"
+      ON "lugar_oficinas" ("oficina_id")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "lugar_pisos" (
+      "id" SERIAL PRIMARY KEY,
+      "lugar_id" INTEGER NOT NULL,
+      "nombre" VARCHAR(120) NOT NULL,
+      "orden" INTEGER NOT NULL DEFAULT 0,
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "lugar_pisos_lugar_id_fkey"
+        FOREIGN KEY ("lugar_id") REFERENCES "lugares" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_lugar_pisos_lugar_id"
+      ON "lugar_pisos" ("lugar_id")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "lugar_piso_oficinas" (
+      "piso_id" INTEGER NOT NULL,
+      "oficina_id" INTEGER NOT NULL,
+      CONSTRAINT "lugar_piso_oficinas_pkey" PRIMARY KEY ("piso_id", "oficina_id"),
+      CONSTRAINT "lugar_piso_oficinas_piso_id_fkey"
+        FOREIGN KEY ("piso_id") REFERENCES "lugar_pisos" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "lugar_piso_oficinas_oficina_id_fkey"
+        FOREIGN KEY ("oficina_id") REFERENCES "oficinas" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_lugar_piso_oficinas_oficina_id"
+      ON "lugar_piso_oficinas" ("oficina_id")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "lugar_usuario_exclusiones" (
+      "lugar_id" INTEGER NOT NULL,
+      "usuario_id" INTEGER NOT NULL,
+      CONSTRAINT "lugar_usuario_exclusiones_pkey" PRIMARY KEY ("lugar_id", "usuario_id"),
+      CONSTRAINT "lugar_usuario_exclusiones_lugar_id_fkey"
+        FOREIGN KEY ("lugar_id") REFERENCES "lugares" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "lugar_usuario_exclusiones_usuario_id_fkey"
+        FOREIGN KEY ("usuario_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_lugar_usuario_exclusiones_usuario_id"
+      ON "lugar_usuario_exclusiones" ("usuario_id")
   `);
 
   await pool.query(`
@@ -4166,6 +5873,61 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     ALTER TABLE "usuarios"
       ADD COLUMN IF NOT EXISTS "session_version" INTEGER NOT NULL DEFAULT 0
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "usuario_sesiones_dispositivo" (
+      "id" SERIAL PRIMARY KEY,
+      "usuario_id" INTEGER NOT NULL,
+      "device_id" VARCHAR(120) NOT NULL,
+      "last_login_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "revoked_at" TIMESTAMPTZ(6),
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "usuario_sesiones_dispositivo_usuario_id_fkey"
+        FOREIGN KEY ("usuario_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "usuario_sesiones_dispositivo_usuario_device_key"
+        UNIQUE ("usuario_id", "device_id")
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_usuario_sesiones_dispositivo_usuario"
+      ON "usuario_sesiones_dispositivo" ("usuario_id", "last_login_at" DESC)
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_usuario_sesiones_dispositivo_device"
+      ON "usuario_sesiones_dispositivo" ("usuario_id", "device_id")
+  `);
+
+  await pool.query(`
+    UPDATE "oficinas"
+    SET "cod" = CASE "id"
+      WHEN 2217 THEN '10.4.3'
+      WHEN 2216 THEN '10.4.4'
+      WHEN 2218 THEN '10.4.5'
+      WHEN 2215 THEN '10.4.6'
+      WHEN 2219 THEN '10.4.7'
+      WHEN 2214 THEN '10.4.8'
+      ELSE "cod"
+    END
+    WHERE "id" IN (2214, 2215, 2216, 2217, 2218, 2219)
+      AND "cod" IN ('10.2.2', '10.2.3', '10.2.4', '10.2.5', '10.2.6', '10.2.7')
+  `);
+
+  await pool.query(`
+    UPDATE "oficinas"
+    SET "cod" = CASE "id"
+      WHEN 2174 THEN '11'
+      WHEN 2202 THEN '11.0'
+      WHEN 2317 THEN '11.2.3'
+      ELSE "cod"
+    END
+    WHERE "id" IN (2174, 2202, 2317)
+      AND "cod" IN ('11.0.0.0', '11', '11.0.01')
   `);
 
   await pool.query(`
@@ -4199,6 +5961,10 @@ async function ensureRuntimeSchema() {
 
   await pool.query(`
     ALTER TYPE "rol_usuario" ADD VALUE IF NOT EXISTS 'LECTOR_USUARIOS'
+  `);
+
+  await pool.query(`
+    ALTER TYPE "rol_usuario" ADD VALUE IF NOT EXISTS 'KARDEX'
   `);
 
   await pool.query(`
@@ -4328,6 +6094,43 @@ async function ensureRuntimeSchema() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS "salida_aprobador_delegaciones" (
+      "id" SERIAL PRIMARY KEY,
+      "otorgante_id" INTEGER NOT NULL,
+      "delegado_id" INTEGER NOT NULL,
+      "creado_por_id" INTEGER NOT NULL,
+      "activo" BOOLEAN NOT NULL DEFAULT TRUE,
+      "revocado_por_id" INTEGER,
+      "revocado_en" TIMESTAMPTZ(6),
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "salida_aprobador_delegaciones_otorgante_id_fkey"
+        FOREIGN KEY ("otorgante_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "salida_aprobador_delegaciones_delegado_id_fkey"
+        FOREIGN KEY ("delegado_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "salida_aprobador_delegaciones_creado_por_id_fkey"
+        FOREIGN KEY ("creado_por_id") REFERENCES "usuarios" ("id")
+        ON UPDATE NO ACTION,
+      CONSTRAINT "salida_aprobador_delegaciones_otorgante_delegado_key"
+        UNIQUE ("otorgante_id", "delegado_id")
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salida_aprobador_delegaciones_delegado"
+      ON "salida_aprobador_delegaciones" ("delegado_id", "activo")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salida_aprobador_delegaciones_otorgante"
+      ON "salida_aprobador_delegaciones" ("otorgante_id", "activo")
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS "notificacion_envios" (
       "id" SERIAL PRIMARY KEY,
       "enviado_por_id" INTEGER NOT NULL,
@@ -4435,6 +6238,54 @@ async function ensureRuntimeSchema() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS "almuerzo_usuario_exclusiones" (
+      "id" SERIAL PRIMARY KEY,
+      "usuario_id" INTEGER NOT NULL,
+      "activo_desde" DATE NOT NULL,
+      "activo_hasta" DATE,
+      "creado_por_id" INTEGER,
+      "cerrado_por_id" INTEGER,
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "almuerzo_usuario_exclusiones_usuario_id_fkey"
+        FOREIGN KEY ("usuario_id") REFERENCES "usuarios" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "almuerzo_usuario_exclusiones_creado_por_id_fkey"
+        FOREIGN KEY ("creado_por_id") REFERENCES "usuarios" ("id")
+        ON DELETE SET NULL
+        ON UPDATE NO ACTION,
+      CONSTRAINT "almuerzo_usuario_exclusiones_cerrado_por_id_fkey"
+        FOREIGN KEY ("cerrado_por_id") REFERENCES "usuarios" ("id")
+        ON DELETE SET NULL
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_almuerzo_usuario_exclusiones_usuario_fecha"
+      ON "almuerzo_usuario_exclusiones" ("usuario_id", "activo_desde", "activo_hasta")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_almuerzo_usuario_exclusiones_activo_hasta"
+      ON "almuerzo_usuario_exclusiones" ("activo_hasta")
+  `);
+
+  await pool.query(`
+    UPDATE "almuerzos"
+    SET
+      "hora_retorno" = NULL,
+      "retorno_en" = NULL,
+      "registrado_retorno_por_id" = NULL,
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE
+      "retorno_en" IS NOT NULL
+      AND "salida_en" IS NOT NULL
+      AND "retorno_en" < "salida_en" + INTERVAL '15 minutes'
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS "evento_cargos" (
       "evento_id" INTEGER NOT NULL,
       "cargo_codigo" VARCHAR(50) NOT NULL,
@@ -4522,6 +6373,7 @@ async function ensureRuntimeSchema() {
       "qr_leido" TEXT,
       "datos_qr_snapshot" JSONB,
       "solicitante_nombre_completo" VARCHAR(220) NOT NULL,
+      "solicitante_ci" VARCHAR(30),
       "solicitante_numero_item" VARCHAR(50),
       "solicitante_cargo" VARCHAR(120),
       "solicitante_oficina_id" INTEGER,
@@ -4548,6 +6400,7 @@ async function ensureRuntimeSchema() {
       ADD COLUMN IF NOT EXISTS "registrado_llegada_por_id" INTEGER,
       ADD COLUMN IF NOT EXISTS "qr_leido" TEXT,
       ADD COLUMN IF NOT EXISTS "datos_qr_snapshot" JSONB,
+      ADD COLUMN IF NOT EXISTS "solicitante_ci" VARCHAR(30),
       ADD COLUMN IF NOT EXISTS "solicitante_oficina_id" INTEGER,
       ADD COLUMN IF NOT EXISTS "aprobado_por_id" INTEGER,
       ADD COLUMN IF NOT EXISTS "aprobado_por_nombre" VARCHAR(220),
@@ -4560,8 +6413,11 @@ async function ensureRuntimeSchema() {
   `);
 
   await pool.query(`
-    ALTER TABLE "salidas"
-      DROP COLUMN IF EXISTS "solicitante_ci"
+    UPDATE "salidas" s
+    SET "solicitante_ci" = u."ci"
+    FROM "usuarios" u
+    WHERE s."usuario_id" = u."id"
+      AND s."solicitante_ci" IS NULL
   `);
 
   await pool.query(`
@@ -4626,6 +6482,11 @@ async function ensureRuntimeSchema() {
   `);
 
   await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_salidas_solicitante_ci"
+      ON "salidas" ("solicitante_ci")
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_salidas_solicitante_oficina_id"
       ON "salidas" ("solicitante_oficina_id")
   `);
@@ -4648,6 +6509,82 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_salidas_usuario_id"
       ON "salidas" ("usuario_id")
+  `);
+
+  await pool.query(`
+    ALTER TABLE "asistencias"
+      ADD COLUMN IF NOT EXISTS "ci_snapshot" VARCHAR(30),
+      ADD COLUMN IF NOT EXISTS "cargo_snapshot" VARCHAR(150),
+      ADD COLUMN IF NOT EXISTS "oficina_id_snapshot" INTEGER,
+      ADD COLUMN IF NOT EXISTS "oficina_snapshot" VARCHAR(180),
+      ADD COLUMN IF NOT EXISTS "oficina_cod_snapshot" VARCHAR(50)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "evento_personas_snapshot" (
+      "evento_id" INTEGER NOT NULL,
+      "persona_id" INTEGER NOT NULL,
+      "usuario_id" INTEGER,
+      "nombre_snapshot" VARCHAR(150) NOT NULL,
+      "ci_snapshot" VARCHAR(30),
+      "tipo_vinculo_snapshot" VARCHAR(30),
+      "cargo_snapshot" VARCHAR(150),
+      "oficina_id_snapshot" INTEGER,
+      "oficina_snapshot" VARCHAR(180),
+      "oficina_cod_snapshot" VARCHAR(50),
+      "motivo_registro" VARCHAR(80),
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "evento_personas_snapshot_pkey" PRIMARY KEY ("evento_id", "persona_id"),
+      CONSTRAINT "evento_personas_snapshot_evento_id_fkey"
+        FOREIGN KEY ("evento_id") REFERENCES "eventos" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION,
+      CONSTRAINT "evento_personas_snapshot_persona_id_fkey"
+        FOREIGN KEY ("persona_id") REFERENCES "personas" ("id")
+        ON DELETE CASCADE
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE "evento_personas_snapshot"
+      ADD COLUMN IF NOT EXISTS "tipo_vinculo_snapshot" VARCHAR(30)
+  `);
+
+  await pool.query(`
+    UPDATE "evento_personas_snapshot" eps
+    SET "tipo_vinculo_snapshot" = COALESCE(eps."tipo_vinculo_snapshot", u."tipo_vinculo")
+    FROM "personas" p, "usuarios" u
+    WHERE p."id" = eps."persona_id"
+      AND u."id" = COALESCE(eps."usuario_id", p."usuario_id")
+      AND eps."tipo_vinculo_snapshot" IS NULL
+      AND u."tipo_vinculo" IS NOT NULL
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_evento_personas_snapshot_evento_id"
+      ON "evento_personas_snapshot" ("evento_id")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_evento_personas_snapshot_persona_id"
+      ON "evento_personas_snapshot" ("persona_id")
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "personal_report_snapshots" (
+      "report_date" DATE NOT NULL,
+      "usuario_id" INTEGER NOT NULL,
+      "usuario_snapshot" JSONB NOT NULL,
+      "created_by_id" INTEGER,
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "personal_report_snapshots_pkey" PRIMARY KEY ("report_date", "usuario_id")
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_personal_report_snapshots_report_date"
+      ON "personal_report_snapshots" ("report_date")
   `);
 
   await pool.query(`
@@ -4731,6 +6668,7 @@ async function ensureRuntimeSchema() {
       "ip_hash" VARCHAR(64),
       "funcionario_nombre_completo" VARCHAR(220) NOT NULL,
       "funcionario_ci" VARCHAR(30),
+      "funcionario_cargo_codigo" VARCHAR(50),
       "funcionario_cargo" VARCHAR(120),
       "funcionario_oficina_id" INTEGER,
       "funcionario_oficina" VARCHAR(150),
@@ -4745,7 +6683,36 @@ async function ensureRuntimeSchema() {
   await pool.query(`
     ALTER TABLE "calificaciones_funcionario"
       ADD COLUMN IF NOT EXISTS "calificador_nombre" VARCHAR(120),
-      ADD COLUMN IF NOT EXISTS "calificador_celular" VARCHAR(30)
+      ADD COLUMN IF NOT EXISTS "calificador_celular" VARCHAR(30),
+      ADD COLUMN IF NOT EXISTS "device_id_public" VARCHAR(220),
+      ADD COLUMN IF NOT EXISTS "funcionario_cargo_codigo" VARCHAR(50)
+  `);
+
+  await pool.query(`
+    UPDATE "calificaciones_funcionario" c
+    SET "funcionario_cargo_codigo" = COALESCE(u."subcargo_codigo", u."cargo_codigo")
+    FROM "usuarios" u
+    WHERE c."funcionario_id" = u."id"
+      AND c."funcionario_cargo_codigo" IS NULL
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "calificacion_device_bloqueos" (
+      "id" SERIAL PRIMARY KEY,
+      "device_id_hash" VARCHAR(64) NOT NULL UNIQUE,
+      "device_id_public" VARCHAR(220),
+      "motivo" TEXT,
+      "bloqueado_por_id" INTEGER,
+      "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "calificacion_device_bloqueos_bloqueado_por_id_fkey"
+        FOREIGN KEY ("bloqueado_por_id") REFERENCES "usuarios" ("id")
+        ON UPDATE NO ACTION
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_calificacion_device_bloqueos_created"
+      ON "calificacion_device_bloqueos" ("created_at" DESC)
   `);
 
   await pool.query(`
@@ -4774,8 +6741,18 @@ async function ensureRuntimeSchema() {
   `);
 
   await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_calificaciones_funcionario_cargo_codigo"
+      ON "calificaciones_funcionario" ("funcionario_cargo_codigo")
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS "idx_calificaciones_funcionario_calificacion"
       ON "calificaciones_funcionario" ("calificacion")
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "idx_calificaciones_funcionario_device_funcionario"
+      ON "calificaciones_funcionario" ("device_id_hash", "funcionario_id")
   `);
 
   await pool.query(`
@@ -4878,9 +6855,17 @@ function getErrorMessage(error: unknown) {
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
 
   for await (const chunk of request) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    totalBytes += buffer.length;
+
+    if (totalBytes > MAX_JSON_BODY_BYTES) {
+      throw new HttpError(413, "El cuerpo de la solicitud es demasiado grande.");
+    }
+
+    chunks.push(buffer);
   }
 
   if (chunks.length === 0) {
@@ -4904,9 +6889,32 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   return decryptJsonPayload(parsedBody);
 }
 
+function encryptJsonPayload(payload: unknown) {
+  if (
+    !PAYLOAD_RESPONSE_ENCRYPTION_ENABLED ||
+    PAYLOAD_ENCRYPTION_KEY_BYTES == null
+  ) {
+    return null;
+  }
+
+  const iv = randomBytes(12);
+  const cipher = createCipheriv(
+    "aes-256-gcm",
+    PAYLOAD_ENCRYPTION_KEY_BYTES,
+    iv,
+  );
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]);
+  const tag = cipher.getAuthTag();
+
+  return {
+    d: Buffer.concat([iv, encrypted, tag]).toString("base64"),
+  };
+}
+
 function decryptJsonPayload(payload: unknown) {
-  // Compatibilidad de entrada para versiones anteriores ya instaladas.
-  // Las versiones nuevas envian JSON normal y no necesitan esta clave.
   if (isCompactEncryptedJsonEnvelope(payload)) {
     if (PAYLOAD_ENCRYPTION_KEY_BYTES == null) {
       throw new HttpError(400, "El cuerpo cifrado no esta habilitado.");
@@ -4928,7 +6936,10 @@ function decryptJsonPayload(payload: unknown) {
 
       return decryptEncryptedJsonPayload(iv, encrypted, tag);
     } catch {
-      throw new HttpError(400, "No fue posible descifrar el cuerpo JSON.");
+      throw new HttpError(
+        400,
+        "No pudimos procesar la informacion enviada. Intenta nuevamente.",
+      );
     }
   }
 
@@ -4947,7 +6958,10 @@ function decryptJsonPayload(payload: unknown) {
 
     return decryptEncryptedJsonPayload(iv, encrypted, tag);
   } catch {
-    throw new HttpError(400, "No fue posible descifrar el cuerpo JSON.");
+    throw new HttpError(
+      400,
+      "No pudimos procesar la informacion enviada. Intenta nuevamente.",
+    );
   }
 }
 
@@ -5032,10 +7046,24 @@ function parseUpdateEventInput(payload: unknown): UpdateEventInput {
 function parseEventInputPayload(payload: unknown) {
   const body = expectRecord(payload);
   const nombre = readRequiredString(body, "nombre", 4, 150);
+  const tipoEvento = readEventKind(body);
   const fechaEvento = readRequiredDate(body, "fechaEvento");
   const direccion = readRequiredString(body, "direccion", 5, 255);
-  const latitud = readRequiredFloat(body, "latitud", -90, 90);
-  const longitud = readRequiredFloat(body, "longitud", -180, 180);
+  const latitud =
+    tipoEvento === "INSPECCION"
+      ? readOptionalFloat(body, "latitud", -90, 90)
+      : readRequiredFloat(body, "latitud", -90, 90);
+  const longitud =
+    tipoEvento === "INSPECCION"
+      ? readOptionalFloat(body, "longitud", -180, 180)
+      : readRequiredFloat(body, "longitud", -180, 180);
+  const requestedInspectionActive = readOptionalBoolean(
+    body,
+    "inspeccionActiva",
+  );
+  const inspeccionActiva =
+    tipoEvento === "INSPECCION" ? requestedInspectionActive ?? true : false;
+  const itemLabel = tipoEvento === "INSPECCION" ? "inspeccion" : "evento";
   const oficinaIds = readOptionalIntList(body, "oficinaIds");
   const oficinaIdsFinales = readOptionalIntList(body, "oficinaIdsFinales");
   const oficinaIdsExcluidos = readOptionalIntList(body, "oficinaIdsExcluidos");
@@ -5045,19 +7073,42 @@ function parseEventInputPayload(payload: unknown) {
     "cargoCodigo",
   );
   const cargoCodigosPorOficina = parseOfficeJobTitleInput(body);
-  const controles = parseEventControlsInput(body);
+  const tiposVinculo = readOptionalLinkTypeList(body, "tiposVinculo");
+  const parsedControls = parseEventControlsInput(body, {
+    allowEmpty: tipoEvento === "INSPECCION",
+    allowTimeWindowless: tipoEvento === "INSPECCION",
+  });
+  const controles =
+    tipoEvento === "INSPECCION" && parsedControls.length === 0
+      ? [
+          {
+            id: null,
+            nombre: "Control de inspeccion",
+            orden: 1,
+            horaInicio: null,
+            horaFin: null,
+          },
+        ]
+      : parsedControls;
+
+  if (tipoEvento === "INSPECCION" && (latitud == null) !== (longitud == null)) {
+    throw new HttpError(
+      400,
+      "Debes enviar latitud y longitud juntas para la inspeccion.",
+    );
+  }
 
   if (oficinaIds.length === 0 && cargoCodigos.length === 0) {
     throw new HttpError(
       400,
-      "Debes seleccionar al menos una oficina o un cargo para el evento.",
+      `Debes seleccionar al menos una oficina o un cargo para la ${itemLabel}.`,
     );
   }
 
   if (oficinaIds.length === 0 && cargoCodigosPorOficina.length > 0) {
     throw new HttpError(
       400,
-      "Los cargos por oficina requieren seleccionar una o mas oficinas.",
+      `Los cargos por oficina requieren seleccionar una o mas oficinas para la ${itemLabel}.`,
     );
   }
 
@@ -5067,13 +7118,49 @@ function parseEventInputPayload(payload: unknown) {
     direccion,
     latitud,
     longitud,
+    tipoEvento,
+    inspeccionActiva,
     oficinaIds,
     oficinaIdsFinales,
     oficinaIdsExcluidos,
     cargoCodigos,
     cargoCodigosPorOficina,
+    tiposVinculo,
     controles,
   };
+}
+
+function readOptionalLinkTypeList(
+  source: JsonRecord,
+  key: string,
+): UserLinkType[] {
+  const rawItems = source[key];
+
+  if (rawItems == null) {
+    return [];
+  }
+
+  if (!Array.isArray(rawItems)) {
+    throw new HttpError(400, `El campo ${key} no tiene un formato valido.`);
+  }
+
+  const values: UserLinkType[] = [];
+  for (const rawItem of rawItems) {
+    if (typeof rawItem !== "string") {
+      throw new HttpError(400, `El campo ${key} no tiene un formato valido.`);
+    }
+
+    const value = rawItem.trim().toUpperCase();
+    if (!isUserLinkType(value)) {
+      throw new HttpError(400, "El tipo de vinculo del evento no es valido.");
+    }
+
+    if (!values.includes(value)) {
+      values.push(value);
+    }
+  }
+
+  return values;
 }
 
 function parseOfficeJobTitleInput(
@@ -5106,10 +7193,20 @@ function parseOfficeJobTitleInput(
   });
 }
 
-function parseEventControlsInput(source: JsonRecord): EventControlInput[] {
+function parseEventControlsInput(
+  source: JsonRecord,
+  options: { allowEmpty: boolean; allowTimeWindowless: boolean } = {
+    allowEmpty: false,
+    allowTimeWindowless: false,
+  },
+): EventControlInput[] {
   const rawControls = source["controles"];
 
   if (!Array.isArray(rawControls) || rawControls.length === 0) {
+    if (options.allowEmpty) {
+      return [];
+    }
+
     throw new HttpError(
       400,
       "Debes agregar al menos un control para el evento.",
@@ -5118,10 +7215,21 @@ function parseEventControlsInput(source: JsonRecord): EventControlInput[] {
 
   return rawControls.map((item, index) => {
     const control = expectRecord(item);
-    const horaInicio = readRequiredTimeText(control, "horaInicio");
-    const horaFin = readRequiredTimeText(control, "horaFin");
+    const horaInicio = options.allowTimeWindowless
+      ? readOptionalTimeText(control, "horaInicio")
+      : readRequiredTimeText(control, "horaInicio");
+    const horaFin = options.allowTimeWindowless
+      ? readOptionalTimeText(control, "horaFin")
+      : readRequiredTimeText(control, "horaFin");
 
-    if (horaInicio >= horaFin) {
+    if ((horaInicio == null) !== (horaFin == null)) {
+      throw new HttpError(
+        400,
+        `Debes enviar hora inicial y hora final juntas para el control ${index + 1}.`,
+      );
+    }
+
+    if (horaInicio != null && horaFin != null && horaInicio >= horaFin) {
       throw new HttpError(
         400,
         `La hora final del control ${index + 1} debe ser posterior a la hora inicial.`,
@@ -5529,165 +7637,13 @@ function resolvePorteroLugar(
   return normalizeOptionalText(lugar);
 }
 
-type EventJobTitleCandidate = {
-  code: string | null;
-  name: string | null;
-};
-
-type EventJobTitleGroup =
-  "CHIEF" | "DIRECTOR" | "MUNICIPAL_SECRETARY" | "SUBMAYOR" | "TECHNICAL";
-
 function resolveUserEventJobTitles(user: any): EventJobTitleCandidate[] {
-  const candidates = [
-    {
-      code: normalizeOptionalText(user?.cargo_codigo),
-      name: normalizeLooseMatchText(user?.cargo),
-    },
-    {
-      code: normalizeOptionalText(user?.subcargo_codigo),
-      name: normalizeLooseMatchText(user?.subcargo),
-    },
-  ];
-  const seen = new Set<string>();
-
-  return candidates.filter((candidate) => {
-    if (candidate.code == null && candidate.name == null) {
-      return false;
-    }
-
-    const key = `${candidate.code ?? ""}|${candidate.name ?? ""}`;
-
-    if (seen.has(key)) {
-      return false;
-    }
-
-    seen.add(key);
-    return true;
-  });
-}
-
-function resolveEventJobTitleGroup(
-  normalizedJobTitle: string | null,
-): EventJobTitleGroup | null {
-  if (normalizedJobTitle == null) {
-    return null;
-  }
-
-  if (/\bJEF[EA]\b/.test(normalizedJobTitle)) {
-    return "CHIEF";
-  }
-
-  if (
-    normalizedJobTitle.includes("DIRECTOR") ||
-    normalizedJobTitle.includes("DIRECCTOR")
-  ) {
-    return "DIRECTOR";
-  }
-
-  if (
-    /\bSECRETARI[OA]\b/.test(normalizedJobTitle) &&
-    normalizedJobTitle.includes("MUNICIPAL")
-  ) {
-    return "MUNICIPAL_SECRETARY";
-  }
-
-  if (normalizedJobTitle.includes("SUBALCALD")) {
-    return "SUBMAYOR";
-  }
-
-  if (normalizedJobTitle.includes("TECNIC")) {
-    return "TECHNICAL";
-  }
-
-  return null;
-}
-
-function isEventLeadershipJobTitle(normalizedJobTitle: string | null) {
-  const group = resolveEventJobTitleGroup(normalizedJobTitle);
-
-  return (
-    group === "CHIEF" ||
-    group === "DIRECTOR" ||
-    group === "MUNICIPAL_SECRETARY" ||
-    group === "SUBMAYOR"
-  );
-}
-
-function matchesCargoSelection(
-  userJobTitles: EventJobTitleCandidate[],
-  allowedCargoCodigos: Set<string>,
-  allowedCargoNames: Set<string>,
-) {
-  const onlyTechnicalSelection =
-    allowedCargoNames.size > 0 &&
-    [...allowedCargoNames].every(
-      (jobTitle) => resolveEventJobTitleGroup(jobTitle) === "TECHNICAL",
-    );
-
-  if (
-    onlyTechnicalSelection &&
-    userJobTitles.some((jobTitle) => isEventLeadershipJobTitle(jobTitle.name))
-  ) {
-    return false;
-  }
-
-  if (
-    userJobTitles.some(
-      (jobTitle) =>
-        jobTitle.code != null && allowedCargoCodigos.has(jobTitle.code),
-    )
-  ) {
-    return true;
-  }
-
-  if (
-    userJobTitles.some(
-      (jobTitle) =>
-        jobTitle.name != null && allowedCargoNames.has(jobTitle.name),
-    )
-  ) {
-    return true;
-  }
-
-  for (const allowedCargoName of allowedCargoNames) {
-    const allowedGroup = resolveEventJobTitleGroup(allowedCargoName);
-
-    if (allowedGroup === "TECHNICAL") {
-      if (
-        userJobTitles.length > 0 &&
-        !userJobTitles.some((jobTitle) =>
-          isEventLeadershipJobTitle(jobTitle.name),
-        )
-      ) {
-        return true;
-      }
-
-      continue;
-    }
-
-    if (
-      allowedGroup != null &&
-      userJobTitles.some(
-        (jobTitle) => resolveEventJobTitleGroup(jobTitle.name) === allowedGroup,
-      )
-    ) {
-      return true;
-    }
-
-    for (const jobTitle of userJobTitles) {
-      if (
-        jobTitle.name != null &&
-        allowedCargoName.length >= 4 &&
-        jobTitle.name.length >= 4 &&
-        (allowedCargoName.includes(jobTitle.name) ||
-          jobTitle.name.includes(allowedCargoName))
-      ) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  // Use the same effective job that is displayed and saved in attendance.
+  const candidate = {
+    code: resolveEffectiveJobTitleCode(user),
+    name: normalizeLooseMatchText(resolveEffectiveJobTitleName(user)),
+  };
+  return candidate.code == null && candidate.name == null ? [] : [candidate];
 }
 
 function isOfficeCoveredByBranch(officeCode: string, branchCode: string) {
@@ -5710,12 +7666,24 @@ function isOfficeCoveredByBranch(officeCode: string, branchCode: string) {
 }
 
 const submayoraltyEventBranchCodes: Record<string, Set<string>> = {
-  "10.2.2": new Set(["10.4.3.1", "10.4.3.2", "10.4.3.3", "10.4.3.4"]),
-  "10.2.3": new Set(["10.4.4.1", "10.4.4.2", "10.4.4.3", "10.4.4.4"]),
-  "10.2.4": new Set(["10.4.5.1", "10.4.5.2", "10.4.5.3", "10.4.5.4"]),
-  "10.2.5": new Set(["10.4.7.1", "10.4.7.2", "10.4.7.3", "10.4.7.4"]),
-  "10.2.6": new Set(["10.4.6.1", "10.4.6.2", "10.4.6.3", "10.4.6.4"]),
-  "10.2.7": new Set(["10.4.8.1", "10.4.8.2", "10.4.8.3", "10.4.8.4"]),
+  "10.4.3": new Set([
+    "10.4.3.0",
+    "10.4.3.1",
+    "10.4.3.2",
+    "10.4.3.3",
+    "10.4.3.4",
+  ]),
+  "10.4.4": new Set(["10.4.4.1", "10.4.4.2", "10.4.4.3", "10.4.4.4"]),
+  "10.4.5": new Set(["10.4.5.1", "10.4.5.2", "10.4.5.3", "10.4.5.4"]),
+  "10.4.6": new Set(["10.4.6.1", "10.4.6.2", "10.4.6.3", "10.4.6.4"]),
+  "10.4.7": new Set([
+    "10.4.7.0",
+    "10.4.7.1",
+    "10.4.7.2",
+    "10.4.7.3",
+    "10.4.7.4",
+  ]),
+  "10.4.8": new Set(["10.4.8.1", "10.4.8.2", "10.4.8.3", "10.4.8.4"]),
 };
 
 function compareOfficeHierarchy(
@@ -5783,6 +7751,7 @@ function parseRegisterAttendanceInput(
     ["QR", "CI"],
   ) as "QR" | "CI";
   const observacion = readOptionalString(body, "observacion", 0, 500);
+  const noEsPersona = readOptionalBoolean(body, "noEsPersona") ?? false;
   const payloadFields = readOptionalRecord(body, "payloadFields");
   const scannedAt = readOptionalDate(body, "scannedAt");
   const latitud = readOptionalFloat(body, "latitud", -90, 90);
@@ -5806,10 +7775,9 @@ function parseRegisterAttendanceInput(
   }
 
   if (
-    estadoValue === estado_asistencia.OBSERVADO &&
-    normalizeOptionalText(observacion) == null
+    noEsPersona && estadoValue !== estado_asistencia.OBSERVADO
   ) {
-    throw new HttpError(400, "Debes indicar el motivo de la observacion.");
+    throw new HttpError(400, "No es la persona solo puede marcarse como OBSERVADO.");
   }
 
   if (
@@ -5837,6 +7805,7 @@ function parseRegisterAttendanceInput(
     registrationSource,
     estado: estadoValue,
     observacion,
+    noEsPersona,
     payloadFields,
     scannedAt,
     latitud,
@@ -5851,6 +7820,7 @@ function parseLoginInput(payload: unknown): LoginInput {
   return {
     email: readRequiredString(body, "email", 3, 150).trim(),
     password: readRequiredString(body, "password", 6, 200),
+    deviceId: readOptionalString(body, "deviceId", 8, 120),
   };
 }
 
@@ -5862,9 +7832,32 @@ type FuncionarioRatingDateRange = {
 
 function parseFuncionarioCiLookupInput(payload: unknown) {
   const body = expectRecord(payload);
+  const ci = readOptionalString(body, "ci", 1, 30);
+
+  if (ci != null) {
+    return {
+      type: "single" as const,
+      ci,
+    };
+  }
+
+  const funcionariosCis = readOptionalStringList(
+    body,
+    "funcionariosCis",
+    "CI",
+  ).map(normalizeCiLookupValue);
+  const cis =
+    funcionariosCis.length > 0
+      ? funcionariosCis
+      : readOptionalStringList(body, "cis", "CI").map(normalizeCiLookupValue);
+
+  if (cis.length === 0) {
+    throw new HttpError(400, "Debes enviar el campo ci.");
+  }
 
   return {
-    ci: readRequiredString(body, "ci", 1, 30),
+    type: "list" as const,
+    cis,
   };
 }
 
@@ -5938,12 +7931,12 @@ function buildFuncionarioRatingDateSql(
   const filters = [] as string[];
 
   if (dateRange.fechaInicio != null) {
-    params.push(dateRange.fechaInicio);
+    params.push(toDateOnlyText(dateRange.fechaInicio));
     filters.push(`AND c."fecha" >= $${params.length}::date`);
   }
 
   if (dateRange.fechaFin != null) {
-    params.push(dateRange.fechaFin);
+    params.push(toDateOnlyText(dateRange.fechaFin));
     filters.push(`AND c."fecha" <= $${params.length}::date`);
   }
 
@@ -6011,6 +8004,92 @@ async function loadFuncionarioRatingsByCis(
       muyBueno: 0,
     };
   });
+}
+
+function parseFuncionarioAlertDevInput(payload: unknown) {
+  const body = expectRecord(payload);
+  const cis = readOptionalStringList(body, "funcionariosCis", "CI").map(
+    normalizeCiLookupValue,
+  );
+
+  if (cis.length === 0) {
+    throw new HttpError(400, "Debes enviar el campo funcionariosCis.");
+  }
+
+  return {
+    cis,
+    titulo: readRequiredString(body, "titulo", 1, 120),
+    mensaje: readRequiredString(body, "mensaje", 1, 500),
+    data: readFuncionarioAlertDevData(body.data),
+  };
+}
+
+function readFuncionarioAlertDevData(value: unknown): Record<string, string> {
+  if (value == null) {
+    return {};
+  }
+
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "El campo data no tiene un formato valido.");
+  }
+
+  const data: Record<string, string> = {};
+
+  for (const [key, item] of Object.entries(value)) {
+    if (item == null) {
+      continue;
+    }
+
+    if (
+      typeof item !== "string" &&
+      typeof item !== "number" &&
+      typeof item !== "boolean"
+    ) {
+      throw new HttpError(400, `El campo data.${key} no es valido.`);
+    }
+
+    data[key] = String(item);
+  }
+
+  return data;
+}
+
+async function loadFuncionarioAlertDevTargets(cis: string[]) {
+  const result = await pool.query<{
+    usuario_id: number;
+    ci: string;
+    token: string | null;
+  }>(
+    `
+      SELECT
+        u."id" AS "usuario_id",
+        TRIM(u."ci") AS "ci",
+        t."token" AS "token"
+      FROM "usuarios" u
+      LEFT JOIN "notificacion_tokens" t
+        ON t."usuario_id" = u."id"
+        AND t."platform" IN ('ANDROID', 'IOS')
+      WHERE u."activo" = TRUE
+        AND REGEXP_REPLACE(UPPER(COALESCE(u."ci", '')), '[^A-Z0-9]', '', 'g') = ANY($1::text[])
+    `,
+    [cis],
+  );
+
+  return {
+    userIds: [...new Set(result.rows.map((row) => row.usuario_id))],
+    cis: [
+      ...new Set(
+        result.rows.map((row) => row.ci).filter((ci) => ci.length > 0),
+      ),
+    ],
+    tokens: [
+      ...new Set(
+        result.rows
+          .map((row) => row.token?.trim() ?? "")
+          .filter((token) => token.length > 0),
+      ),
+    ],
+  };
 }
 
 async function loadFuncionarioRatingsByCi(
@@ -6117,7 +8196,9 @@ async function loadFuncionarioRatingsByOffice(
 function isFuncionarioExternalServicePath(pathname: string | null) {
   return (
     pathname === FUNCIONARIO_CI_SERVICE_PATH ||
-    pathname === FUNCIONARIO_CALIFICACIONES_SERVICE_PATH
+    pathname === FUNCIONARIO_CALIFICACIONES_SERVICE_PATH ||
+    (FUNCIONARIO_ALERTA_DEV_SERVICE_ENABLED &&
+      pathname === FUNCIONARIO_ALERTA_DEV_SERVICE_PATH)
   );
 }
 // FIN SERVICIO EXTERNO VERIFICACION FUNCIONARIO POR CI
@@ -6330,6 +8411,19 @@ function parseRegisterUserInput(payload: unknown): RegisterUserInput {
   };
 }
 
+function parseAppleSignInInput(payload: unknown): AppleSignInInput {
+  const body = expectRecord(payload);
+
+  return {
+    identityToken: readRequiredString(body, "identityToken", 20, 6000),
+    authorizationCode: readOptionalString(body, "authorizationCode", 1, 2000),
+    email: readOptionalString(body, "email", 5, 150),
+    givenName: readOptionalString(body, "givenName", 1, 120),
+    familyName: readOptionalString(body, "familyName", 1, 120),
+    deviceId: readOptionalString(body, "deviceId", 8, 120),
+  };
+}
+
 function parseManagedUserInput(payload: unknown): ManagedUserInput {
   const body = expectRecord(payload);
   const baseInput = parseRegisterUserInput(payload);
@@ -6341,6 +8435,7 @@ function parseManagedUserInput(payload: unknown): ManagedUserInput {
     rol_usuario.CONTROL,
     rol_usuario.CREDENCIALES,
     rol_usuario.ALMUERZO,
+    rol_usuario.KARDEX,
     rol_usuario.OPERADOR,
   ]) as (typeof rol_usuario)[keyof typeof rol_usuario];
   const requesterEmail = readRequiredLoginIdentifier(body, "requesterEmail");
@@ -6348,6 +8443,7 @@ function parseManagedUserInput(payload: unknown): ManagedUserInput {
   return {
     ...baseInput,
     rol: requestedRole,
+    ...parseControlRolePeriod(body, requestedRole),
     requesterEmail,
   };
 }
@@ -6436,7 +8532,57 @@ function resolveActiveForExistingContract(
 }
 
 function isContractEndExpired(contractEnd: Date) {
-  return toDateOnlyText(contractEnd) <= getAppDateOnlyText();
+  // La fecha de fin (o adenda) incluye todo ese dia en la zona horaria de la app.
+  return toDateOnlyText(contractEnd) < getAppDateOnlyText();
+}
+
+function parseControlRolePeriod(body: JsonRecord, role: string) {
+  const controlTemporal = readOptionalBoolean(body, "controlTemporal");
+  let controlInicio = readOptionalDate(body, "controlInicio");
+  let controlFin = readOptionalDate(body, "controlFin");
+  if (controlTemporal === true && controlInicio && controlFin) {
+    ({ controlInicio, controlFin } = normalizeControlPeriod(controlInicio, controlFin));
+  }
+  if (controlTemporal === true && (role !== "CONTROL" || !controlInicio || !controlFin ||
+      controlFin <= controlInicio || controlFin.getTime() <= Date.now())) {
+    throw new HttpError(400, "Selecciona un rango valido para Control: el fin debe ser posterior al inicio y a la fecha actual.");
+  }
+  return { controlTemporal, controlInicio, controlFin };
+}
+
+async function refreshTemporaryControlRoles() {
+  await pool.query(`UPDATE "usuarios" SET
+    "rol" = CASE
+      WHEN (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') >= date_trunc('minute', "control_inicio")
+        AND (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') < date_trunc('minute', "control_fin")
+      THEN 'CONTROL'::"rol_usuario"
+      ELSE COALESCE(NULLIF("control_rol_anterior", 'CONTROL'::"rol_usuario"), 'OPERADOR'::"rol_usuario") END,
+    "control_rol_anterior" = CASE WHEN date_trunc('minute', "control_fin") <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') THEN NULL
+      ELSE COALESCE(NULLIF("control_rol_anterior", 'CONTROL'::"rol_usuario"), 'OPERADOR'::"rol_usuario") END,
+    "control_inicio" = CASE WHEN date_trunc('minute', "control_fin") <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') THEN NULL ELSE "control_inicio" END,
+    "control_fin" = CASE WHEN date_trunc('minute', "control_fin") <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') THEN NULL ELSE "control_fin" END,
+    "updated_at" = CURRENT_TIMESTAMP
+    WHERE "control_rol_anterior" IS NOT NULL
+      AND "control_inicio" IS NOT NULL AND "control_fin" IS NOT NULL
+      AND (date_trunc('minute', "control_fin") <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+        OR "control_rol_anterior" = 'CONTROL'::"rol_usuario"
+        OR "rol" <> CASE WHEN (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') >= date_trunc('minute', "control_inicio")
+          THEN 'CONTROL'::"rol_usuario" ELSE "control_rol_anterior" END)`);
+  const nextBoundary = await pool.query<{ delay: number | null }>(`
+    SELECT EXTRACT(EPOCH FROM (MIN(boundary) - (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'))) * 1000 AS delay
+    FROM "usuarios", LATERAL (VALUES
+      (date_trunc('minute', "control_inicio")),
+      (date_trunc('minute', "control_fin"))
+    ) AS limits(boundary)
+    WHERE "control_rol_anterior" IS NOT NULL AND boundary > (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')`);
+  if (controlRoleBoundaryTimer) clearTimeout(controlRoleBoundaryTimer);
+  const delay = nextBoundary.rows[0]?.delay;
+  if (delay != null) {
+    controlRoleBoundaryTimer = setTimeout(() => {
+      void refreshTemporaryControlRoles().catch((error) => console.error("No se pudo actualizar el rol temporal de control", error));
+    }, Math.min(2147483647, Math.max(1, Math.ceil(Number(delay)))));
+    controlRoleBoundaryTimer.unref();
+  }
 }
 
 function parseUpdateUserStatusInput(payload: unknown): UpdateUserStatusInput {
@@ -6470,6 +8616,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
     rol_usuario.CONTROL,
     rol_usuario.CREDENCIALES,
     rol_usuario.ALMUERZO,
+    rol_usuario.KARDEX,
     rol_usuario.OPERADOR,
   ]) as (typeof rol_usuario)[keyof typeof rol_usuario];
   const ci = readRequiredString(body, "ci", 3, 30);
@@ -6486,6 +8633,7 @@ function parseUpdateManagedUserInput(payload: unknown): UpdateManagedUserInput {
   return {
     requesterEmail: readRequiredLoginIdentifier(body, "requesterEmail"),
     rol: requestedRole,
+    ...parseControlRolePeriod(body, requestedRole),
     email,
     password: readOptionalString(body, "password", 6, 200),
     nombreCompleto: readRequiredString(body, "nombreCompleto", 2, 150),
@@ -6555,6 +8703,40 @@ function parseEventListView(url: URL) {
   }
 
   throw new HttpError(400, "La vista de eventos no es valida.");
+}
+
+function parseEventKindQuery(url: URL): EventKind {
+  const value = (url.searchParams.get("tipo") ?? "evento").trim().toUpperCase();
+
+  if (value === "INSPECCION" || value === "INSPECTION") {
+    return "INSPECCION";
+  }
+
+  if (value === "EVENTO" || value === "EVENT") {
+    return "EVENTO";
+  }
+
+  throw new HttpError(400, "El tipo de evento no es valido.");
+}
+
+function readEventKind(source: JsonRecord): EventKind {
+  const rawValue = source["tipoEvento"] ?? source["tipo"] ?? "EVENTO";
+
+  if (typeof rawValue !== "string") {
+    throw new HttpError(400, "El tipo de evento no es valido.");
+  }
+
+  const value = rawValue.trim().toUpperCase();
+
+  if (value === "INSPECCION" || value === "INSPECTION") {
+    return "INSPECCION";
+  }
+
+  if (value === "EVENTO" || value === "EVENT") {
+    return "EVENTO";
+  }
+
+  throw new HttpError(400, "El tipo de evento no es valido.");
 }
 
 function expectRecord(value: unknown): JsonRecord {
@@ -7191,7 +9373,7 @@ function isUserManagerRole(
 function isUserReaderRole(
   role: (typeof rol_usuario)[keyof typeof rol_usuario],
 ) {
-  return role === rol_usuario.LECTOR_USUARIOS;
+  return role === rol_usuario.LECTOR_USUARIOS || role === rol_usuario.KARDEX;
 }
 
 function scopedUserAdminTipoVinculosForRole(
@@ -7236,6 +9418,10 @@ function healthUserWhereForRequester(requester: any) {
 }
 
 function userDirectoryWhereForRequester(requester: any) {
+  if (requester?.rol === rol_usuario.ADMIN_EVENTUALES) {
+    return { tipo_vinculo: TEMPORARY_LINK_TYPE };
+  }
+
   const scopedTipoVinculos = scopedUserAdminTipoVinculosForRole(requester?.rol);
 
   if (scopedTipoVinculos != null) {
@@ -7328,6 +9514,15 @@ function healthEventWhereForRequester(requester: any) {
 
 function healthWhereArray(where: any) {
   return where == null ? [] : [where];
+}
+
+function buildEventKindWhere(
+  eventKind: EventKind,
+  baseWhere?: Prisma.eventosWhereInput,
+): Prisma.eventosWhereInput {
+  return {
+    AND: [{ tipo: eventKind }, ...(baseWhere == null ? [] : [baseWhere])],
+  };
 }
 
 function assertHealthAdminCanUseOffice(
@@ -7495,6 +9690,37 @@ async function assertAdminRequester(
   return user;
 }
 
+async function assertEventManagerRequester(
+  email: string,
+  eventKind: EventKind,
+  message = "Solo un administrador puede realizar esta accion.",
+) {
+  const user = await prisma.usuarios.findUnique({
+    where: { email: email.toLowerCase() },
+  });
+
+  const canManage =
+    user != null &&
+    user.activo === true &&
+    (isAdminRole(user.rol) ||
+      (user.rol === rol_usuario.CONTROL && eventKind === "INSPECCION"));
+
+  if (!canManage) {
+    throw new HttpError(403, message);
+  }
+
+  return user;
+}
+
+function assertCanManageEventRecord(user: any, event: any) {
+  if (user?.rol === rol_usuario.CONTROL && event?.tipo !== "INSPECCION") {
+    throw new HttpError(
+      403,
+      "El usuario de control solo puede gestionar inspecciones.",
+    );
+  }
+}
+
 async function assertUserManagerRequester(
   email: string,
   message = "Solo un administrador puede gestionar usuarios.",
@@ -7555,7 +9781,9 @@ function isAdminUser(user: AuthenticatedUser) {
 }
 
 function canScanQrData(user: AuthenticatedUser) {
-  return isAdminRole(user.rol) || user.rol === rol_usuario.CONTROL;
+  return isAdminRole(user.rol) ||
+    user.rol === rol_usuario.CONTROL ||
+    user.rol === rol_usuario.ADMIN_EVENTUALES;
 }
 
 function assertLunchScannerRequester(user: AuthenticatedUser) {
@@ -7601,6 +9829,8 @@ function isSelfRegistrationQrRole(
   role: (typeof rol_usuario)[keyof typeof rol_usuario],
 ) {
   return (
+    role === rol_usuario.ADMIN ||
+    role === rol_usuario.CONTROL ||
     role === rol_usuario.OPERADOR ||
     role === rol_usuario.ADMIN_SALUD ||
     role === rol_usuario.ADMIN_CONSULTORES ||
@@ -7609,11 +9839,175 @@ function isSelfRegistrationQrRole(
 }
 
 function assertLunchReportRequester(user: AuthenticatedUser) {
-  if (user.id <= 0 || user.activo !== true || !isAdminRole(user.rol)) {
+  if (
+    user.id <= 0 ||
+    user.activo !== true ||
+    (!isAdminRole(user.rol) && user.rol !== rol_usuario.OPERADOR)
+  ) {
     throw new HttpError(
       403,
       "Solo un administrador puede consultar almuerzos.",
     );
+  }
+}
+
+function assertEmployeeLunchHistoryQuery(
+  user: AuthenticatedUser,
+  query: LunchReportQuery,
+) {
+  if (
+    user.id <= 0 ||
+    user.activo !== true ||
+    (user.rol !== rol_usuario.OPERADOR && !isScopedUserAdminRole(user.rol))
+  ) {
+    throw new HttpError(403, "No puedes consultar este historial de almuerzos.");
+  }
+
+  const { start, end } = currentAndPreviousMonthRange();
+
+  if (
+    query.fechaDesde.getTime() < start.getTime() ||
+    query.fechaHasta.getTime() > end.getTime()
+  ) {
+    throw new HttpError(
+      403,
+      "Solo puedes consultar almuerzos del mes actual y del mes anterior.",
+    );
+  }
+}
+
+function parseLunchUserExclusionsInput(payload: unknown) {
+  const body = expectRecord(payload);
+
+  return {
+    usuarioIdsExcluidos: readOptionalIntList(body, "usuarioIdsExcluidos"),
+  };
+}
+
+async function loadActiveLunchExcludedUserIds(date: Date) {
+  const result = await pool.query(
+    `
+      SELECT "usuario_id"
+      FROM "almuerzo_usuario_exclusiones"
+      WHERE "activo_desde" <= $1::date
+        AND ("activo_hasta" IS NULL OR "activo_hasta" >= $1::date)
+      ORDER BY "usuario_id" ASC
+    `,
+    [toDateOnlyText(date)],
+  );
+
+  return result.rows.map((row) => Number(row.usuario_id));
+}
+
+async function replaceActiveLunchUserExclusions(
+  userIds: number[],
+  requesterId: number,
+) {
+  await assertLunchExcludedUsersExist(userIds);
+
+  const todayText = formatDateInAppTimeZone(new Date());
+  const today = readDateOnlyString(todayText, "fecha");
+  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  const yesterdayText = toDateOnlyText(yesterday);
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `
+        DELETE FROM "almuerzo_usuario_exclusiones"
+        WHERE "activo_desde" >= $2::date
+          AND ("activo_hasta" IS NULL OR "activo_hasta" >= $2::date)
+          AND (
+            cardinality($1::int[]) = 0
+            OR NOT ("usuario_id" = ANY($1::int[]))
+          )
+      `,
+      [userIds, todayText],
+    );
+    await client.query(
+      `
+        UPDATE "almuerzo_usuario_exclusiones"
+        SET "activo_hasta" = $3::date,
+            "cerrado_por_id" = $4,
+            "updated_at" = CURRENT_TIMESTAMP
+        WHERE "activo_desde" < $2::date
+          AND ("activo_hasta" IS NULL OR "activo_hasta" >= $2::date)
+          AND (
+            cardinality($1::int[]) = 0
+            OR NOT ("usuario_id" = ANY($1::int[]))
+          )
+      `,
+      [userIds, todayText, yesterdayText, requesterId],
+    );
+
+    if (userIds.length > 0) {
+      await client.query(
+        `
+          WITH selected_users AS (
+            SELECT unnest($1::int[]) AS "usuario_id"
+          )
+          INSERT INTO "almuerzo_usuario_exclusiones" (
+            "usuario_id",
+            "activo_desde",
+            "creado_por_id"
+          )
+          SELECT selected_users."usuario_id", $2::date, $3
+          FROM selected_users
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM "almuerzo_usuario_exclusiones" active_exclusion
+            WHERE active_exclusion."usuario_id" = selected_users."usuario_id"
+              AND active_exclusion."activo_desde" <= $2::date
+              AND (
+                active_exclusion."activo_hasta" IS NULL
+                OR active_exclusion."activo_hasta" >= $2::date
+              )
+          )
+        `,
+        [userIds, todayText, requesterId],
+      );
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  return loadActiveLunchExcludedUserIds(today);
+}
+
+async function isUserExcludedFromLunchOnDate(userId: number, date: Date) {
+  const result = await pool.query(
+    `
+      SELECT 1
+      FROM "almuerzo_usuario_exclusiones"
+      WHERE "usuario_id" = $1
+        AND "activo_desde" <= $2::date
+        AND ("activo_hasta" IS NULL OR "activo_hasta" >= $2::date)
+      LIMIT 1
+    `,
+    [userId, toDateOnlyText(date)],
+  );
+
+  return (result.rowCount ?? 0) > 0;
+}
+
+async function assertLunchExcludedUsersExist(userIds: number[]) {
+  if (userIds.length === 0) {
+    return;
+  }
+
+  const result = await pool.query(
+    `SELECT "id" FROM "usuarios" WHERE "id" = ANY($1::int[])`,
+    [userIds],
+  );
+
+  if (result.rowCount !== userIds.length) {
+    throw new HttpError(400, "Uno o mas funcionarios excluidos no existen.");
   }
 }
 
@@ -7623,12 +10017,12 @@ function assertAuthenticatedRequester(user: AuthenticatedUser) {
   }
 }
 
-function assertExitPermitApprover(user: any) {
+async function assertExitPermitApprover(user: any) {
   if (!user || user.activo !== true || user.rol !== rol_usuario.OPERADOR) {
     throw new HttpError(403, "Solo un jefe o director puede revisar salidas.");
   }
 
-  if (!isExitPermitApproverUser(user)) {
+  if (!(await canUserApproveExitPermits(user))) {
     throw new HttpError(
       403,
       "Solo usuarios con cargo de jefe o director pueden revisar salidas.",
@@ -7702,6 +10096,7 @@ function buildExitPermitReviewWhere(
 function buildExitPermitListWhere(
   authenticatedUser: AuthenticatedUser,
   requester: any,
+  requesterCanReviewExitPermits: boolean,
   fechaPermiso: Date | null,
   searchText: string | null,
   onlyOwnExitPermits = false,
@@ -7732,10 +10127,13 @@ function buildExitPermitListWhere(
     };
   }
 
-  if (requester != null && isExitPermitApproverUser(requester)) {
+  if (requester != null && requesterCanReviewExitPermits) {
     return {
-      usuario_id: { not: requester.id },
-      ...(fechaPermiso == null ? {} : { fecha_permiso: fechaPermiso }),
+      AND: [
+        { usuario_id: { not: requester.id } },
+        ...(fechaPermiso == null ? [] : [{ fecha_permiso: fechaPermiso }]),
+        ...(searchText == null ? [] : [buildExitPermitSearchWhere(searchText)]),
+      ],
     };
   }
 
@@ -7780,43 +10178,27 @@ function buildExitPermitSearchTokenFilters(token: string) {
       },
     },
     {
-      usuarios: {
-        ci: {
-          contains: token,
-          mode: "insensitive" as const,
-        },
+      solicitante_ci: {
+        contains: token,
+        mode: "insensitive" as const,
       },
     },
     {
-      usuarios: {
-        nombre_completo: {
-          contains: token,
-          mode: "insensitive" as const,
-        },
+      solicitante_numero_item: {
+        contains: token,
+        mode: "insensitive" as const,
       },
     },
     {
-      usuarios: {
-        nombres: {
-          contains: token,
-          mode: "insensitive" as const,
-        },
+      solicitante_cargo: {
+        contains: token,
+        mode: "insensitive" as const,
       },
     },
     {
-      usuarios: {
-        primer_apellido: {
-          contains: token,
-          mode: "insensitive" as const,
-        },
-      },
-    },
-    {
-      usuarios: {
-        segundo_apellido: {
-          contains: token,
-          mode: "insensitive" as const,
-        },
+      solicitante_oficina: {
+        contains: token,
+        mode: "insensitive" as const,
       },
     },
   ];
@@ -7923,9 +10305,8 @@ function isSeniorExitPermitApprover(user: any) {
 
 function isSeniorJobTitle(value: string | null | undefined) {
   const normalized = normalizeTextForComparison(value);
-  const compact = normalized.replace(/[^a-z0-9]+/g, "");
 
-  return normalized.includes("secretar") || compact.includes("subalcald");
+  return /\bsecretari[oa]\s+municipal\b/.test(normalized);
 }
 
 function resolveDirectorOfficeCode(user: any) {
@@ -8095,6 +10476,10 @@ function assertAttendanceReportRequester(
     return;
   }
 
+  if (user.rol === rol_usuario.KARDEX) {
+    return;
+  }
+
   if (user.ci != null && sameCiValue(user.ci, requestedCi)) {
     return;
   }
@@ -8113,11 +10498,13 @@ async function assertEventOperator(userId: number) {
   if (
     !user ||
     user.activo !== true ||
-    (!isAdminRole(user.rol) && user.rol !== rol_usuario.CONTROL)
+    (!isAdminRole(user.rol) &&
+      user.rol !== rol_usuario.CONTROL &&
+      user.rol !== rol_usuario.ADMIN_EVENTUALES)
   ) {
     throw new HttpError(
       403,
-      "Solo un administrador o usuario de control puede registrar asistencias.",
+      "Solo un administrador, administrador de eventuales o usuario de control puede registrar asistencias.",
     );
   }
 
@@ -8382,6 +10769,243 @@ function buildDefaultUserPassword(input: {
   return password;
 }
 
+async function createIosRegisteredUser(input: RegisterUserInput) {
+  if (isAdminEmail(input.email)) {
+    throw new HttpError(
+      403,
+      "Solo un administrador puede crear cuentas con @admin.",
+    );
+  }
+
+  const selectedOffice =
+    input.oficinaId == null
+      ? null
+      : await prisma.oficinas.findUnique({
+          where: { id: input.oficinaId },
+        });
+
+  if (input.oficinaId != null && !selectedOffice) {
+    throw new HttpError(400, "La unidad seleccionada no existe.");
+  }
+
+  const selectedCargo =
+    input.cargoCodigo == null
+      ? null
+      : await prisma.cargos.findUnique({
+          where: { codigo: input.cargoCodigo },
+        });
+
+  if (input.cargoCodigo != null && !selectedCargo) {
+    throw new HttpError(400, "El cargo seleccionado no existe.");
+  }
+
+  const duplicatedUser = await findUserByLoginOrCi(prisma, {
+    login: input.email,
+    ci: input.ci,
+  });
+
+  if (duplicatedUser) {
+    throw new HttpError(
+      409,
+      sameCiValue(duplicatedUser.ci, input.ci)
+        ? "Ya existe un usuario con ese CI."
+        : "Ya existe un usuario con ese usuario de acceso.",
+    );
+  }
+
+  const storedProfilePhoto = await storeUserProfilePhoto({
+    photoSource: input.fotoData,
+    email: input.email,
+    ci: input.ci,
+  });
+  const resolvedUnit = selectedOffice?.oficina ?? input.unidad ?? "";
+  const resolvedCargo = selectedCargo?.cargo ?? input.cargo;
+  const user = await prisma.usuarios.create({
+    data: {
+      nombre_completo: buildUserDisplayNameFromParts(input),
+      nombres: input.nombreCompleto,
+      primer_apellido: input.primerApellido,
+      segundo_apellido: input.segundoApellido,
+      tercer_apellido: input.tercerApellido,
+      ci: input.ci,
+      celular: input.celular,
+      tipo_vinculo: input.tipoVinculo,
+      contrato_numero: input.contratoNumero,
+      contrato_inicio: input.contratoInicio,
+      contrato_fin: input.contratoFin,
+      contrato_adenda: input.contratoAdenda,
+      unidad: resolvedUnit,
+      oficina_id: selectedOffice?.id ?? null,
+      oficina_comision_id: null,
+      cargo_codigo: selectedCargo?.codigo ?? null,
+      cargo: resolvedCargo,
+      subcargo_codigo: null,
+      subcargo: null,
+      lugar: resolvePorteroLugar(resolvedCargo, selectedCargo?.codigo ?? null, input.lugar),
+      numero_item: input.numeroItem,
+      foto_url: storedProfilePhoto,
+      email: input.email,
+      password_hash: hashPassword(input.password),
+      rol: rol_usuario.OPERADOR,
+      activo: resolveActiveForContract(input),
+    },
+    include: userWithOfficeInclude,
+  });
+  const person = await ensurePersonIdentityForUser(prisma, user);
+  invalidateDashboardSummaryCache();
+
+  return { user, person };
+}
+
+async function signInWithAppleForIos(input: AppleSignInInput) {
+  const applePayload = await verifyAppleIdentityToken(input.identityToken);
+  const appleSub = readRequiredAppleString(applePayload.sub, "sub");
+  const appleEmail = normalizeOptionalText(applePayload.email);
+  const inputEmail = normalizeOptionalText(input.email);
+  const appleRefreshToken = await exchangeAppleAuthorizationCode(
+    input.authorizationCode,
+  );
+  const email =
+    normalizeOptionalText(appleEmail ?? inputEmail)?.toLowerCase() ??
+    `apple-${appleSub}@privaterelay.appleid.local`;
+
+  let user =
+    (await prisma.usuarios.findFirst({
+      where: { apple_sub: appleSub },
+      include: userWithOfficeInclude,
+    })) ??
+    (await prisma.usuarios.findUnique({
+      where: { email },
+      include: userWithOfficeInclude,
+    }));
+
+  if (user != null) {
+    if (user.activo !== true) {
+      throw new HttpError(403, "Tu usuario se encuentra inactivo.");
+    }
+
+    if (user.apple_sub == null || appleRefreshToken != null) {
+      user = await prisma.usuarios.update({
+        where: { id: user.id },
+        data: {
+          apple_sub: appleSub,
+          apple_refresh_token: appleRefreshToken ?? user.apple_refresh_token,
+          updated_at: new Date(),
+        },
+        include: userWithOfficeInclude,
+      });
+    }
+
+    return { user, person: await ensurePersonIdentityForUser(prisma, user) };
+  }
+
+  const givenName = normalizeOptionalText(input.givenName) ?? "Usuario";
+  const familyName = normalizeOptionalText(input.familyName) ?? "Apple";
+  user = await prisma.usuarios.create({
+    data: {
+      nombre_completo: `${givenName} ${familyName}`.trim(),
+      nombres: givenName,
+      primer_apellido: familyName,
+      segundo_apellido: null,
+      tercer_apellido: null,
+      ci: `APPLE-${appleSub.slice(0, 24)}`,
+      celular: null,
+      tipo_vinculo: "ITEM",
+      unidad: "",
+      oficina_id: null,
+      oficina_comision_id: null,
+      cargo_codigo: null,
+      cargo: "Funcionario",
+      lugar: "",
+      numero_item: "",
+      foto_url: null,
+      email,
+      apple_sub: appleSub,
+      apple_refresh_token: appleRefreshToken,
+      password_hash: hashPassword(randomBytes(32).toString("base64url")),
+      rol: rol_usuario.OPERADOR,
+      activo: true,
+    },
+    include: userWithOfficeInclude,
+  });
+  const person = await ensurePersonIdentityForUser(prisma, user);
+  invalidateDashboardSummaryCache();
+
+  return { user, person };
+}
+
+async function permanentlyDeleteOwnIosAccount(userId: number) {
+  if (userId <= 0) {
+    throw new HttpError(401, "Debes iniciar sesion para continuar.");
+  }
+
+  const deletedAt = new Date();
+  const deletedMarker = `deleted-${userId}-${deletedAt.getTime()}`;
+  const user = await prisma.usuarios.findUnique({
+    where: { id: userId },
+    select: { apple_refresh_token: true },
+  });
+
+  await revokeAppleRefreshToken(user?.apple_refresh_token ?? null);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.notificacion_tokens.deleteMany({ where: { usuario_id: userId } });
+    await tx.notificaciones.deleteMany({ where: { usuario_id: userId } });
+    await tx.usuario_sesiones_dispositivo.deleteMany({
+      where: { usuario_id: userId },
+    });
+    await tx.celulares_asistencia.deleteMany({ where: { usuario_id: userId } });
+    await tx.personas.updateMany({
+      where: { usuario_id: userId },
+      data: {
+        nombre_completo: "Usuario eliminado",
+        ci: null,
+        codigo_qr: null,
+        datos_qr: Prisma.JsonNull,
+        activo: false,
+        updated_at: deletedAt,
+      },
+    });
+    await tx.usuarios.update({
+      where: { id: userId },
+      data: {
+        nombre_completo: "Usuario eliminado",
+        nombres: "Usuario eliminado",
+        primer_apellido: "",
+        segundo_apellido: null,
+        tercer_apellido: null,
+        ci: null,
+        celular: null,
+        tipo_vinculo: null,
+        contrato_numero: null,
+        contrato_inicio: null,
+        contrato_fin: null,
+        contrato_adenda: null,
+        unidad: null,
+        oficina_id: null,
+        oficina_comision_id: null,
+        cargo_codigo: null,
+        cargo: null,
+        subcargo_codigo: null,
+        subcargo: null,
+        lugar: null,
+        numero_item: null,
+        foto_url: null,
+        email: `${deletedMarker}@deleted.local`,
+        apple_sub: null,
+        apple_refresh_token: null,
+        account_deleted_at: deletedAt,
+        password_hash: hashPassword(randomBytes(32).toString("base64url")),
+        activo: false,
+        session_version: { increment: 1 },
+        updated_at: deletedAt,
+      },
+    });
+  });
+
+  invalidateDashboardSummaryCache();
+}
+
 async function findUserForLogin(login: string) {
   const normalizedLogin = normalizeEmailValue(login);
   const normalizedCi = normalizeCiLookupValue(login);
@@ -8396,19 +11020,50 @@ async function findUserForLogin(login: string) {
   }
 
   const users = await prisma.usuarios.findMany({
-    where: {
-      ci: {
-        not: null,
-      },
-    },
     include: userWithOfficeInclude,
     orderBy: [{ activo: "desc" }, { updated_at: "desc" }, { id: "desc" }],
   });
 
   return (
-    users.find((user) => normalizeCiLookupValue(user.ci) === normalizedCi) ??
-    null
+    users.find(
+      (user) =>
+        normalizeEmailValue(user.email) === normalizedLogin ||
+        normalizeCiLookupValue(user.ci) === normalizedCi,
+    ) ?? null
   );
+}
+
+function resolveLoginPassword(
+  password: string,
+  user: {
+    password_hash: string;
+    ci?: string | null;
+    primer_apellido?: string | null;
+  },
+) {
+  for (const candidate of buildLoginPasswordCandidates(password)) {
+    if (
+      verifyPassword(candidate, user.password_hash) ||
+      verifyLegacyPlainPassword(candidate, user.password_hash) ||
+      (shouldAllowDefaultCiPasswordFallback(user.password_hash) &&
+        verifyDefaultCiPassword(candidate, user))
+    ) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function buildLoginPasswordCandidates(password: string) {
+  const candidates = [password];
+  const trimmedPassword = password.trim();
+
+  if (trimmedPassword !== password) {
+    candidates.push(trimmedPassword);
+  }
+
+  return candidates;
 }
 
 function verifyDefaultCiPassword(
@@ -8427,6 +11082,31 @@ function verifyDefaultCiPassword(
   return timingSafeEqual(
     Buffer.from(password, "utf8"),
     Buffer.from(defaultPassword, "utf8"),
+  );
+}
+
+function shouldAllowDefaultCiPasswordFallback(storedHash: string) {
+  return !storedHash.startsWith("scrypt:");
+}
+
+function shouldUpgradePasswordHash(storedHash: string) {
+  return !storedHash.startsWith("scrypt:");
+}
+
+function verifyLegacyPlainPassword(password: string, storedHash: string) {
+  if (storedHash.startsWith("scrypt:")) {
+    return false;
+  }
+
+  const storedPassword = storedHash.trim();
+
+  if (storedPassword.length === 0 || storedPassword.length !== password.length) {
+    return false;
+  }
+
+  return timingSafeEqual(
+    Buffer.from(password, "utf8"),
+    Buffer.from(storedPassword, "utf8"),
   );
 }
 
@@ -8691,11 +11371,191 @@ function buildAttendanceRegistrationLocation(input: RegisterAttendanceInput) {
   };
 }
 
-async function registerLunchScan(qrValue: string, scannerUserId: number) {
-  const scannedValue = qrValue.trim();
-  const selfRegistration = isLunchRegistrationQrPayload(scannedValue);
+function buildLunchQrSnapshotByAction(
+  existingSnapshot: unknown,
+  qrSnapshot: Record<string, unknown>,
+  action: "SALIDA" | "RETORNO",
+): Prisma.InputJsonValue {
+  const existingRecord =
+    typeof existingSnapshot === "object" &&
+    existingSnapshot != null &&
+    !Array.isArray(existingSnapshot)
+      ? (existingSnapshot as Record<string, unknown>)
+      : null;
+  const salidaSnapshot =
+    action === "SALIDA"
+      ? qrSnapshot
+      : (readNestedLunchQrSnapshot(existingRecord, "salida") ??
+        readLegacyLunchQrSnapshot(existingRecord));
+  const retornoSnapshot =
+    action === "RETORNO"
+      ? qrSnapshot
+      : readNestedLunchQrSnapshot(existingRecord, "retorno");
+
+  const combinedSnapshot = {
+    ...(existingRecord ?? {}),
+    ultimaAccion: action,
+    salida: salidaSnapshot,
+    retorno: retornoSnapshot ?? null,
+    ...(action === "SALIDA" ? qrSnapshot : {}),
+  };
+
+  return JSON.parse(JSON.stringify(combinedSnapshot)) as Prisma.InputJsonValue;
+}
+
+function readNestedLunchQrSnapshot(
+  snapshot: Record<string, unknown> | null,
+  key: "salida" | "retorno",
+) {
+  const nested = snapshot?.[key];
+
+  return typeof nested === "object" && nested != null && !Array.isArray(nested)
+    ? (nested as Record<string, unknown>)
+    : null;
+}
+
+function readLegacyLunchQrSnapshot(snapshot: Record<string, unknown> | null) {
+  if (snapshot == null) {
+    return null;
+  }
+
+  return snapshot["lookupCode"] != null || snapshot["lugarId"] != null
+    ? snapshot
+    : null;
+}
+
+function readLunchRegistrationScope(snapshot: unknown) {
+  const record =
+    typeof snapshot === "object" && snapshot != null && !Array.isArray(snapshot)
+      ? (snapshot as Record<string, unknown>)
+      : null;
+  const salidaSnapshot =
+    readNestedLunchQrSnapshot(record, "salida") ??
+    readLegacyLunchQrSnapshot(record);
+
+  if (salidaSnapshot == null) {
+    return { lugarId: null, pisoId: null };
+  }
+
+  return {
+    lugarId: readPositiveIntegerValue(salidaSnapshot.lugarId),
+    pisoId: readPositiveIntegerValue(salidaSnapshot.pisoId),
+  };
+}
+
+function readPositiveIntegerValue(value: unknown) {
+  const numericValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseInt(value, 10)
+        : Number.NaN;
+
+  return Number.isInteger(numericValue) && numericValue > 0
+    ? numericValue
+    : null;
+}
+
+function assertLunchReturnMatchesDepartureScope(input: {
+  departureLugarId: number | null;
+  departurePisoId: number | null;
+  returnLugarId: number | null;
+  returnPisoId: number | null;
+}) {
+  if (
+    input.departureLugarId != null &&
+    input.returnLugarId != null &&
+    input.returnLugarId !== input.departureLugarId
+  ) {
+    throw new HttpError(
+      409,
+      "No se puede registrar la entrada porque la salida de almuerzo inicio en otro lugar. Escanea el QR del mismo lugar donde registraste tu salida.",
+    );
+  }
+
+  if (
+    input.departurePisoId != null &&
+    input.returnPisoId !== input.departurePisoId
+  ) {
+    throw new HttpError(
+      409,
+      "No se puede registrar la entrada porque la salida de almuerzo inicio en otro piso. Escanea el QR del mismo piso donde registraste tu salida.",
+    );
+  }
+}
+
+function buildLunchScanLogFields(
+  input: LunchScanInput,
+  scannerUserId: number,
+  extra: Record<string, unknown> = {},
+) {
+  const qrValue = input.qrValue.trim();
+  const registrationQr = parseRegistrationQrPayload(
+    qrValue,
+    LUNCH_REGISTRATION_QR_TYPE,
+  );
+
+  return {
+    module: "almuerzos",
+    operation: "lunch_scan",
+    scannerUserId,
+    qrFingerprint: hashLogValue(qrValue),
+    qrLength: qrValue.length,
+    qrMode: registrationQr == null ? "credential" : "self_registration",
+    qrLugarId: registrationQr?.lugarId ?? null,
+    qrPisoId: registrationQr?.pisoId ?? null,
+    hasLocation: input.latitud != null && input.longitud != null,
+    latitude: roundLogCoordinate(input.latitud),
+    longitude: roundLogCoordinate(input.longitud),
+    accuracy: input.accuracy ?? null,
+    ...extra,
+  };
+}
+
+function logLunchScanError(
+  error: unknown,
+  input: LunchScanInput,
+  scannerUserId: number,
+  extra: Record<string, unknown> = {},
+) {
+  const fields = buildLunchScanLogFields(input, scannerUserId, {
+    ...extra,
+    statusCode: error instanceof HttpError ? error.statusCode : 500,
+  });
+
+  if (error instanceof HttpError) {
+    logWarning(`Error controlado registrando almuerzo: ${error.message}`, fields);
+    return;
+  }
+
+  logError("Error inesperado registrando almuerzo por QR.", error, fields);
+}
+
+function hashLogValue(value: string) {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function roundLogCoordinate(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return Math.round(value * 100000) / 100000;
+}
+
+async function registerLunchScan(input: LunchScanInput, scannerUserId: number) {
+  const scannedValue = input.qrValue.trim();
+  const registrationQr = parseRegistrationQrPayload(
+    scannedValue,
+    LUNCH_REGISTRATION_QR_TYPE,
+  );
+  const selfRegistration = registrationQr != null;
   let lookupCode = selfRegistration
-    ? "QR_ALMUERZO_FIJO"
+    ? buildRegistrationLookupCode(
+        "QR_ALMUERZO",
+        registrationQr.lugarId,
+        registrationQr.pisoId,
+      )
     : extractLookupCode(scannedValue);
 
   if (!lookupCode) {
@@ -8724,22 +11584,54 @@ async function registerLunchScan(qrValue: string, scannerUserId: number) {
     );
   }
 
-  const scannedAt = new Date();
-  const lunchDateText = formatDateInAppTimeZone(scannedAt);
-  const lunchDate = readDateOnlyString(lunchDateText, "fecha");
-  const lunchTime = formatTimeInAppTimeZone(scannedAt);
+  await assertRegistrationLocationInsidePlace({
+    placeId: registrationQr?.lugarId ?? null,
+    latitud: input.latitud,
+    longitud: input.longitud,
+    accuracy: input.accuracy,
+  });
 
-  assertLunchScanWithinAllowedTime(lunchTime);
+  const lugarNombre =
+    registrationQr?.lugarId == null
+      ? null
+      : await loadPlaceName(registrationQr.lugarId);
+  const pisoNombre =
+    registrationQr?.lugarId == null || registrationQr.pisoId == null
+      ? null
+      : await loadPlaceFloorName(registrationQr.lugarId, registrationQr.pisoId);
 
-  const qrSnapshot = {
-    rawValue: scannedValue,
-    lookupCode,
-    scannedAt: scannedAt.toISOString(),
-    personaId: person.id,
-    usuarioId: funcionario.id,
-  };
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(4015, ${funcionario.id})`;
 
-  const record = await prisma.$transaction(async (tx) => {
+    const scannedAt = new Date();
+    const lunchDateText = formatLunchDateInBoliviaTimeZone(scannedAt);
+    const lunchDate = readDateOnlyString(lunchDateText, "fecha");
+    const lunchTime = formatLunchTimeInBoliviaTimeZone(scannedAt);
+
+    if (await isUserExcludedFromLunchOnDate(funcionario.id, lunchDate)) {
+      throw new HttpError(
+        403,
+        "Este funcionario esta excluido del control de almuerzo.",
+      );
+    }
+
+    const qrSnapshot = {
+      rawValue: scannedValue,
+      lookupCode,
+      lugarId: registrationQr?.lugarId ?? null,
+      lugarNombre,
+      pisoId: registrationQr?.pisoId ?? null,
+      pisoNombre,
+      registrationLocation: {
+        latitud: input.latitud,
+        longitud: input.longitud,
+        accuracy: input.accuracy,
+      },
+      scannedAt: scannedAt.toISOString(),
+      personaId: person.id,
+      usuarioId: funcionario.id,
+    };
+
     const openLunch = await tx.almuerzos.findFirst({
       where: {
         usuario_id: funcionario.id,
@@ -8747,21 +11639,87 @@ async function registerLunchScan(qrValue: string, scannerUserId: number) {
         hora_retorno: null,
       },
       orderBy: [{ salida_en: "desc" }, { id: "desc" }],
+      include: lunchRecordInclude,
     });
 
     if (openLunch) {
-      return tx.almuerzos.update({
+      const departureScope = readLunchRegistrationScope(
+        openLunch.datos_qr_snapshot,
+      );
+
+      assertLunchReturnMatchesDepartureScope({
+        departureLugarId: departureScope.lugarId,
+        departurePisoId: departureScope.pisoId,
+        returnLugarId: registrationQr?.lugarId ?? null,
+        returnPisoId: registrationQr?.pisoId ?? null,
+      });
+
+      if (isLunchReturnBeforeDeparture(openLunch.salida_en, scannedAt)) {
+        logWarning(
+          "Retorno de almuerzo rechazado porque es anterior o igual a la salida.",
+          buildLunchScanLogFields(input, scannerUserId, {
+            lunchRecordId: openLunch.id,
+            employeeUserId: funcionario.id,
+            lunchDate: lunchDateText,
+            departureTime: openLunch.hora_salida,
+            scannedTime: lunchTime,
+          }),
+        );
+        throw new HttpError(
+          409,
+          "El retorno no puede registrarse antes de la salida de almuerzo.",
+        );
+      }
+
+      if (isLunchReturnTooSoon(openLunch.salida_en, scannedAt)) {
+        logWarning(
+          "Retorno de almuerzo rechazado por ventana minima de 15 minutos.",
+          buildLunchScanLogFields(input, scannerUserId, {
+            lunchRecordId: openLunch.id,
+            employeeUserId: funcionario.id,
+            lunchDate: lunchDateText,
+            departureTime: openLunch.hora_salida,
+            scannedTime: lunchTime,
+          }),
+        );
+        throw new HttpError(
+          409,
+          "Es muy pronto para registrar su retorno.",
+        );
+      }
+
+      const updatedLunch = await tx.almuerzos.update({
         where: { id: openLunch.id },
         data: {
           hora_retorno: lunchTime,
           retorno_en: scannedAt,
           registrado_retorno_por_id: scannerUserId,
           qr_leido: scannedValue,
-          datos_qr_snapshot: qrSnapshot,
+          datos_qr_snapshot: buildLunchQrSnapshotByAction(
+            openLunch.datos_qr_snapshot,
+            qrSnapshot,
+            "RETORNO",
+          ),
           updated_at: scannedAt,
         },
         include: lunchRecordInclude,
       });
+
+      logInfo(
+        "Retorno de almuerzo registrado.",
+        buildLunchScanLogFields(input, scannerUserId, {
+          lunchRecordId: updatedLunch.id,
+          employeeUserId: funcionario.id,
+          lunchDate: lunchDateText,
+          departureTime: updatedLunch.hora_salida,
+          returnTime: updatedLunch.hora_retorno,
+        }),
+      );
+
+      return {
+        record: updatedLunch,
+        alreadyRegistered: false,
+      };
     }
 
     const closedLunch = await tx.almuerzos.findFirst({
@@ -8773,16 +11731,93 @@ async function registerLunchScan(qrValue: string, scannerUserId: number) {
         },
       },
       orderBy: [{ retorno_en: "desc" }, { id: "desc" }],
+      include: lunchRecordInclude,
     });
 
-    if (closedLunch) {
-      throw new HttpError(
-        409,
-        "Este funcionario ya registro salida y retorno de almuerzo hoy. Podra registrar nuevamente al dia siguiente.",
+    if (
+      closedLunch?.retorno_en != null &&
+      isInvalidLunchReturnWindow(closedLunch.salida_en, closedLunch.retorno_en)
+    ) {
+      const departureScope = readLunchRegistrationScope(
+        closedLunch.datos_qr_snapshot,
       );
+
+      assertLunchReturnMatchesDepartureScope({
+        departureLugarId: departureScope.lugarId,
+        departurePisoId: departureScope.pisoId,
+        returnLugarId: registrationQr?.lugarId ?? null,
+        returnPisoId: registrationQr?.pisoId ?? null,
+      });
+
+      logWarning(
+        "Registro de almuerzo invalido reabierto porque el retorno no cumple la ventana minima.",
+        buildLunchScanLogFields(input, scannerUserId, {
+          lunchRecordId: closedLunch.id,
+          employeeUserId: funcionario.id,
+          lunchDate: lunchDateText,
+          departureTime: closedLunch.hora_salida,
+          returnTime: closedLunch.hora_retorno,
+        }),
+      );
+
+      if (!isLunchReturnTooSoon(closedLunch.salida_en, scannedAt)) {
+        const updatedLunch = await tx.almuerzos.update({
+          where: { id: closedLunch.id },
+          data: {
+            hora_retorno: lunchTime,
+            retorno_en: scannedAt,
+            registrado_retorno_por_id: scannerUserId,
+            qr_leido: scannedValue,
+            datos_qr_snapshot: buildLunchQrSnapshotByAction(
+              closedLunch.datos_qr_snapshot,
+              qrSnapshot,
+              "RETORNO",
+            ),
+            updated_at: scannedAt,
+          },
+          include: lunchRecordInclude,
+        });
+
+        return {
+          record: updatedLunch,
+          alreadyRegistered: false,
+        };
+      }
+
+      const reopenedLunch = await tx.almuerzos.update({
+        where: { id: closedLunch.id },
+        data: {
+          hora_retorno: null,
+          retorno_en: null,
+          registrado_retorno_por_id: null,
+          datos_qr_snapshot: buildLunchQrSnapshotByAction(
+            closedLunch.datos_qr_snapshot,
+            qrSnapshot,
+            "SALIDA",
+          ),
+          updated_at: scannedAt,
+        },
+        include: lunchRecordInclude,
+      });
+
+      return {
+        record: reopenedLunch,
+        alreadyRegistered: false,
+      };
     }
 
-    return tx.almuerzos.create({
+    if (closedLunch && !LUNCH_TEST_MODE) {
+      return {
+        record: closedLunch,
+        alreadyRegistered: true,
+      };
+    }
+
+    // TEMPORAL: horario de almuerzo deshabilitado para pruebas de escaneo QR.
+    // Para restaurar el horario de 12:00 a 14:00 (Bolivia), descomentar:
+    // assertLunchScanWithinAllowedTime(lunchTime);
+
+    const createdLunch = await tx.almuerzos.create({
       data: {
         usuario_id: funcionario.id,
         fecha: lunchDate,
@@ -8790,7 +11825,11 @@ async function registerLunchScan(qrValue: string, scannerUserId: number) {
         salida_en: scannedAt,
         registrado_salida_por_id: scannerUserId,
         qr_leido: scannedValue,
-        datos_qr_snapshot: qrSnapshot,
+        datos_qr_snapshot: buildLunchQrSnapshotByAction(
+          null,
+          qrSnapshot,
+          "SALIDA",
+        ),
         funcionario_nombre_completo: buildUserDisplayName(funcionario),
         funcionario_ci: normalizeOptionalText(funcionario.ci),
         funcionario_numero_item: normalizeOptionalText(funcionario.numero_item),
@@ -8800,14 +11839,32 @@ async function registerLunchScan(qrValue: string, scannerUserId: number) {
       },
       include: lunchRecordInclude,
     });
+
+    logInfo(
+      "Salida de almuerzo registrada.",
+      buildLunchScanLogFields(input, scannerUserId, {
+        lunchRecordId: createdLunch.id,
+        employeeUserId: funcionario.id,
+        lunchDate: lunchDateText,
+        departureTime: createdLunch.hora_salida,
+      }),
+    );
+
+    return {
+      record: createdLunch,
+      alreadyRegistered: false,
+    };
   });
 
+  const record = result.record;
   const action = record.hora_retorno == null ? "SALIDA" : "RETORNO";
   const actionLabel = action === "SALIDA" ? "Salida" : "Retorno";
 
   return {
     accion: action,
-    mensaje: `${actionLabel} de almuerzo registrada para ${record.funcionario_nombre_completo}.`,
+    mensaje: result.alreadyRegistered
+      ? `Este funcionario ya registro salida y retorno de almuerzo hoy. Retorno: ${record.hora_retorno}.`
+      : `${actionLabel} de almuerzo registrada para ${record.funcionario_nombre_completo}.`,
     registro: serializeLunchRecord(record),
   };
 }
@@ -8815,14 +11872,35 @@ async function registerLunchScan(qrValue: string, scannerUserId: number) {
 function assertLunchScanWithinAllowedTime(lunchTime: string) {
   const minutes = parseTimeTextToMinutes(lunchTime);
   const startMinutes = 12 * 60;
-  const endMinutes = 15 * 60;
+  const endMinutes = 14 * 60;
 
-  if (minutes < startMinutes || minutes >= endMinutes) {
-    throw new HttpError(
-      403,
-      "No cumple el horario de almuerzo. El escaneo solo esta permitido de 12:00 a 15:00.",
-    );
+  if (minutes < startMinutes || minutes > endMinutes) {
+    throw new HttpError(403, "No cumple el horario de almuerzo.");
   }
+}
+
+function isLunchReturnTooSoon(departureAt: Date, scannedAt: Date) {
+  const elapsedMs = scannedAt.getTime() - departureAt.getTime();
+  return elapsedMs < MINIMUM_LUNCH_RETURN_WINDOW_MS;
+}
+
+function isLunchReturnBeforeDeparture(departureAt: Date, scannedAt: Date) {
+  return scannedAt.getTime() <= departureAt.getTime();
+}
+
+function isInvalidLunchReturnWindow(departureAt: Date, returnAt: Date) {
+  return (
+    isLunchReturnBeforeDeparture(departureAt, returnAt) ||
+    isLunchReturnTooSoon(departureAt, returnAt)
+  );
+}
+
+function formatLunchDateInBoliviaTimeZone(date: Date) {
+  return formatInTimeZone(date, LUNCH_TIME_ZONE, "yyyy-MM-dd");
+}
+
+function formatLunchTimeInBoliviaTimeZone(date: Date) {
+  return formatInTimeZone(date, LUNCH_TIME_ZONE, "HH:mm");
 }
 
 function parseTimeTextToMinutes(value: string) {
@@ -8838,18 +11916,211 @@ function parseTimeTextToMinutes(value: string) {
     minute < 0 ||
     minute > 59
   ) {
-    throw new HttpError(500, "No fue posible validar el horario de almuerzo.");
+    throw new HttpError(
+      500,
+      "Servicio temporalmente no disponible. Intenta nuevamente.",
+    );
   }
 
   return hour * 60 + minute;
 }
 
 function isLunchRegistrationQrPayload(value: string) {
-  return value.trim() === LUNCH_REGISTRATION_QR_PAYLOAD;
+  return parseRegistrationQrPayload(value, LUNCH_REGISTRATION_QR_TYPE) != null;
 }
 
 function isExitPermitRegistrationQrPayload(value: string) {
-  return value.trim() === EXIT_PERMIT_REGISTRATION_QR_PAYLOAD;
+  return (
+    parseRegistrationQrPayload(value, EXIT_PERMIT_REGISTRATION_QR_TYPE) != null
+  );
+}
+
+function parseRegistrationQrPayload(value: string, expectedType: string) {
+  const normalized = value.trim();
+  const securePayload = parseSecureRegistrationQrPayload(
+    normalized,
+    expectedType,
+  );
+
+  if (securePayload != null) {
+    return securePayload;
+  }
+
+  if (
+    (expectedType === LUNCH_REGISTRATION_QR_TYPE &&
+      normalized === LUNCH_REGISTRATION_QR_PAYLOAD) ||
+    (expectedType === EXIT_PERMIT_REGISTRATION_QR_TYPE &&
+      normalized === EXIT_PERMIT_REGISTRATION_QR_PAYLOAD)
+  ) {
+    return { lugarId: null, pisoId: null };
+  }
+
+  try {
+    const parsed = JSON.parse(normalized);
+
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+
+    const record = parsed as JsonRecord;
+    const type = typeof record.type === "string" ? record.type.trim() : "";
+    const version =
+      typeof record.version === "number"
+        ? record.version
+        : typeof record.version === "string"
+          ? Number.parseInt(record.version, 10)
+          : Number.NaN;
+    const lugarId =
+      typeof record.lugarId === "number"
+        ? record.lugarId
+        : typeof record.lugarId === "string"
+          ? Number.parseInt(record.lugarId, 10)
+          : Number.NaN;
+    const pisoId =
+      record.pisoId == null
+        ? null
+        : typeof record.pisoId === "number"
+          ? record.pisoId
+          : typeof record.pisoId === "string"
+            ? Number.parseInt(record.pisoId, 10)
+            : Number.NaN;
+
+    if (
+      type !== expectedType ||
+      version !== 2 ||
+      !Number.isInteger(lugarId) ||
+      lugarId <= 0 ||
+      (pisoId != null && (!Number.isInteger(pisoId) || pisoId <= 0))
+    ) {
+      return null;
+    }
+
+    return { lugarId, pisoId };
+  } catch {
+    return null;
+  }
+}
+
+function parseSecureRegistrationQrPayload(value: string, expectedType: string) {
+  const [version, kind, envelope, extra] = value.split(".");
+
+  if (
+    version !== SECURE_REGISTRATION_QR_VERSION ||
+    envelope == null ||
+    extra != null ||
+    !isExpectedRegistrationQrKind(kind, expectedType)
+  ) {
+    return null;
+  }
+
+  const encryptedEnvelope = Buffer.from(envelope, "base64url");
+
+  if (
+    encryptedEnvelope.length <=
+    REGISTRATION_QR_NONCE_LENGTH + REGISTRATION_QR_TAG_LENGTH
+  ) {
+    return null;
+  }
+
+  const candidateKeys = [
+    REGISTRATION_QR_SECRET_BYTES,
+    ...(!REGISTRATION_QR_SECRET_BYTES.equals(
+      REGISTRATION_QR_FALLBACK_SECRET_BYTES,
+    )
+      ? [REGISTRATION_QR_FALLBACK_SECRET_BYTES]
+      : []),
+  ];
+
+  for (const key of candidateKeys) {
+    const decoded = tryDecodeSecureRegistrationQrEnvelope(
+      encryptedEnvelope,
+      key,
+    );
+
+    if (decoded != null) {
+      return decoded;
+    }
+  }
+
+  return null;
+}
+
+function tryDecodeSecureRegistrationQrEnvelope(
+  encryptedEnvelope: Buffer,
+  key: Buffer,
+) {
+  try {
+    const nonce = encryptedEnvelope.subarray(0, REGISTRATION_QR_NONCE_LENGTH);
+    const tag = encryptedEnvelope.subarray(
+      encryptedEnvelope.length - REGISTRATION_QR_TAG_LENGTH,
+    );
+    const cipherText = encryptedEnvelope.subarray(
+      REGISTRATION_QR_NONCE_LENGTH,
+      encryptedEnvelope.length - REGISTRATION_QR_TAG_LENGTH,
+    );
+    const decipher = createDecipheriv("aes-256-gcm", key, nonce);
+
+    decipher.setAuthTag(tag);
+
+    const decrypted = Buffer.concat([
+      decipher.update(cipherText),
+      decipher.final(),
+    ]);
+    const parsed = JSON.parse(decrypted.toString("utf8"));
+    const record = expectRecord(parsed);
+    const lugarId =
+      typeof record.lugarId === "number"
+        ? record.lugarId
+        : typeof record.lugarId === "string"
+          ? Number.parseInt(record.lugarId, 10)
+          : Number.NaN;
+    const pisoId =
+      record.pisoId == null
+        ? null
+        : typeof record.pisoId === "number"
+          ? record.pisoId
+          : typeof record.pisoId === "string"
+            ? Number.parseInt(record.pisoId, 10)
+            : Number.NaN;
+
+    if (
+      !Number.isInteger(lugarId) ||
+      lugarId <= 0 ||
+      (pisoId != null && (!Number.isInteger(pisoId) || pisoId <= 0))
+    ) {
+      return null;
+    }
+
+    return { lugarId, pisoId };
+  } catch {
+    return null;
+  }
+}
+
+function isExpectedRegistrationQrKind(
+  kind: string | undefined,
+  expectedType: string,
+) {
+  return (
+    (expectedType === LUNCH_REGISTRATION_QR_TYPE &&
+      kind === SECURE_LUNCH_REGISTRATION_KIND) ||
+    (expectedType === EXIT_PERMIT_REGISTRATION_QR_TYPE &&
+      kind === SECURE_EXIT_PERMIT_REGISTRATION_KIND)
+  );
+}
+
+function buildRegistrationLookupCode(
+  prefix: string,
+  lugarId: number | null,
+  pisoId?: number | null,
+) {
+  if (lugarId == null) {
+    return `${prefix}_FIJO`;
+  }
+
+  return pisoId == null
+    ? `${prefix}_LUGAR_${lugarId}`
+    : `${prefix}_LUGAR_${lugarId}_PISO_${pisoId}`;
 }
 
 async function resolveFuncionarioByScannedQr(
@@ -8882,11 +12153,18 @@ async function resolveSelfRegistrationFuncionario(userId: number) {
   };
 }
 
-async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
-  const scannedValue = qrValue.trim();
-  const selfRegistration = isExitPermitRegistrationQrPayload(scannedValue);
+async function registerExitPermitScan(
+  input: LunchScanInput,
+  scannerUserId: number,
+) {
+  const scannedValue = input.qrValue.trim();
+  const registrationQr = parseRegistrationQrPayload(
+    scannedValue,
+    EXIT_PERMIT_REGISTRATION_QR_TYPE,
+  );
+  const selfRegistration = registrationQr != null;
   let lookupCode = selfRegistration
-    ? "QR_SALIDAS_FIJO"
+    ? buildRegistrationLookupCode("QR_SALIDAS", registrationQr.lugarId)
     : extractLookupCode(scannedValue);
 
   if (!lookupCode) {
@@ -8915,6 +12193,13 @@ async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
     );
   }
 
+  await assertRegistrationLocationInsidePlace({
+    placeId: registrationQr?.lugarId ?? null,
+    latitud: input.latitud,
+    longitud: input.longitud,
+    accuracy: input.accuracy,
+  });
+
   const scannedAt = new Date();
   const permitDateText = formatDateInAppTimeZone(scannedAt);
   const permitDate = readDateOnlyString(permitDateText, "fecha");
@@ -8922,12 +12207,22 @@ async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
   const qrSnapshot = {
     rawValue: scannedValue,
     lookupCode,
+    lugarId: registrationQr?.lugarId ?? null,
+    lugarNombre:
+      registrationQr?.lugarId == null
+        ? null
+        : await loadPlaceName(registrationQr.lugarId),
+    registrationLocation: {
+      latitud: input.latitud,
+      longitud: input.longitud,
+      accuracy: input.accuracy,
+    },
     scannedAt: scannedAt.toISOString(),
     personaId: person.id,
     usuarioId: funcionario.id,
   };
 
-  const record = await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const openExitPermit = await tx.salidas.findFirst({
       where: {
         usuario_id: funcionario.id,
@@ -8942,7 +12237,7 @@ async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
     });
 
     if (openExitPermit) {
-      return tx.salidas.update({
+      const updatedPermit = await tx.salidas.update({
         where: { id: openExitPermit.id },
         data: {
           hora_llegada: scanTime,
@@ -8954,6 +12249,11 @@ async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
         },
         include: exitPermitRecordInclude,
       });
+
+      return {
+        record: updatedPermit,
+        alreadyRegistered: false,
+      };
     }
 
     const pendingDeparturePermit = await tx.salidas.findFirst({
@@ -8967,7 +12267,7 @@ async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
     });
 
     if (pendingDeparturePermit) {
-      return tx.salidas.update({
+      const updatedPermit = await tx.salidas.update({
         where: { id: pendingDeparturePermit.id },
         data: {
           hora_inicio: scanTime,
@@ -8979,6 +12279,11 @@ async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
         },
         include: exitPermitRecordInclude,
       });
+
+      return {
+        record: updatedPermit,
+        alreadyRegistered: false,
+      };
     }
 
     const completedPermit = await tx.salidas.findFirst({
@@ -8994,13 +12299,14 @@ async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
         },
       },
       orderBy: [{ llegada_en: "desc" }, { updated_at: "desc" }, { id: "desc" }],
+      include: exitPermitRecordInclude,
     });
 
     if (completedPermit) {
-      throw new HttpError(
-        409,
-        "Este funcionario ya registro salida y llegada de su permiso aprobado de hoy.",
-      );
+      return {
+        record: completedPermit,
+        alreadyRegistered: true,
+      };
     }
 
     throw new HttpError(
@@ -9009,36 +12315,29 @@ async function registerExitPermitScan(qrValue: string, scannerUserId: number) {
     );
   });
 
+  const record = result.record;
   const action = record.hora_llegada == null ? "SALIDA" : "LLEGADA";
   const actionLabel = action === "SALIDA" ? "Salida" : "Llegada";
 
   return {
     accion: action,
-    mensaje: `${actionLabel} de permiso registrada para ${record.solicitante_nombre_completo}.`,
+    mensaje: result.alreadyRegistered
+      ? `Este funcionario ya registro salida y llegada de su permiso aprobado de hoy. Llegada: ${record.hora_llegada}.`
+      : `${actionLabel} de permiso registrada para ${record.solicitante_nombre_completo}.`,
     registro: serializeExitPermit(record),
   };
 }
 
 function formatDateInAppTimeZone(date: Date) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: APP_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
+  return formatInTimeZone(date, APP_TIME_ZONE, "yyyy-MM-dd");
 }
 
 function formatTimeInAppTimeZone(date: Date) {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: APP_TIME_ZONE,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
+  return formatInTimeZone(date, APP_TIME_ZONE, "HH:mm");
 }
 
 function resolveControlRegistrationTiming(
-  event: { fecha_evento: Date },
+  _event: { fecha_evento: Date },
   control: {
     nombre: string;
     hora_inicio?: string | null;
@@ -9049,40 +12348,14 @@ function resolveControlRegistrationTiming(
   const startTime = control.hora_inicio ?? null;
   const endTime = control.hora_fin ?? null;
 
-  // Los controles creados antes de esta funcionalidad no tienen rango.
-  if (startTime == null && endTime == null) {
+  // Restriccion horaria desactivada temporalmente por solicitud operativa.
+  // Se sigue marcando retraso cuando el rango existe, pero no se rechaza
+  // por fecha, por hora inicial ni por configuracion incompleta.
+  if (startTime == null || endTime == null || !isValidTimeText(endTime)) {
     return { isLate: false };
   }
 
-  if (
-    startTime == null ||
-    endTime == null ||
-    !isValidTimeText(startTime) ||
-    !isValidTimeText(endTime)
-  ) {
-    throw new HttpError(
-      409,
-      `El control "${control.nombre}" no tiene un rango horario valido.`,
-    );
-  }
-
-  const eventDate = formatDateInAppTimeZone(event.fecha_evento);
-  const currentDate = formatDateInAppTimeZone(registeredAt);
   const currentTime = formatTimeInAppTimeZone(registeredAt);
-
-  if (currentDate !== eventDate) {
-    throw new HttpError(
-      409,
-      `El control "${control.nombre}" solo permite registrar en la fecha del evento.`,
-    );
-  }
-
-  if (currentTime < startTime) {
-    throw new HttpError(
-      409,
-      `El control "${control.nombre}" comenzara a registrar asistencia a las ${startTime}.`,
-    );
-  }
 
   return { isLate: currentTime > endTime };
 }
@@ -9425,6 +12698,15 @@ function normalizeTextForComparison(value: unknown) {
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
     .toLowerCase();
+}
+
+function buildSearchTokens(value: unknown) {
+  return (normalizeOptionalText(value) ?? "")
+    .toLowerCase()
+    .split(/[\s,.;:/\\|()-]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2)
+    .slice(0, 8);
 }
 
 function buildLegacyUserQrCode(user: {
@@ -9895,6 +13177,20 @@ function buildResolvedPersonDisplayName(person: any) {
   return normalizeOptionalText(person.nombre_completo) ?? "";
 }
 
+function buildAttendanceIdentitySnapshot(person: any) {
+  const linkedUser = person.usuario ?? null;
+  const officeName = resolveLinkedOfficeName(linkedUser);
+
+  return {
+    nombre: buildResolvedPersonDisplayName(person),
+    ci: linkedUser?.ci ?? person.ci ?? null,
+    cargo: resolveEffectiveJobTitleName(linkedUser),
+    oficinaId: resolveLinkedOfficeId(linkedUser),
+    oficina: officeName,
+    oficinaCodigo: resolveLinkedOfficeCode(linkedUser),
+  };
+}
+
 function buildAttendanceQrSnapshot(
   person: any,
   scannedValue: string,
@@ -9979,6 +13275,82 @@ async function loadSerializedJobTitles() {
   cargosCache = createCacheEntry(serializedJobTitles, REFERENCE_CACHE_TTL_MS);
 
   return serializedJobTitles;
+}
+
+async function loadSerializedOfficeUsers() {
+  const users = await prisma.usuarios.findMany({
+    where: {
+      activo: true,
+      email: { not: SEED_ADMIN_EMAIL },
+      rol: {
+        in: [
+          rol_usuario.OPERADOR,
+          rol_usuario.ADMIN,
+          rol_usuario.ADMIN_SALUD,
+          rol_usuario.ADMIN_CONSULTORES,
+          rol_usuario.ADMIN_EVENTUALES,
+        ],
+      },
+    },
+    include: userWithOfficeInclude,
+    orderBy: [{ nombre_completo: "asc" }, { id: "asc" }],
+  });
+
+  return users
+    .map((user) => ({
+      id: user.id,
+      oficinaId: resolveLinkedOfficeId(user) ?? 0,
+      nombreCompleto: buildUserDisplayName(user),
+      cargo: resolveEffectiveJobTitleName(user) ?? "",
+      ci: normalizeOptionalText(user.ci) ?? "",
+      tipoVinculo: normalizeOptionalText(user.tipo_vinculo) ?? "",
+    }));
+}
+
+async function loadSerializedJobTitlesForOffice(officeId: number) {
+  if (!Number.isInteger(officeId) || officeId <= 0) {
+    throw new HttpError(400, "Debes enviar una oficina valida.");
+  }
+
+  const result = await pool.query(
+    `
+      WITH "usuarios_oficina" AS (
+        SELECT
+          NULLIF(TRIM(v."codigo"), '') AS "codigo",
+          NULLIF(TRIM(v."cargo"), '') AS "cargo"
+        FROM "usuarios" u
+        CROSS JOIN LATERAL (
+          VALUES
+            (u."cargo_codigo", u."cargo"),
+            (u."subcargo_codigo", u."subcargo")
+        ) AS v("codigo", "cargo")
+        WHERE u."activo" = TRUE
+          AND COALESCE(u."oficina_comision_id", u."oficina_id") = $1
+      )
+      SELECT DISTINCT ON (COALESCE(c."codigo", uo."codigo"))
+        COALESCE(c."codigo", uo."codigo") AS "codigo",
+        COALESCE(uo."cargo", c."cargo", uo."codigo") AS "cargo"
+      FROM "usuarios_oficina" uo
+      LEFT JOIN "cargos" c
+        ON c."codigo" = uo."codigo"
+        OR (
+          uo."codigo" IS NULL
+          AND uo."cargo" IS NOT NULL
+          AND (
+            LOWER(TRIM(c."cargo")) = LOWER(TRIM(uo."cargo"))
+            OR (
+              LOWER(TRIM(uo."cargo")) IN ('jefa', 'jefe')
+              AND LOWER(TRIM(c."cargo")) IN ('jefa', 'jefe')
+            )
+          )
+        )
+      WHERE COALESCE(c."codigo", uo."codigo") IS NOT NULL
+      ORDER BY COALESCE(c."codigo", uo."codigo"), "cargo" ASC
+    `,
+    [officeId],
+  );
+
+  return result.rows.map(serializeJobTitle);
 }
 
 async function loadDashboardSummary(requester?: AuthenticatedUser) {
@@ -10117,6 +13489,18 @@ function buildExitPermitNotificationCandidateWhere(salida: any) {
 }
 
 async function canReviewExitPermit(approver: any, salida: any, applicant: any) {
+  if (await canNaturalReviewExitPermit(approver, salida, applicant)) {
+    return true;
+  }
+
+  return canDelegatedReviewExitPermit(approver, salida, applicant);
+}
+
+async function canNaturalReviewExitPermit(
+  approver: any,
+  salida: any,
+  applicant: any,
+) {
   const approverOfficeId = resolveLinkedOfficeId(approver);
   const applicantIsChief = isChiefExitPermitApplicant(applicant);
   const applicantIsDirector = isDirectorExitPermitApprover(applicant);
@@ -10157,6 +13541,446 @@ async function canReviewExitPermit(approver: any, salida: any, applicant: any) {
     !applicantIsChief &&
     !applicantIsDirector
   );
+}
+
+async function canDelegatedReviewExitPermit(
+  approver: any,
+  salida: any,
+  applicant: any,
+) {
+  if (
+    approver == null ||
+    approver.activo !== true ||
+    approver.rol !== rol_usuario.OPERADOR ||
+    salida.usuario_id === approver.id
+  ) {
+    return false;
+  }
+
+  const delegators = await loadActiveExitPermitDelegators(approver.id);
+
+  for (const delegator of delegators) {
+    if (
+      delegator.id !== approver.id &&
+      (await canNaturalReviewExitPermit(delegator, salida, applicant))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function canUserApproveExitPermits(user: any) {
+  if (isExitPermitApproverUser(user)) {
+    return true;
+  }
+
+  if (!user || user.activo !== true || user.rol !== rol_usuario.OPERADOR) {
+    return false;
+  }
+
+  const delegators = await loadActiveExitPermitDelegators(user.id);
+  return delegators.length > 0;
+}
+
+async function loadActiveExitPermitDelegators(delegateUserId: number) {
+  const result = await pool.query<{ otorgante_id: number }>(
+    `
+      SELECT DISTINCT "otorgante_id"
+      FROM "salida_aprobador_delegaciones"
+      WHERE "delegado_id" = $1
+        AND "activo" = TRUE
+    `,
+    [delegateUserId],
+  );
+  const delegatorIds = result.rows.map((row) => row.otorgante_id);
+
+  if (delegatorIds.length === 0) {
+    return [];
+  }
+
+  return prisma.usuarios.findMany({
+    where: {
+      id: { in: delegatorIds },
+      activo: true,
+      rol: rol_usuario.OPERADOR,
+    },
+    include: userWithOfficeInclude,
+  });
+}
+
+function readExitPermitDelegationInput(body: JsonRecord) {
+  return {
+    delegateUserId: readRequiredInt(body, "delegateUserId"),
+    ownerUserId: readOptionalInt(body, "ownerUserId"),
+  };
+}
+
+async function loadExitPermitApprovalDelegationPanel(manager: any) {
+  assertCanManageExitPermitDelegations(manager);
+
+  const candidates = await loadExitPermitDelegationCandidates(manager);
+  const delegations = await loadManageableExitPermitDelegations(manager);
+  const owners = await loadExitPermitDelegationOwners(manager);
+
+  return {
+    canDelegate:
+      isExitPermitApproverUser(manager) ||
+      (isAdminRole(manager.rol) && owners.length > 0),
+    owners: owners.map(serializeExitPermitDelegationUser),
+    candidates: candidates.map(serializeExitPermitDelegationUser),
+    delegations: delegations.map(serializeExitPermitDelegation),
+  };
+}
+
+function assertCanManageExitPermitDelegations(manager: any) {
+  if (
+    manager == null ||
+    manager.activo !== true ||
+    (!isAdminRole(manager.rol) && !isExitPermitApproverUser(manager))
+  ) {
+    throw new HttpError(403, "No puedes gestionar aprobadores de salidas.");
+  }
+}
+
+async function loadExitPermitDelegationCandidates(manager: any) {
+  if (!isExitPermitApproverUser(manager) && !isAdminRole(manager.rol)) {
+    return [];
+  }
+
+  const candidates = await prisma.usuarios.findMany({
+    where: {
+      id: { not: manager.id },
+      activo: true,
+      rol: rol_usuario.OPERADOR,
+    },
+    include: userWithOfficeInclude,
+    orderBy: [{ nombre_completo: "asc" }, { id: "asc" }],
+  });
+
+  return candidates.filter((candidate) =>
+    isAdminRole(manager.rol)
+      ? candidate.id !== manager.id && resolveLinkedOfficeId(candidate) != null
+      : canDelegateExitPermitApprovalToUser(manager, candidate),
+  );
+}
+
+async function loadExitPermitDelegationOwners(manager: any) {
+  if (!isAdminRole(manager.rol)) {
+    return [];
+  }
+
+  const users = await prisma.usuarios.findMany({
+    where: {
+      activo: true,
+      rol: rol_usuario.OPERADOR,
+    },
+    include: userWithOfficeInclude,
+    orderBy: [{ nombre_completo: "asc" }, { id: "asc" }],
+  });
+
+  return users.filter(
+    (user) =>
+      isExitPermitApproverUser(user) &&
+      (isSeniorExitPermitApprover(user) || isDirectorExitPermitApprover(user)),
+  );
+}
+
+function canDelegateExitPermitApprovalToUser(manager: any, candidate: any) {
+  const candidateOfficeId = resolveLinkedOfficeId(candidate);
+  const managerOfficeId = resolveLinkedOfficeId(manager);
+  const managerOfficeCode = normalizeOptionalText(
+    resolveLinkedOfficeCode(manager),
+  );
+  const candidateOfficeCode = normalizeOptionalText(
+    resolveLinkedOfficeCode(candidate),
+  );
+
+  if (candidate.id === manager.id || candidateOfficeId == null) {
+    return false;
+  }
+
+  if (isSeniorExitPermitApprover(manager)) {
+    return (
+      managerOfficeCode != null &&
+      candidateOfficeCode != null &&
+      candidateOfficeCode.startsWith(`${managerOfficeCode}.`)
+    );
+  }
+
+  if (isDirectorExitPermitApprover(manager)) {
+    const directionCode = resolveDirectorOfficeCode(manager);
+
+    return (
+      directionCode != null &&
+      candidateOfficeCode != null &&
+      candidateOfficeCode.startsWith(`${directionCode}.`) &&
+      !isSeniorExitPermitApprover(candidate)
+    );
+  }
+
+  return managerOfficeId != null && managerOfficeId === candidateOfficeId;
+}
+
+async function createExitPermitApproverDelegation(
+  manager: any,
+  delegateUserId: number,
+  ownerUserId?: number | null,
+) {
+  const owner =
+    isAdminRole(manager.rol) && ownerUserId != null
+      ? await prisma.usuarios.findUnique({
+          where: { id: ownerUserId },
+          include: userWithOfficeInclude,
+        })
+      : manager;
+
+  if (!owner || !isExitPermitApproverUser(owner)) {
+    throw new HttpError(
+      403,
+      "Solo jefes, directores o secretarios pueden delegar aprobaciones.",
+    );
+  }
+
+  const delegate = await prisma.usuarios.findUnique({
+    where: { id: delegateUserId },
+    include: userWithOfficeInclude,
+  });
+
+  if (
+    delegate == null ||
+    delegate.activo !== true ||
+    !canManageExitPermitApprover(manager, owner) ||
+    !canDelegateExitPermitApprovalToUser(owner, delegate)
+  ) {
+    throw new HttpError(
+      403,
+      "Solo puedes delegar a funcionarios de tu alcance.",
+    );
+  }
+
+  const result = await pool.query<{ id: number }>(
+    `
+      INSERT INTO "salida_aprobador_delegaciones" (
+        "otorgante_id",
+        "delegado_id",
+        "creado_por_id",
+        "activo",
+        "revocado_por_id",
+        "revocado_en",
+        "updated_at"
+      )
+      VALUES ($1, $2, $3, TRUE, NULL, NULL, CURRENT_TIMESTAMP)
+      ON CONFLICT ("otorgante_id", "delegado_id")
+      DO UPDATE SET
+        "activo" = TRUE,
+        "creado_por_id" = EXCLUDED."creado_por_id",
+        "revocado_por_id" = NULL,
+        "revocado_en" = NULL,
+        "updated_at" = CURRENT_TIMESTAMP
+      RETURNING "id"
+    `,
+    [owner.id, delegate.id, manager.id],
+  );
+
+  const delegations = await loadManageableExitPermitDelegations(manager);
+  const delegation = delegations.find((item) => item.id === result.rows[0]?.id);
+
+  if (delegation == null) {
+    throw new HttpError(500, "No se pudo cargar la delegacion creada.");
+  }
+
+  return serializeExitPermitDelegation(delegation);
+}
+
+async function revokeExitPermitApproverDelegation(
+  manager: any,
+  delegationId: number,
+) {
+  assertCanManageExitPermitDelegations(manager);
+
+  const delegation = await loadExitPermitDelegationById(delegationId);
+
+  if (
+    delegation == null ||
+    !canManageExitPermitDelegationRecord(manager, delegation)
+  ) {
+    throw new HttpError(403, "No puedes quitar esta delegacion.");
+  }
+
+  await pool.query(
+    `
+      UPDATE "salida_aprobador_delegaciones"
+      SET "activo" = FALSE,
+          "revocado_por_id" = $2,
+          "revocado_en" = CURRENT_TIMESTAMP,
+          "updated_at" = CURRENT_TIMESTAMP
+      WHERE "id" = $1
+    `,
+    [delegationId, manager.id],
+  );
+}
+
+async function loadManageableExitPermitDelegations(manager: any) {
+  const result = await pool.query<ExitPermitDelegationRow>(
+    `
+      SELECT
+        d."id",
+        d."otorgante_id" AS "otorganteId",
+        d."delegado_id" AS "delegadoId",
+        d."activo",
+        d."created_at" AS "createdAt",
+        o."nombre_completo" AS "otorganteNombre",
+        COALESCE(NULLIF(TRIM(o."subcargo"), ''), o."cargo", '') AS "otorganteCargo",
+        oo."oficina" AS "otorganteOficina",
+        oo."cod" AS "otorganteOficinaCodigo",
+        de."nombre_completo" AS "delegadoNombre",
+        COALESCE(NULLIF(TRIM(de."subcargo"), ''), de."cargo", '') AS "delegadoCargo",
+        deo."oficina" AS "delegadoOficina"
+      FROM "salida_aprobador_delegaciones" d
+      JOIN "usuarios" o ON o."id" = d."otorgante_id"
+      JOIN "usuarios" de ON de."id" = d."delegado_id"
+      LEFT JOIN "oficinas" oo ON oo."id" = COALESCE(o."oficina_comision_id", o."oficina_id")
+      LEFT JOIN "oficinas" deo ON deo."id" = COALESCE(de."oficina_comision_id", de."oficina_id")
+      WHERE d."activo" = TRUE
+      ORDER BY d."created_at" DESC, d."id" DESC
+    `,
+  );
+
+  return result.rows.filter((delegation) =>
+    canManageExitPermitDelegationRecord(manager, delegation),
+  );
+}
+
+async function loadExitPermitDelegationById(delegationId: number) {
+  const result = await pool.query<ExitPermitDelegationRow>(
+    `
+      SELECT
+        d."id",
+        d."otorgante_id" AS "otorganteId",
+        d."delegado_id" AS "delegadoId",
+        d."activo",
+        d."created_at" AS "createdAt",
+        o."nombre_completo" AS "otorganteNombre",
+        COALESCE(NULLIF(TRIM(o."subcargo"), ''), o."cargo", '') AS "otorganteCargo",
+        oo."oficina" AS "otorganteOficina",
+        oo."cod" AS "otorganteOficinaCodigo",
+        de."nombre_completo" AS "delegadoNombre",
+        COALESCE(NULLIF(TRIM(de."subcargo"), ''), de."cargo", '') AS "delegadoCargo",
+        deo."oficina" AS "delegadoOficina"
+      FROM "salida_aprobador_delegaciones" d
+      JOIN "usuarios" o ON o."id" = d."otorgante_id"
+      JOIN "usuarios" de ON de."id" = d."delegado_id"
+      LEFT JOIN "oficinas" oo ON oo."id" = COALESCE(o."oficina_comision_id", o."oficina_id")
+      LEFT JOIN "oficinas" deo ON deo."id" = COALESCE(de."oficina_comision_id", de."oficina_id")
+      WHERE d."id" = $1
+        AND d."activo" = TRUE
+    `,
+    [delegationId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+function canManageExitPermitDelegationRecord(
+  manager: any,
+  delegation: ExitPermitDelegationRow,
+) {
+  if (isAdminRole(manager.rol) || manager.id === delegation.otorganteId) {
+    return true;
+  }
+
+  const owner = {
+    id: delegation.otorganteId,
+    activo: true,
+    rol: rol_usuario.OPERADOR,
+    cargo: delegation.otorganteCargo,
+    subcargo: delegation.otorganteCargo,
+    oficinas: {
+      oficina: delegation.otorganteOficina,
+      cod: delegation.otorganteOficinaCodigo,
+    },
+  };
+
+  return canManageExitPermitApprover(manager, owner);
+}
+
+function canManageExitPermitApprover(manager: any, owner: any) {
+  if (isAdminRole(manager.rol)) {
+    return true;
+  }
+
+  if (manager.id === owner.id) {
+    return true;
+  }
+
+  const managerCode = normalizeOptionalText(resolveLinkedOfficeCode(manager));
+  const ownerCode = normalizeOptionalText(resolveLinkedOfficeCode(owner));
+
+  if (managerCode == null || ownerCode == null) {
+    return false;
+  }
+
+  if (isSeniorExitPermitApprover(manager)) {
+    return (
+      ownerCode.startsWith(`${managerCode}.`) &&
+      (isDirectorExitPermitApprover(owner) || isChiefExitPermitApplicant(owner))
+    );
+  }
+
+  if (isDirectorExitPermitApprover(manager)) {
+    const directionCode = resolveDirectorOfficeCode(manager);
+
+    return (
+      directionCode != null &&
+      ownerCode.startsWith(`${directionCode}.`) &&
+      isChiefExitPermitApplicant(owner)
+    );
+  }
+
+  return false;
+}
+
+type ExitPermitDelegationRow = {
+  id: number;
+  otorganteId: number;
+  delegadoId: number;
+  activo: boolean;
+  createdAt: Date;
+  otorganteNombre: string;
+  otorganteCargo: string | null;
+  otorganteOficina: string | null;
+  otorganteOficinaCodigo: string | null;
+  delegadoNombre: string;
+  delegadoCargo: string | null;
+  delegadoOficina: string | null;
+};
+
+function serializeExitPermitDelegationUser(user: any) {
+  return {
+    id: user.id,
+    nombreCompleto: buildUserDisplayName(user),
+    ci: user.ci ?? "",
+    cargo: resolveEffectiveJobTitleName(user) ?? "",
+    oficina: resolveLinkedOfficeName(user) ?? "",
+    oficinaCodigo: resolveLinkedOfficeCode(user) ?? "",
+  };
+}
+
+function serializeExitPermitDelegation(delegation: ExitPermitDelegationRow) {
+  return {
+    id: delegation.id,
+    otorganteId: delegation.otorganteId,
+    otorganteNombre: delegation.otorganteNombre,
+    otorganteCargo: delegation.otorganteCargo ?? "",
+    otorganteOficina: delegation.otorganteOficina ?? "",
+    delegadoId: delegation.delegadoId,
+    delegadoNombre: delegation.delegadoNombre,
+    delegadoCargo: delegation.delegadoCargo ?? "",
+    delegadoOficina: delegation.delegadoOficina ?? "",
+    createdAt: delegation.createdAt.toISOString(),
+  };
 }
 
 async function filterReviewableExitPermits(approver: any, salidas: any[]) {
@@ -10300,12 +14124,16 @@ async function hasActiveDirectorInEffectiveOfficeCode(
   return result.rows.length > 0;
 }
 
-async function loadSerializedEventSummaries(requester?: AuthenticatedUser) {
+async function loadSerializedEventSummaries(
+  requester?: AuthenticatedUser,
+  eventKind: EventKind = "EVENTO",
+) {
   const eventWhere = healthEventWhereForRequester(requester);
+  const where = buildEventKindWhere(eventKind, eventWhere);
 
   if (eventWhere != null) {
     const events = await prisma.eventos.findMany({
-      where: eventWhere,
+      where,
       orderBy: [{ fecha_evento: "desc" }, { id: "desc" }],
       include: eventSummaryInclude,
     });
@@ -10320,11 +14148,12 @@ async function loadSerializedEventSummaries(requester?: AuthenticatedUser) {
 
   const cachedEvents = readCacheValue(eventSummaryCache);
 
-  if (cachedEvents != null) {
+  if (eventKind === "EVENTO" && cachedEvents != null) {
     return cachedEvents;
   }
 
   const events = await prisma.eventos.findMany({
+    where,
     orderBy: [{ fecha_evento: "desc" }, { id: "desc" }],
     include: eventSummaryInclude,
   });
@@ -10334,10 +14163,12 @@ async function loadSerializedEventSummaries(requester?: AuthenticatedUser) {
   const serializedEvents = events.map((event) =>
     serializeEventSummary(event, attendanceCountMap.get(event.id)),
   );
-  eventSummaryCache = createCacheEntry(
-    serializedEvents,
-    EVENT_SUMMARY_CACHE_TTL_MS,
-  );
+  if (eventKind === "EVENTO") {
+    eventSummaryCache = createCacheEntry(
+      serializedEvents,
+      EVENT_SUMMARY_CACHE_TTL_MS,
+    );
+  }
 
   return serializedEvents;
 }
@@ -10357,6 +14188,9 @@ async function loadSerializedAssignedEventSummaries(
     include: personIdentityInclude,
   });
   const whereParts: Prisma.eventosWhereInput[] = [
+    {
+      tipo: "EVENTO",
+    },
     {
       fecha_evento: {
         gte: new Date(),
@@ -10516,6 +14350,13 @@ function serializeEventControl(control: {
 
 function serializeAttendanceControlRecord(controlAttendance: any) {
   return {
+    registradoPorEmail: controlAttendance.usuarios?.email ?? null,
+    registradoPorNombre: controlAttendance.usuarios
+      ? scannerDisplayName(controlAttendance.usuarios) || null
+      : null,
+    registrationSource: controlAttendance.fuente_registro ??
+      (controlAttendance.observacion?.startsWith("Registrado manualmente por CI ") ? "CI" : "QR"),
+    noEsPersona: controlAttendance.no_es_persona === true,
     id: controlAttendance.id,
     controlId: controlAttendance.control_id,
     controlNombre: controlAttendance.evento_controles.nombre,
@@ -10623,13 +14464,16 @@ function buildSerializedEventBase(event: any) {
     direccion: event.direccion ?? event.descripcion,
     latitud: event.latitud,
     longitud: event.longitud,
+    tipoEvento: event.tipo ?? "EVENTO",
+    inspeccionActiva: event.inspeccion_activa === true,
+    tiposVinculo: readEventLinkTypes(event),
     estado: event.estado,
     createdAt: event.created_at.toISOString(),
     updatedAt: event.updated_at.toISOString(),
     creadoPor: {
-      id: event.usuarios?.id ?? 0,
-      nombreCompleto: event.usuarios ? buildUserDisplayName(event.usuarios) : "Cuenta eliminada",
-      email: event.usuarios?.email ?? "",
+      id: event.usuarios.id,
+      nombreCompleto: buildUserDisplayName(event.usuarios),
+      email: event.usuarios.email,
     },
     controles: controls,
     departamentos: departments,
@@ -10695,13 +14539,16 @@ function serializeEventSummary(
     direccion: event.direccion ?? event.descripcion,
     latitud: event.latitud,
     longitud: event.longitud,
+    tipoEvento: event.tipo ?? "EVENTO",
+    inspeccionActiva: event.inspeccion_activa === true,
+    tiposVinculo: readEventLinkTypes(event),
     estado: event.estado,
     createdAt: event.created_at.toISOString(),
     updatedAt: event.updated_at.toISOString(),
     creadoPor: {
-      id: event.usuarios?.id ?? 0,
-      nombreCompleto: event.usuarios ? buildUserDisplayName(event.usuarios) : "Cuenta eliminada",
-      email: event.usuarios?.email ?? "",
+      id: event.usuarios.id,
+      nombreCompleto: buildUserDisplayName(event.usuarios),
+      email: event.usuarios.email,
     },
     controles: controls,
     departamentos: [],
@@ -10747,6 +14594,16 @@ function serializeEvent(event: any) {
     )
     .map(serializeAttendanceRecord);
 
+  const reportRows = [...attended, ...observed, ...late, ...nonRequired];
+  const scannerReferences = previousScannerReferences(
+    reportRows.flatMap(row => row.controles ?? []),
+  );
+  for (const row of reportRows) {
+    for (const control of row.controles ?? []) {
+      control.controlAnteriorNombre = scannerReferences.get(control.id) ?? null;
+    }
+  }
+
   return {
     ...buildSerializedEventBase(event),
     asistieron: attended,
@@ -10785,6 +14642,30 @@ async function loadEventAbsentees(event: any) {
         (personId: unknown): personId is number => typeof personId === "number",
       ),
   );
+  const absenceReasonMap = await loadInspectionAbsenceReasonMap(event.id);
+  const rosterRows = await ensureEventRosterSnapshot(event);
+
+  if (rosterRows.length > 0) {
+    const absentees = [];
+    for (const row of rosterRows) {
+      if (registeredPersonIds.has(row.personaId)) continue;
+      // Recheck saved rosters using their historical identity, not today's job.
+      const requirementReason = await buildEventReportRequirementReason({
+        usuario: {
+          cargo: row.cargoSnapshot,
+          oficina_id: row.oficinaIdSnapshot,
+          tipo_vinculo: row.tipoVinculoSnapshot,
+        },
+      }, event);
+      if (requirementReason == null) continue;
+      absentees.push(serializeEventRosterAbsenteeRecord(
+        { ...row, motivoRegistro: requirementReason },
+        absenceReasonMap.get(row.personaId) ?? null,
+      ));
+    }
+    return absentees;
+  }
+
   const candidates = await prisma.personas.findMany({
     where: {
       activo: true,
@@ -10817,11 +14698,198 @@ async function loadEventAbsentees(event: any) {
     );
 
     if (requirementReason != null) {
-      absentees.push(serializeEventAbsenteeRecord(person, requirementReason));
+      absentees.push(
+        serializeEventAbsenteeRecord(
+          person,
+          requirementReason,
+          absenceReasonMap.get(person.id) ?? null,
+        ),
+      );
     }
   }
 
   return absentees;
+}
+
+type EventRosterSnapshotRow = {
+  eventoId: number;
+  personaId: number;
+  usuarioId: number | null;
+  nombreSnapshot: string;
+  ciSnapshot: string | null;
+  tipoVinculoSnapshot: string | null;
+  cargoSnapshot: string | null;
+  oficinaIdSnapshot: number | null;
+  oficinaSnapshot: string | null;
+  oficinaCodSnapshot: string | null;
+  motivoRegistro: string | null;
+};
+
+async function ensureEventRosterSnapshot(
+  event: any,
+): Promise<EventRosterSnapshotRow[]> {
+  const existingRows = await loadEventRosterSnapshotRows(event.id);
+
+  if (existingRows.length > 0) {
+    return existingRows;
+  }
+
+  const candidates = await prisma.personas.findMany({
+    where: {
+      activo: true,
+      usuario_id: {
+        not: null,
+      },
+      usuario: {
+        is: {
+          activo: true,
+          rol: rol_usuario.OPERADOR,
+        },
+      },
+    },
+    include: personIdentityInclude,
+    orderBy: [{ nombre_completo: "asc" }, { id: "asc" }],
+  });
+  const rowsToInsert: Array<{
+    personaId: number;
+    usuarioId: number | null;
+    nombre: string;
+    ci: string | null;
+    tipoVinculo: string | null;
+    cargo: string | null;
+    oficinaId: number | null;
+    oficina: string | null;
+    oficinaCodigo: string | null;
+    motivo: string;
+  }> = [];
+
+  for (const person of candidates) {
+    if (isHiddenEventAbsenteePerson(person)) {
+      continue;
+    }
+
+    const requirementReason = await buildEventReportRequirementReason(
+      person,
+      event,
+    );
+
+    if (requirementReason == null) {
+      continue;
+    }
+
+    const identitySnapshot = buildAttendanceIdentitySnapshot(person);
+
+    rowsToInsert.push({
+      personaId: person.id,
+      usuarioId: person.usuario?.id ?? null,
+      nombre: identitySnapshot.nombre,
+      ci: identitySnapshot.ci,
+      tipoVinculo: person.usuario?.tipo_vinculo ?? null,
+      cargo: identitySnapshot.cargo,
+      oficinaId: identitySnapshot.oficinaId,
+      oficina: identitySnapshot.oficina,
+      oficinaCodigo: identitySnapshot.oficinaCodigo,
+      motivo: requirementReason,
+    });
+  }
+
+  if (rowsToInsert.length === 0) {
+    return [];
+  }
+
+  const values: string[] = [];
+  const params: unknown[] = [];
+
+  for (const [index, row] of rowsToInsert.entries()) {
+    const offset = index * 11;
+    values.push(
+      `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, $${offset + 11})`,
+    );
+    params.push(
+      event.id,
+      row.personaId,
+      row.usuarioId,
+      row.nombre,
+      row.ci,
+      row.tipoVinculo,
+      row.cargo,
+      row.oficinaId,
+      row.oficina,
+      row.oficinaCodigo,
+      row.motivo,
+    );
+  }
+
+  await pool.query(
+    `
+      INSERT INTO "evento_personas_snapshot" (
+        "evento_id",
+        "persona_id",
+        "usuario_id",
+        "nombre_snapshot",
+        "ci_snapshot",
+        "tipo_vinculo_snapshot",
+        "cargo_snapshot",
+        "oficina_id_snapshot",
+        "oficina_snapshot",
+        "oficina_cod_snapshot",
+        "motivo_registro"
+      )
+      VALUES ${values.join(", ")}
+      ON CONFLICT ("evento_id", "persona_id") DO NOTHING
+    `,
+    params,
+  );
+
+  return loadEventRosterSnapshotRows(event.id);
+}
+
+async function loadEventRosterSnapshotRows(
+  eventId: number,
+): Promise<EventRosterSnapshotRow[]> {
+  const result = await pool.query<EventRosterSnapshotRow>(
+    `
+      SELECT
+        eps."evento_id" AS "eventoId",
+        eps."persona_id" AS "personaId",
+        eps."usuario_id" AS "usuarioId",
+        eps."nombre_snapshot" AS "nombreSnapshot",
+        eps."ci_snapshot" AS "ciSnapshot",
+        COALESCE(eps."tipo_vinculo_snapshot", u."tipo_vinculo") AS "tipoVinculoSnapshot",
+        eps."cargo_snapshot" AS "cargoSnapshot",
+        eps."oficina_id_snapshot" AS "oficinaIdSnapshot",
+        eps."oficina_snapshot" AS "oficinaSnapshot",
+        eps."oficina_cod_snapshot" AS "oficinaCodSnapshot",
+        eps."motivo_registro" AS "motivoRegistro"
+      FROM "evento_personas_snapshot" eps
+      LEFT JOIN "usuarios" u ON u."id" = eps."usuario_id"
+      WHERE eps."evento_id" = $1
+      ORDER BY eps."nombre_snapshot" ASC, eps."persona_id" ASC
+    `,
+    [eventId],
+  );
+
+  return result.rows;
+}
+
+async function loadInspectionAbsenceReasonMap(eventId: number) {
+  const result = await pool.query<{ personaId: number; motivo: string | null }>(
+    `
+      SELECT
+        "persona_id" AS "personaId",
+        "motivo"
+      FROM "inspeccion_falta_motivos"
+      WHERE "evento_id" = $1
+    `,
+    [eventId],
+  );
+
+  return new Map(
+    result.rows.map((row) => [
+      row.personaId,
+      normalizeOptionalText(row.motivo),
+    ]),
+  );
 }
 
 function isHiddenEventAbsenteePerson(person: any) {
@@ -10834,7 +14902,11 @@ function isHiddenEventAbsenteePerson(person: any) {
   );
 }
 
-function serializeEventAbsenteeRecord(person: any, requirementReason: string) {
+function serializeEventAbsenteeRecord(
+  person: any,
+  requirementReason: string,
+  absenceReason: string | null,
+) {
   const linkedUser = person.usuario ?? null;
   const officeName = resolveLinkedOfficeName(linkedUser);
 
@@ -10851,11 +14923,38 @@ function serializeEventAbsenteeRecord(person: any, requirementReason: string) {
     cargo: resolveEffectiveJobTitleName(linkedUser),
     email: linkedUser?.email ?? null,
     motivoFalta: requirementReason,
+    motivoAusencia: absenceReason,
+  };
+}
+
+function serializeEventRosterAbsenteeRecord(
+  row: EventRosterSnapshotRow,
+  absenceReason: string | null,
+) {
+  return {
+    personaId: row.personaId,
+    nombreCompleto: row.nombreSnapshot,
+    oficina: row.oficinaSnapshot,
+    oficinaId: row.oficinaIdSnapshot,
+    oficinaCodigo: row.oficinaCodSnapshot,
+    ci: row.ciSnapshot,
+    numeroItem: null,
+    tipoVinculo: row.tipoVinculoSnapshot,
+    unidad: row.oficinaSnapshot,
+    cargo: row.cargoSnapshot,
+    email: null,
+    motivoFalta: row.motivoRegistro ?? "Lista registrada",
+    motivoAusencia: absenceReason,
   };
 }
 
 async function buildEventReportRequirementReason(person: any, event: any) {
   const linkedUser = person.usuario ?? null;
+
+  if (!eventAllowsUserLinkType(event, linkedUser)) {
+    return null;
+  }
+
   const userOfficeId =
     resolveLinkedOfficeId(linkedUser) ??
     (await resolveOfficeForUser(prisma, linkedUser))?.id ??
@@ -11002,6 +15101,12 @@ type SubmitFuncionarioRatingInput = {
   deviceLabel: string | null;
 };
 
+type BlockRatingDeviceInput = {
+  deviceId: string;
+  deviceHash: string | null;
+  motivo: string | null;
+};
+
 function parseGenerateFuncionarioRatingQrInput(payload: unknown) {
   const body = expectRecord(payload);
 
@@ -11044,8 +15149,18 @@ function parseSubmitFuncionarioRatingInput(
     comentario: readOptionalString(body, "comentario", 0, 500),
     calificadorNombre: readOptionalString(body, "calificadorNombre", 0, 120),
     calificadorCelular: readOptionalString(body, "calificadorCelular", 0, 30),
-    deviceId: readRequiredString(body, "deviceId", 8, 200),
+    deviceId: readRequiredString(body, "deviceId", 4, 200),
     deviceLabel: readOptionalString(body, "deviceLabel", 0, 255),
+  };
+}
+
+function parseBlockRatingDeviceInput(payload: unknown): BlockRatingDeviceInput {
+  const body = expectRecord(payload);
+
+  return {
+    deviceId: readRequiredString(body, "deviceId", 4, 220),
+    deviceHash: readOptionalString(body, "deviceHash", 0, 64),
+    motivo: readOptionalString(body, "motivo", 0, 500),
   };
 }
 
@@ -11255,6 +15370,15 @@ function serializeRatingFuncionario(user: any) {
   };
 }
 
+function serializeRatingCalificador(user: any) {
+  return {
+    id: user.id,
+    nombreCompleto: buildUserDisplayName(user),
+    ci: user.ci ?? "",
+    celular: user.celular ?? "",
+  };
+}
+
 async function normalizePublicPhotoSource(
   photoSource: string | null | undefined,
 ) {
@@ -11310,12 +15434,26 @@ async function inlineRemotePublicPhoto(url: string) {
   }
 }
 
-async function buildPublicRatingPage(token: string, funcionario: any) {
+async function buildPublicRatingPage(
+  token: string,
+  funcionario: any,
+  ratingUser: any | null = null,
+) {
   const funcionarioData = serializeRatingFuncionario(funcionario);
+  const calificadorData =
+    ratingUser == null ? null : serializeRatingCalificador(ratingUser);
   const safeToken = escapeHtml(token);
   const safeName = escapeHtml(funcionarioData.nombreCompleto);
   const safeCargo = escapeHtml(funcionarioData.cargo);
   const safeOffice = escapeHtml(funcionarioData.oficina);
+  const safeCalificadorName = escapeHtml(calificadorData?.nombreCompleto ?? "");
+  const safeCalificadorPhone = escapeHtml(calificadorData?.celular ?? "");
+  const isAuthenticatedRating = calificadorData != null;
+  const isScheduleOpen = isFuncionarioRatingScheduleOpen();
+  const scheduleDisabledAttr = isScheduleOpen ? "" : "disabled";
+  const scheduleNoticeClass = isScheduleOpen
+    ? "schedule-note"
+    : "schedule-note visible";
   const safeInitial = escapeHtml(
     funcionarioData.nombreCompleto.trim().slice(0, 1).toUpperCase() || "F",
   );
@@ -11523,6 +15661,33 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
     .optional-grid label {
       margin-top: 0;
     }
+    .account-note {
+      display: ${isAuthenticatedRating ? "block" : "none"};
+      margin-top: 18px;
+      padding: 12px 14px;
+      border: 1px solid rgba(109, 86, 160, .22);
+      border-radius: 18px;
+      background: rgba(109, 86, 160, .08);
+      color: var(--night-deep);
+      font-size: 14px;
+      font-weight: 700;
+      text-align: center;
+    }
+    .schedule-note {
+      display: none;
+      margin: 0 0 18px;
+      padding: 12px 14px;
+      border: 1px solid rgba(217, 72, 65, .28);
+      border-radius: 18px;
+      background: rgba(217, 72, 65, .08);
+      color: var(--danger);
+      font-size: 14px;
+      font-weight: 700;
+      text-align: center;
+    }
+    .schedule-note.visible {
+      display: block;
+    }
     .submit {
       width: 100%;
       margin-top: 26px;
@@ -11544,7 +15709,13 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
     }
     .submit:disabled {
       opacity: .65;
-      cursor: default;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+    button.rating:disabled {
+      cursor: not-allowed;
+      opacity: .56;
       transform: none;
       box-shadow: none;
     }
@@ -11661,24 +15832,26 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
           <div class="muted">${safeCargo}</div>
           <div class="muted">${safeOffice}</div>
         </div>
+        <div id="scheduleNotice" class="${scheduleNoticeClass}">Las calificaciones estan habilitadas de ${RATING_SCHEDULE_LABEL}.</div>
         <div class="ratings" role="group" aria-label="Calificaci&oacute;n">
-          <button class="rating" type="button" data-rating="muy_malo"><span>&#128545;</span>Muy malo</button>
-          <button class="rating" type="button" data-rating="malo"><span>&#128577;</span>Malo</button>
-          <button class="rating" type="button" data-rating="regular"><span>&#128528;</span>Regular</button>
-          <button class="rating" type="button" data-rating="bueno"><span>&#128578;</span>Bueno</button>
-          <button class="rating" type="button" data-rating="muy_bueno"><span>&#128516;</span>Muy bueno</button>
+          <button class="rating" type="button" data-rating="muy_malo" ${scheduleDisabledAttr}><span>&#128545;</span>Muy malo</button>
+          <button class="rating" type="button" data-rating="malo" ${scheduleDisabledAttr}><span>&#128577;</span>Malo</button>
+          <button class="rating" type="button" data-rating="regular" ${scheduleDisabledAttr}><span>&#128528;</span>Regular</button>
+          <button class="rating" type="button" data-rating="bueno" ${scheduleDisabledAttr}><span>&#128578;</span>Bueno</button>
+          <button class="rating" type="button" data-rating="muy_bueno" ${scheduleDisabledAttr}><span>&#128516;</span>Muy bueno</button>
         </div>
         <div class="optional-grid">
           <label for="calificadorNombre">Tu nombre opcional
-            <input id="calificadorNombre" maxlength="120" autocomplete="name" placeholder="Nombre">
+            <input id="calificadorNombre" maxlength="120" autocomplete="name" placeholder="Nombre" value="${safeCalificadorName}" ${isAuthenticatedRating ? "readonly" : ""}>
           </label>
           <label for="calificadorCelular">Tu celular opcional
-            <input id="calificadorCelular" maxlength="30" inputmode="tel" autocomplete="tel" placeholder="Celular">
+            <input id="calificadorCelular" maxlength="30" inputmode="tel" autocomplete="tel" placeholder="Celular" value="${safeCalificadorPhone}" ${isAuthenticatedRating ? "readonly" : ""}>
           </label>
         </div>
+        <div id="accountNote" class="account-note">Se registrar&aacute; con tu cuenta de funcionario.</div>
         <label for="comentario">Comentario opcional</label>
         <textarea id="comentario" maxlength="500" placeholder="Escribe un comentario si lo deseas"></textarea>
-        <button id="send" class="submit" type="button">Enviar calificaci&oacute;n</button>
+        <button id="send" class="submit" type="button" ${scheduleDisabledAttr}>Enviar calificaci&oacute;n</button>
         <div id="message" class="message"></div>
       </div>
     </section>
@@ -11690,13 +15863,32 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
   </main>
   <script>
     const token = "${safeToken}";
+    const ratingSchedule = {
+      startMinutes: ${RATING_START_MINUTES},
+      endMinutes: ${RATING_END_MINUTES},
+      timeZone: "${APP_TIME_ZONE}",
+      label: "${RATING_SCHEDULE_LABEL}"
+    };
     const buttons = Array.from(document.querySelectorAll("[data-rating]"));
     const sendButton = document.getElementById("send");
     const message = document.getElementById("message");
+    const scheduleNotice = document.getElementById("scheduleNotice");
+    const deviceId = readOrCreateDeviceId();
+    const authToken = readStoredAuthToken();
     let selectedRating = "";
+
+    refreshScheduleState();
+    setInterval(refreshScheduleState, 60000);
+    hydrateAuthenticatedUser();
 
     buttons.forEach((button) => {
       button.addEventListener("click", () => {
+        if (!isRatingScheduleOpen()) {
+          refreshScheduleState();
+          showMessage("Las calificaciones estan habilitadas de " + ratingSchedule.label + ".", "error");
+          return;
+        }
+
         selectedRating = button.dataset.rating || "";
         buttons.forEach((item) => item.classList.toggle("selected", item === button));
         showMessage("", "");
@@ -11704,6 +15896,12 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
     });
 
     sendButton.addEventListener("click", async () => {
+      if (!isRatingScheduleOpen()) {
+        refreshScheduleState();
+        showMessage("Las calificaciones estan habilitadas de " + ratingSchedule.label + ".", "error");
+        return;
+      }
+
       if (!selectedRating) {
         showMessage("Selecciona una calificaci\u00f3n.", "error");
         return;
@@ -11715,26 +15913,29 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
       try {
         const response = await fetch("/api/calificaciones/publica/" + encodeURIComponent(token), {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(authToken ? { "Authorization": "Bearer " + authToken } : {})
+          },
           body: JSON.stringify({
             calificacion: selectedRating,
             comentario: document.getElementById("comentario").value.trim(),
             calificadorNombre: document.getElementById("calificadorNombre").value.trim(),
             calificadorCelular: document.getElementById("calificadorCelular").value.trim(),
-            deviceId: readOrCreateDeviceId(),
+            deviceId,
             deviceLabel: navigator.userAgent || "Navegador"
           })
         });
         const payload = await response.json().catch(() => ({}));
 
         if (!response.ok) {
-          throw new Error(payload.error || "No fue posible enviar la calificaci\u00f3n.");
+          throw new Error(payload.error || "No pudimos enviar la calificaci\u00f3n.");
         }
 
         document.getElementById("form").classList.add("hidden");
         document.getElementById("done").classList.add("visible");
       } catch (error) {
-        showMessage(error.message || "No fue posible enviar la calificaci\u00f3n.", "error");
+        showMessage(error.message || "No pudimos enviar la calificaci\u00f3n.", "error");
       } finally {
         sendButton.disabled = false;
         sendButton.textContent = "Enviar calificaci\u00f3n";
@@ -11746,19 +15947,110 @@ async function buildPublicRatingPage(token: string, funcionario: any) {
       message.className = type ? "message " + type : "message";
     }
 
+    function refreshScheduleState() {
+      const isOpen = isRatingScheduleOpen();
+      buttons.forEach((button) => {
+        button.disabled = !isOpen;
+        if (!isOpen) {
+          button.classList.remove("selected");
+        }
+      });
+      sendButton.disabled = !isOpen;
+      scheduleNotice.classList.toggle("visible", !isOpen);
+      if (!isOpen) {
+        selectedRating = "";
+      }
+    }
+
+    function isRatingScheduleOpen() {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: ratingSchedule.timeZone,
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit"
+      }).formatToParts(new Date());
+      const rawHour = Number(parts.find((part) => part.type === "hour")?.value || "0");
+      const hour = rawHour === 24 ? 0 : rawHour;
+      const minute = Number(parts.find((part) => part.type === "minute")?.value || "0");
+      const nowMinutes = hour * 60 + minute;
+
+      return nowMinutes >= ratingSchedule.startMinutes &&
+        nowMinutes <= ratingSchedule.endMinutes;
+    }
+
     function readOrCreateDeviceId() {
       const key = "rating_device_id";
       const existing = localStorage.getItem(key);
+      const stable = buildStableDeviceId();
 
-      if (existing && existing.length >= 8) {
+      if (existing === stable) {
         return existing;
       }
 
-      const bytes = new Uint8Array(16);
-      crypto.getRandomValues(bytes);
-      const value = Date.now() + "-" + Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-      localStorage.setItem(key, value);
-      return value;
+      localStorage.setItem(key, stable);
+      return stable;
+    }
+
+    function buildStableDeviceId() {
+      const source = [
+        navigator.platform || "",
+        (navigator.languages || []).join(","),
+        Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+        screen.width,
+        screen.height,
+        screen.colorDepth,
+        navigator.hardwareConcurrency || "",
+        navigator.maxTouchPoints || "",
+        window.devicePixelRatio || ""
+      ].join("|");
+
+      let hash = 2166136261;
+
+      for (let index = 0; index < source.length; index += 1) {
+        hash ^= source.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+
+      return (hash >>> 0).toString(36).toUpperCase().padStart(6, "0").slice(0, 6);
+    }
+
+    function readStoredAuthToken() {
+      const rawUser = localStorage.getItem("qr_asistencia.current_user") ||
+        localStorage.getItem("flutter.qr_asistencia.current_user");
+
+      if (!rawUser || rawUser.startsWith("lp1.")) {
+        return "";
+      }
+
+      try {
+        const user = JSON.parse(rawUser);
+        return typeof user.authToken === "string" ? user.authToken.trim() : "";
+      } catch (_) {
+        return "";
+      }
+    }
+
+    async function hydrateAuthenticatedUser() {
+      try {
+        const response = await fetch("/api/calificaciones/publica/" + encodeURIComponent(token), {
+          headers: authToken ? { "Authorization": "Bearer " + authToken } : {}
+        });
+        const payload = await response.json().catch(() => ({}));
+        const calificador = payload && payload.data && payload.data.calificador;
+
+        if (!response.ok || !calificador) {
+          return;
+        }
+
+        const nameInput = document.getElementById("calificadorNombre");
+        const phoneInput = document.getElementById("calificadorCelular");
+        nameInput.value = calificador.nombreCompleto || "";
+        phoneInput.value = calificador.celular || "";
+        nameInput.readOnly = true;
+        phoneInput.readOnly = true;
+        document.getElementById("accountNote").style.display = "block";
+      } catch (_) {
+      }
     }
   </script>
 </body>
@@ -11778,17 +16070,63 @@ async function submitFuncionarioRating({
   funcionario,
   input,
   request,
+  ratingUser,
 }: {
   funcionario: any;
   input: SubmitFuncionarioRatingInput;
   request: IncomingMessage;
+  ratingUser?: any | null;
 }) {
+  assertFuncionarioRatingScheduleOpen();
+
   const fecha = getAppDateOnlyText();
-  const deviceHash = sha256Hex(input.deviceId);
+  const isAuthenticatedRating = ratingUser != null;
+  const deviceId = isAuthenticatedRating
+    ? `USR-${ratingUser.id}`
+    : input.deviceId;
+  const deviceHash = sha256Hex(deviceId);
   const ipHash = sha256Hex(readClientIp(request));
   const funcionarioOficinaId = resolveLinkedOfficeId(funcionario);
   const funcionarioOficina =
     resolveLinkedOfficeName(funcionario) ?? funcionario.unidad ?? null;
+  const calificadorNombre = isAuthenticatedRating
+    ? buildUserDisplayName(ratingUser)
+    : input.calificadorNombre;
+  const calificadorCelular = isAuthenticatedRating
+    ? (ratingUser.celular ?? null)
+    : input.calificadorCelular;
+  const blocked = await pool.query(
+    `
+      SELECT "id"
+      FROM "calificacion_device_bloqueos"
+      WHERE "device_id_hash" = $1
+      LIMIT 1
+    `,
+    [deviceHash],
+  );
+
+  if ((blocked.rowCount ?? 0) > 0) {
+    throw new HttpError(
+      403,
+      "Error de calificacion. Por favor vaya a plataforma para tener un arreglo.",
+    );
+  }
+
+  const previousRating = await pool.query(
+    `
+      SELECT "id"
+      FROM "calificaciones_funcionario"
+      WHERE "funcionario_id" = $1
+        AND "device_id_hash" = $2
+        AND "fecha" = $3::date
+      LIMIT 1
+    `,
+    [funcionario.id, deviceHash, fecha],
+  );
+
+  if ((previousRating.rowCount ?? 0) > 0) {
+    throw new HttpError(409, "Ya se califico a este funcionario hoy.");
+  }
 
   try {
     const result = await pool.query(
@@ -11801,16 +16139,18 @@ async function submitFuncionarioRating({
           "calificador_nombre",
           "calificador_celular",
           "device_id_hash",
+          "device_id_public",
           "device_label",
           "user_agent",
           "ip_hash",
           "funcionario_nombre_completo",
           "funcionario_ci",
+          "funcionario_cargo_codigo",
           "funcionario_cargo",
           "funcionario_oficina_id",
           "funcionario_oficina"
         )
-        VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         RETURNING "id", "fecha", "calificacion", "created_at"
       `,
       [
@@ -11818,14 +16158,18 @@ async function submitFuncionarioRating({
         fecha,
         input.calificacion,
         input.comentario,
-        input.calificadorNombre,
-        input.calificadorCelular,
+        calificadorNombre,
+        calificadorCelular,
         deviceHash,
-        input.deviceLabel,
+        deviceId,
+        isAuthenticatedRating
+          ? `Cuenta funcionario ${buildUserDisplayName(ratingUser)}`
+          : input.deviceLabel,
         readSingleHeader(request.headers["user-agent"]) ?? null,
         ipHash,
         buildUserDisplayName(funcionario),
         funcionario.ci ?? null,
+        resolveEffectiveJobTitleCode(funcionario),
         resolveEffectiveJobTitleName(funcionario),
         funcionarioOficinaId,
         funcionarioOficina,
@@ -11838,14 +16182,277 @@ async function submitFuncionarioRating({
     };
   } catch (error: any) {
     if (error?.code === "23505") {
-      throw new HttpError(
-        409,
-        "Este celular ya califico a este funcionario hoy.",
-      );
+      throw new HttpError(409, "Ya se califico a este funcionario hoy.");
     }
 
     throw error;
   }
+}
+
+async function loadFuncionarioRatingControl({
+  requester,
+  fechaInicio,
+  fechaFin,
+  cargoCodigo,
+  oficinaId,
+  search,
+}: {
+  requester: any;
+  fechaInicio: string | null;
+  fechaFin: string | null;
+  cargoCodigo: string | null;
+  oficinaId: number | null;
+  search: string | null;
+}) {
+  const startDate =
+    fechaInicio == null ? null : readDateOnlyString(fechaInicio, "fechaInicio");
+  const endDate =
+    fechaFin == null ? startDate : readDateOnlyString(fechaFin, "fechaFin");
+
+  if (
+    startDate != null &&
+    endDate != null &&
+    startDate.getTime() > endDate.getTime()
+  ) {
+    throw new HttpError(
+      400,
+      "La fecha inicio no puede ser mayor a la fecha fin.",
+    );
+  }
+
+  const params: unknown[] = [];
+  const filters: string[] = [];
+  const healthFilter = isHealthAdminUser(requester)
+    ? `AND (
+        principal.nivel = ${HEALTH_OFFICE_LEVEL}
+        OR comision.nivel = ${HEALTH_OFFICE_LEVEL}
+      )`
+    : "";
+
+  if (cargoCodigo != null) {
+    params.push(cargoCodigo);
+    filters.push(
+      `AND COALESCE(c."funcionario_cargo_codigo", u."subcargo_codigo", u."cargo_codigo") = $${params.length}`,
+    );
+  }
+
+  if (oficinaId != null) {
+    params.push(oficinaId);
+    filters.push(
+      `AND COALESCE(c."funcionario_oficina_id", u."oficina_comision_id", u."oficina_id") = $${params.length}`,
+    );
+  }
+
+  if (startDate != null) {
+    params.push(startDate);
+    filters.push(`AND c."fecha" >= $${params.length}::date`);
+  }
+
+  if (endDate != null) {
+    params.push(endDate);
+    filters.push(`AND c."fecha" <= $${params.length}::date`);
+  }
+
+  for (const token of buildSearchTokens(search)) {
+    params.push(`%${token}%`);
+    filters.push(
+      `AND (
+        COALESCE(c."device_id_public", c."device_id_hash") ILIKE $${params.length}
+        OR c."funcionario_nombre_completo" ILIKE $${params.length}
+        OR COALESCE(c."funcionario_ci", '') ILIKE $${params.length}
+        OR COALESCE(c."calificador_nombre", '') ILIKE $${params.length}
+        OR COALESCE(c."calificador_celular", '') ILIKE $${params.length}
+      )`,
+    );
+  }
+
+  const result = await pool.query(
+    `
+      WITH filtered AS (
+        SELECT c.*
+        FROM "calificaciones_funcionario" c
+        INNER JOIN "usuarios" u ON u."id" = c."funcionario_id"
+        LEFT JOIN "oficinas" principal ON principal."id" = u."oficina_id"
+        LEFT JOIN "oficinas" comision ON comision."id" = u."oficina_comision_id"
+        WHERE u."activo" = TRUE
+          AND u."email" <> '${SEED_ADMIN_EMAIL.replace(/'/g, "''")}'
+          ${healthFilter}
+          ${filters.join("\n")}
+      ),
+      matched AS (
+        SELECT
+          c."device_id_hash",
+          COALESCE(MAX(c."device_id_public"), c."device_id_hash") AS "deviceId",
+          c."funcionario_id"
+        FROM filtered c
+        GROUP BY c."device_id_hash", c."funcionario_id"
+      ),
+      grouped AS (
+        SELECT
+          matched."device_id_hash",
+          matched."deviceId",
+          matched."funcionario_id",
+          COUNT(c."id")::int AS "totalCalificaciones",
+          MIN(c."created_at") AS "primeraCalificacion",
+          MAX(c."created_at") AS "ultimaCalificacion",
+          json_agg(
+            json_build_object(
+              'calificacion', c."calificacion",
+              'createdAt', c."created_at"
+            )
+            ORDER BY c."created_at" DESC, c."id" DESC
+          ) AS "calificaciones"
+        FROM matched
+        INNER JOIN filtered c
+          ON c."device_id_hash" = matched."device_id_hash"
+          AND c."funcionario_id" = matched."funcionario_id"
+        GROUP BY
+          matched."device_id_hash",
+          matched."deviceId",
+          matched."funcionario_id"
+      )
+      SELECT
+        ${buildRatingDeviceDisplayIdSql(`grouped."deviceId"`, `grouped."device_id_hash"`)} AS "deviceId",
+        grouped."device_id_hash" AS "deviceHash",
+        grouped."funcionario_id" AS "funcionarioId",
+        grouped."totalCalificaciones",
+        grouped."primeraCalificacion",
+        grouped."ultimaCalificacion",
+        grouped."calificaciones",
+        latest."calificacion",
+        COALESCE(latest."comentario", '') AS "comentario",
+        COALESCE(latest."calificador_nombre", '') AS "calificadorNombre",
+        COALESCE(latest."calificador_celular", '') AS "calificadorCelular",
+        COALESCE(latest."device_label", '') AS "deviceLabel",
+        latest."created_at" AS "createdAt",
+        latest."funcionario_nombre_completo" AS "funcionarioNombre",
+        COALESCE(latest."funcionario_ci", '') AS "funcionarioCi",
+        COALESCE(latest."funcionario_cargo", '') AS "funcionarioCargo",
+        COALESCE(latest."funcionario_oficina", '') AS "funcionarioOficina",
+        calificador."id" AS "calificadorFuncionarioId",
+        COALESCE(${buildUserDisplayNameSql("calificador")}, '') AS "calificadorFuncionarioNombre",
+        COALESCE(calificador."ci", '') AS "calificadorFuncionarioCi",
+        COALESCE(calificador."subcargo", calificador."cargo", '') AS "calificadorFuncionarioCargo",
+        COALESCE(calificadorComision."oficina", calificadorPrincipal."oficina", calificador."unidad", '') AS "calificadorFuncionarioOficina",
+        (blocked."id" IS NOT NULL) AS "bloqueado",
+        blocked."created_at" AS "bloqueadoEn"
+      FROM grouped
+      INNER JOIN LATERAL (
+        SELECT *
+        FROM filtered c
+        WHERE c."device_id_hash" = grouped."device_id_hash"
+          AND c."funcionario_id" = grouped."funcionario_id"
+        ORDER BY c."created_at" DESC, c."id" DESC
+        LIMIT 1
+      ) latest ON TRUE
+      LEFT JOIN "usuarios" calificador
+        ON calificador."id" = CASE
+          WHEN grouped."deviceId" ~ '^USR-[0-9]+$'
+            THEN SUBSTRING(grouped."deviceId" FROM 5)::int
+          ELSE NULL
+        END
+        AND calificador."activo" = TRUE
+      LEFT JOIN "oficinas" calificadorPrincipal
+        ON calificadorPrincipal."id" = calificador."oficina_id"
+      LEFT JOIN "oficinas" calificadorComision
+        ON calificadorComision."id" = calificador."oficina_comision_id"
+      LEFT JOIN "calificacion_device_bloqueos" blocked
+        ON blocked."device_id_hash" = grouped."device_id_hash"
+      ORDER BY
+        grouped."totalCalificaciones" DESC,
+        grouped."ultimaCalificacion" DESC
+    `,
+    params,
+  );
+
+  return result.rows;
+}
+
+async function blockRatingDevice({
+  deviceIdPublic,
+  deviceHash,
+  blockedById,
+  reason,
+}: {
+  deviceIdPublic: string;
+  deviceHash: string | null;
+  blockedById: number;
+  reason: string | null;
+}) {
+  const resolvedDeviceHash =
+    deviceHash != null && /^[a-f0-9]{64}$/i.test(deviceHash)
+      ? deviceHash.toLowerCase()
+      : sha256Hex(deviceIdPublic);
+  const result = await pool.query(
+    `
+      INSERT INTO "calificacion_device_bloqueos" (
+        "device_id_hash",
+        "device_id_public",
+        "motivo",
+        "bloqueado_por_id",
+        "created_at"
+      )
+      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+      ON CONFLICT ("device_id_hash")
+      DO UPDATE SET
+        "device_id_public" = EXCLUDED."device_id_public",
+        "motivo" = EXCLUDED."motivo",
+        "bloqueado_por_id" = EXCLUDED."bloqueado_por_id"
+      RETURNING "device_id_public" AS "deviceId", "created_at" AS "bloqueadoEn"
+    `,
+    [resolvedDeviceHash, deviceIdPublic, reason, blockedById],
+  );
+
+  return {
+    bloqueado: true,
+    deviceId: result.rows[0]?.deviceId ?? deviceIdPublic,
+    bloqueadoEn: result.rows[0]?.bloqueadoEn ?? null,
+  };
+}
+
+async function unblockRatingDevice({
+  deviceIdPublic,
+  deviceHash,
+}: {
+  deviceIdPublic: string;
+  deviceHash: string | null;
+}) {
+  const resolvedDeviceHash =
+    deviceHash != null && /^[a-f0-9]{64}$/i.test(deviceHash)
+      ? deviceHash.toLowerCase()
+      : sha256Hex(deviceIdPublic);
+
+  await pool.query(
+    `
+      DELETE FROM "calificacion_device_bloqueos"
+      WHERE "device_id_hash" = $1
+    `,
+    [resolvedDeviceHash],
+  );
+
+  return {
+    activado: true,
+    deviceId: buildRatingDeviceDisplayId(resolvedDeviceHash),
+  };
+}
+
+function buildRatingDeviceDisplayId(deviceHash: string) {
+  return deviceHash.slice(0, 6).toUpperCase();
+}
+
+function buildRatingDeviceDisplayIdSql(
+  publicExpression: string,
+  hashExpression: string,
+) {
+  return `
+    CASE
+      WHEN ${publicExpression} ~ '^CEL-[A-Z0-9]{6,}$'
+        THEN SUBSTRING(${publicExpression} FROM 5 FOR 6)
+      WHEN ${publicExpression} ~ '^[A-Z0-9]{6,}$'
+        THEN SUBSTRING(${publicExpression} FROM 1 FOR 6)
+      ELSE UPPER(SUBSTRING(${hashExpression} FROM 1 FOR 6))
+    END
+  `;
 }
 
 async function loadActiveFuncionarioRatingQrs(requester: any) {
@@ -11901,6 +16508,58 @@ function getAppDateOnlyText(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function currentAndPreviousMonthRange(date = new Date()) {
+  const [yearText, monthText] = getAppDateOnlyText(date).split("-");
+  const year = Number.parseInt(yearText ?? "", 10);
+  const month = Number.parseInt(monthText ?? "", 10);
+  const currentMonthStart = new Date(Date.UTC(year, month - 1, 1));
+  const previousMonthStart = new Date(Date.UTC(year, month - 2, 1));
+  const currentMonthEnd = new Date(Date.UTC(year, month, 0));
+
+  return {
+    start: previousMonthStart,
+    end: currentMonthEnd,
+    currentMonthStart,
+  };
+}
+
+function assertFuncionarioRatingScheduleOpen(date = new Date()) {
+  if (!isFuncionarioRatingScheduleOpen(date)) {
+    throw new HttpError(
+      403,
+      `Las calificaciones estan habilitadas de ${RATING_SCHEDULE_LABEL}.`,
+    );
+  }
+}
+
+function isFuncionarioRatingScheduleOpen(date = new Date()) {
+  const nowMinutes = getAppTimeMinutes(date);
+
+  return (
+    nowMinutes >= RATING_START_MINUTES && nowMinutes <= RATING_END_MINUTES
+  );
+}
+
+function getAppTimeMinutes(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIME_ZONE,
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(date);
+  const rawHour = Number.parseInt(
+    parts.find((part) => part.type === "hour")?.value ?? "0",
+    10,
+  );
+  const hour = rawHour === 24 ? 0 : rawHour;
+  const minute = Number.parseInt(
+    parts.find((part) => part.type === "minute")?.value ?? "0",
+    10,
+  );
+
+  return hour * 60 + minute;
+}
+
 async function deactivateExpiredConsultantContracts() {
   const today = getAppDateOnlyText();
   const result = await pool.query(
@@ -11911,7 +16570,7 @@ async function deactivateExpiredConsultantContracts() {
       WHERE "activo" = TRUE
         AND "tipo_vinculo" = ANY($1::text[])
         AND "contrato_fin" IS NOT NULL
-        AND COALESCE("contrato_adenda", "contrato_fin") <= $2::date
+        AND COALESCE("contrato_adenda", "contrato_fin") < $2::date
       RETURNING "id"
     `,
     [Array.from(CONTRACT_LINK_TYPES), today],
@@ -11946,6 +16605,9 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     email: user.email,
     rol: user.rol ?? rol_usuario.OPERADOR,
     nombreCompleto: user.nombres ?? user.nombre_completo,
+    controlRolAnterior: user.control_rol_anterior ?? null,
+    controlInicio: user.control_inicio?.toISOString() ?? null,
+    controlFin: user.control_fin?.toISOString() ?? null,
     primerApellido: user.primer_apellido ?? "",
     segundoApellido: user.segundo_apellido ?? "",
     tercerApellido: user.tercer_apellido ?? "",
@@ -11989,6 +16651,187 @@ function serializeAppUser(user: any, person?: any | null, authToken?: string) {
     qrPayload: buildUserQrPayload(user, qrCode),
     personaId: linkedPerson?.id ?? null,
     authToken,
+  };
+}
+
+function readPersonnelReportSnapshotDate(url: URL) {
+  const requestedDate = readOptionalQueryDateOnly(url, "fecha");
+  const reportDate = requestedDate ?? getAppDateOnlyText();
+  const today = getAppDateOnlyText();
+
+  if (reportDate > today) {
+    throw new HttpError(400, "La fecha del reporte no puede ser futura.");
+  }
+
+  return reportDate;
+}
+
+async function ensurePersonnelReportSnapshot(
+  reportDate: string,
+  createdById: number,
+) {
+  const existingSnapshot = await pool.query<{ exists: number }>(
+    `
+      SELECT 1 AS "exists"
+      FROM "personal_report_snapshots"
+      WHERE "report_date" = $1::date
+      LIMIT 1
+    `,
+    [reportDate],
+  );
+
+  if (
+    (existingSnapshot.rowCount ?? 0) > 0 ||
+    reportDate !== getAppDateOnlyText()
+  ) {
+    return;
+  }
+
+  await deactivateExpiredConsultantContracts();
+
+  const users = await prisma.usuarios.findMany({
+    where: {
+      AND: [
+        {
+          email: {
+            not: SEED_ADMIN_EMAIL,
+          },
+        },
+        {
+          rol: {
+            not: rol_usuario.LECTOR_USUARIOS,
+          },
+        },
+      ],
+    },
+    orderBy: [
+      { rol: "asc" },
+      { activo: "desc" },
+      { updated_at: "desc" },
+      { id: "desc" },
+    ],
+    include: userWithOfficeInclude,
+  });
+
+  if (users.length === 0) {
+    return;
+  }
+
+  const values: string[] = [];
+  const params: unknown[] = [];
+
+  for (const [index, user] of users.entries()) {
+    const offset = index * 4;
+    values.push(
+      `($${offset + 1}::date, $${offset + 2}, $${offset + 3}::jsonb, $${offset + 4})`,
+    );
+    params.push(
+      reportDate,
+      user.id,
+      JSON.stringify(serializeAppUser(user)),
+      createdById,
+    );
+  }
+
+  await pool.query(
+    `
+      INSERT INTO "personal_report_snapshots" (
+        "report_date",
+        "usuario_id",
+        "usuario_snapshot",
+        "created_by_id"
+      )
+      VALUES ${values.join(", ")}
+      ON CONFLICT ("report_date", "usuario_id") DO NOTHING
+    `,
+    params,
+  );
+}
+
+async function loadPersonnelReportSnapshotUsers(reportDate: string, requester: any) {
+  const result = await pool.query<{ usuarioSnapshot: any }>(
+    `
+      SELECT "usuario_snapshot" AS "usuarioSnapshot"
+      FROM "personal_report_snapshots"
+      WHERE "report_date" = $1::date
+      ORDER BY
+        "usuario_snapshot"->>'rol' ASC,
+        ("usuario_snapshot"->>'activo') DESC,
+        "created_at" DESC,
+        "usuario_id" DESC
+    `,
+    [reportDate],
+  );
+  const needsHealthScope =
+    isHealthAdminUser(requester) || requester?.rol === rol_usuario.CREDENCIALES;
+  const healthOfficeIds = needsHealthScope
+    ? await loadHealthOfficeIds()
+    : new Set<number>();
+
+  return result.rows
+    .map((row) => row.usuarioSnapshot)
+    .filter((user) =>
+      personnelSnapshotUserVisibleForRequester(user, requester, healthOfficeIds),
+    );
+}
+
+async function loadHealthOfficeIds() {
+  const result = await pool.query<{ id: number }>(
+    `
+      SELECT "id"
+      FROM "oficinas"
+      WHERE "nivel" = $1
+    `,
+    [HEALTH_OFFICE_LEVEL],
+  );
+
+  return new Set(result.rows.map((row) => row.id));
+}
+
+function personnelSnapshotUserVisibleForRequester(
+  user: any,
+  requester: any,
+  healthOfficeIds: Set<number>,
+) {
+  const scopedTipoVinculos = scopedUserAdminTipoVinculosForRole(requester?.rol);
+
+  if (scopedTipoVinculos != null) {
+    return (
+      user?.rol === rol_usuario.OPERADOR &&
+      scopedTipoVinculos.includes(String(user?.tipoVinculo ?? "").toUpperCase())
+    );
+  }
+
+  const userOfficeIds = [
+    user?.oficinaId,
+    user?.oficinaPrincipalId,
+    user?.oficinaComisionId,
+  ].filter((officeId): officeId is number => Number.isInteger(officeId));
+  const isHealthUser = userOfficeIds.some((officeId) =>
+    healthOfficeIds.has(officeId),
+  );
+
+  if (isHealthAdminUser(requester)) {
+    return isHealthUser;
+  }
+
+  if (requester?.rol === rol_usuario.CREDENCIALES) {
+    return !isHealthUser;
+  }
+
+  return true;
+}
+
+async function serializeAppUserWithExitPermitFlag(
+  user: any,
+  person?: any | null,
+  authToken?: string,
+  refreshToken?: string,
+) {
+  return {
+    ...serializeAppUser(user, person, authToken),
+    ...(refreshToken == null ? {} : { refreshToken }),
+    puedeAprobarSalidas: await canUserApproveExitPermits(user),
   };
 }
 
@@ -13325,7 +18168,8 @@ function readEventAttendanceRequirementReason(attendance: any) {
 
 function serializeAttendanceRecord(attendance: any) {
   const linkedUser = attendance.personas.usuario ?? null;
-  const officeName = resolveLinkedOfficeName(linkedUser);
+  const officeName =
+    attendance.oficina_snapshot ?? resolveLinkedOfficeName(linkedUser);
   const serializedControls = (attendance.asistencia_controles ?? []).map(
     serializeAttendanceControlRecord,
   );
@@ -13353,13 +18197,20 @@ function serializeAttendanceRecord(attendance: any) {
     observacion: attendance.observacion ?? defaultNote,
     qrLeido: attendance.qr_leido,
     oficina: officeName,
-    oficinaId: resolveLinkedOfficeId(linkedUser),
-    oficinaCodigo: resolveLinkedOfficeCode(linkedUser),
-    ci: linkedUser?.ci ?? attendance.personas.ci ?? null,
+    oficinaId:
+      attendance.oficina_id_snapshot ?? resolveLinkedOfficeId(linkedUser),
+    oficinaCodigo:
+      attendance.oficina_cod_snapshot ?? resolveLinkedOfficeCode(linkedUser),
+    ci:
+      attendance.ci_snapshot ??
+      linkedUser?.ci ??
+      attendance.personas.ci ??
+      null,
     numeroItem: linkedUser?.numero_item ?? null,
     tipoVinculo: linkedUser?.tipo_vinculo ?? null,
     unidad: officeName,
-    cargo: resolveEffectiveJobTitleName(linkedUser),
+    cargo:
+      attendance.cargo_snapshot ?? resolveEffectiveJobTitleName(linkedUser),
     fotoUrl: linkedUser?.foto_url ?? null,
     email: linkedUser?.email ?? null,
     registradoEn: attendance.registrado_en.toISOString(),
@@ -13431,6 +18282,11 @@ async function resolvePersonEventPermission(person: any, eventId: number) {
     throw new HttpError(404, "No se encontro el evento seleccionado.");
   }
 
+  const linkTypeRestriction = eventLinkTypeRestrictionMessage(event, person.usuario);
+  if (linkTypeRestriction != null) {
+    return { permitido: false, obligatorio: false, mensaje: linkTypeRestriction };
+  }
+
   const requirement = await resolvePersonEventRequirement(person, event);
 
   return {
@@ -13458,6 +18314,14 @@ async function resolvePersonEventRequirement(
   event: any,
 ): Promise<EventAttendanceRequirement> {
   const linkedUser = person.usuario ?? null;
+
+  if (!eventAllowsUserLinkType(event, linkedUser)) {
+    return {
+      obligatorio: false,
+      motivo: "No asignado por tipo de vinculo",
+    };
+  }
+
   const userOfficeId =
     resolveLinkedOfficeId(linkedUser) ??
     (await resolveOfficeForUser(prisma, linkedUser))?.id ??
@@ -13602,6 +18466,24 @@ function buildUserDisplayNameFromParts(user: {
     .map((value) => value?.trim() ?? "")
     .filter((value) => value.length > 0)
     .join(" ");
+}
+
+function buildUserDisplayNameSql(alias: string) {
+  return `
+    COALESCE(
+      NULLIF(
+        CONCAT_WS(
+          ' ',
+          NULLIF(${alias}."nombres", ''),
+          NULLIF(${alias}."primer_apellido", ''),
+          NULLIF(${alias}."segundo_apellido", ''),
+          NULLIF(${alias}."tercer_apellido", '')
+        ),
+        ''
+      ),
+      ${alias}."nombre_completo"
+    )
+  `;
 }
 
 function buildUserDisplayName(user: {

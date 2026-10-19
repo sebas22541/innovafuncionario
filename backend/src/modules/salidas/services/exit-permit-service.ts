@@ -40,7 +40,7 @@ export function serializeExitPermit(salida: any) {
         ? ""
         : config.buildUserDisplayName(llegadaRegistrador),
     solicitanteNombreCompleto: salida.solicitante_nombre_completo,
-    solicitanteCi: salida.usuarios?.ci ?? "",
+    solicitanteCi: salida.solicitante_ci ?? "",
     solicitanteNumeroItem: salida.solicitante_numero_item ?? "",
     solicitanteCargo: salida.solicitante_cargo ?? "",
     solicitanteOficinaId: salida.solicitante_oficina_id ?? null,

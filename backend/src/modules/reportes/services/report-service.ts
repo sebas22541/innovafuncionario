@@ -20,7 +20,8 @@ export function configureReportService(config: ReportServiceConfig) {
 export function serializeAttendanceReportRecord(attendance: any, person: any) {
   const config = getConfig();
   const linkedUser = person.usuario ?? null;
-  const officeName = config.resolveLinkedOfficeName(linkedUser);
+  const officeName =
+    attendance.oficina_snapshot ?? config.resolveLinkedOfficeName(linkedUser);
   const serializedControls = (attendance.asistencia_controles ?? []).map(
     config.serializeAttendanceControlRecord,
   );
@@ -32,11 +33,15 @@ export function serializeAttendanceReportRecord(attendance: any, person: any) {
   return {
     id: attendance.id,
     personaId: person.id,
-    ci: linkedUser?.ci ?? person.ci,
-    nombreCompleto: config.buildResolvedPersonDisplayName(person),
+    ci: attendance.ci_snapshot ?? linkedUser?.ci ?? person.ci,
+    nombreCompleto:
+      attendance.nombre_snapshot ?? config.buildResolvedPersonDisplayName(person),
     oficina: officeName,
-    oficinaId: config.resolveLinkedOfficeId(linkedUser),
-    oficinaCodigo: config.resolveLinkedOfficeCode(linkedUser),
+    oficinaId:
+      attendance.oficina_id_snapshot ?? config.resolveLinkedOfficeId(linkedUser),
+    oficinaCodigo:
+      attendance.oficina_cod_snapshot ??
+      config.resolveLinkedOfficeCode(linkedUser),
     estado: resolvedState,
     observacion: attendance.observacion,
     eventoId: attendance.eventos.id,
@@ -52,6 +57,9 @@ export function serializeAttendanceReportRecord(attendance: any, person: any) {
     controlesAsistidos: controlSummary.attendedCount,
     controlesObservados: controlSummary.observedCount,
     controlesRetrasados: controlSummary.lateCount,
+    cargo:
+      attendance.cargo_snapshot ??
+      config.resolveEffectiveJobTitleName(linkedUser),
   };
 }
 

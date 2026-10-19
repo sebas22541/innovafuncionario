@@ -1,6 +1,8 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { HttpError } from "../../../http-error.ts";
 import type { DeviceHeartbeatInput } from "../types/device-types.ts";
+
+const MAX_ACTIVE_DEVICES_PER_USER = 5;
 
 type DeviceServiceConfig = {
   pool: Pool;
@@ -70,14 +72,9 @@ export async function registerDeviceHeartbeat(
     );
     const forceLogout = result.rows[0]?.force_logout === true;
 
-    await client.query(
-      `
-        DELETE FROM "celulares_asistencia"
-        WHERE "usuario_id" = $1
-          AND "device_id" <> $2
-      `,
-      [userId, input.deviceId],
-    );
+    if (!forceLogout) {
+      await markOldestDevicesForLogout(client, userId, config.onlineThresholdMs);
+    }
 
     if (forceLogout) {
       await client.query(
@@ -111,7 +108,7 @@ export async function loadManagedDevices() {
   const config = getConfig();
   const result = await config.pool.query(
     `
-      SELECT DISTINCT ON (c."usuario_id")
+      SELECT
         c."device_id",
         c."usuario_id",
         c."platform",
@@ -133,7 +130,7 @@ export async function loadManagedDevices() {
       FROM "celulares_asistencia" c
       INNER JOIN "usuarios" u ON u."id" = c."usuario_id"
       WHERE u."rol" = 'ALMUERZO'
-      ORDER BY c."usuario_id", c."last_seen_at" DESC, c."id" DESC
+      ORDER BY c."last_seen_at" DESC, c."id" DESC
     `,
   );
 
@@ -207,6 +204,55 @@ export async function markUserDevicesOffline(userId: number) {
       WHERE "usuario_id" = $1
     `,
     [userId, config.onlineThresholdMs + 1000],
+  );
+}
+
+export async function markUserDeviceOffline(userId: number, deviceId: string) {
+  const config = getConfig();
+  await config.pool.query(
+    `
+      UPDATE "celulares_asistencia"
+      SET "logout_requested_at" = NULL,
+          "logout_requested_by_id" = NULL,
+          "kiosk_enabled" = FALSE,
+          "last_seen_at" = CURRENT_TIMESTAMP - ($3::int * INTERVAL '1 millisecond'),
+          "updated_at" = CURRENT_TIMESTAMP
+      WHERE "usuario_id" = $1
+        AND "device_id" = $2
+    `,
+    [userId, deviceId, config.onlineThresholdMs + 1000],
+  );
+}
+
+async function markOldestDevicesForLogout(
+  client: PoolClient,
+  userId: number,
+  onlineThresholdMs: number,
+) {
+  await client.query(
+    `
+      WITH ranked_devices AS (
+        SELECT
+          "id",
+          ROW_NUMBER() OVER (
+            PARTITION BY "usuario_id"
+            ORDER BY "created_at" DESC, "id" DESC
+          ) AS "position"
+        FROM "celulares_asistencia"
+        WHERE "usuario_id" = $1
+          AND "logout_requested_at" IS NULL
+      )
+      UPDATE "celulares_asistencia" c
+      SET "logout_requested_at" = CURRENT_TIMESTAMP,
+          "logout_requested_by_id" = NULL,
+          "kiosk_enabled" = FALSE,
+          "last_seen_at" = CURRENT_TIMESTAMP - ($2::int * INTERVAL '1 millisecond'),
+          "updated_at" = CURRENT_TIMESTAMP
+      FROM ranked_devices r
+      WHERE c."id" = r."id"
+        AND r."position" > $3
+    `,
+    [userId, onlineThresholdMs + 1000, MAX_ACTIVE_DEVICES_PER_USER],
   );
 }
 
